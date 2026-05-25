@@ -512,46 +512,161 @@ def find_path(
     start: tuple[int, int],
     end: tuple[int, int],
     start_dir: Dir | None = None,
+    end_dir: Dir | None = None,
+    turn_cost: float = 0.5,
 ) -> list[tuple[int, int, int]] | None:
     """
-    Find a belt path from start to end using BFS.
-    Returns list of (x, y, rotation) for belt placements, or None if no path.
+    Find a belt path from start to end using A*.
+
+    Args:
+        grid: The grid to route on
+        start: Starting cell (x, y)
+        end: Ending cell (x, y)
+        start_dir: If set, the first belt must point this direction
+        end_dir: If set, the final belt must point this direction
+        turn_cost: Extra cost for each turn (default 0.5)
+
+    Returns:
+        List of (x, y, rotation) for belt placements, or None if no path.
     """
-    from collections import deque
+    import heapq
+    from itertools import count
 
-    # State: (x, y, incoming_direction)
-    # We track incoming direction to ensure belt continuity
-    queue: deque[tuple[int, int, Dir | None, list[tuple[int, int, Dir]]]] = deque()
-    visited: set[tuple[int, int]] = set()
+    dir_to_rot = {Dir.E: 0, Dir.S: 1, Dir.W: 2, Dir.N: 3}
+    counter = count()  # Tiebreaker for heap
 
-    queue.append((start[0], start[1], start_dir, []))
-    visited.add(start)
+    def heuristic(x: int, y: int) -> float:
+        return abs(x - end[0]) + abs(y - end[1])
 
-    while queue:
-        x, y, incoming, path = queue.popleft()
+    # State: (x, y, last_direction)
+    # last_direction is the direction we moved TO reach this cell
+    # Priority queue: (cost + heuristic, counter, cost, x, y, last_dir, path)
+    # Counter breaks ties to avoid comparing Dir enums
 
-        # Check if we reached the end
+    start_states = []
+
+    if start_dir is not None:
+        # Must start in this direction
+        entry = (heuristic(*start), next(counter), 0.0, start[0], start[1], start_dir, [])
+        start_states.append(entry)
+    else:
+        # Can start in any direction - will be determined by first move
+        entry = (heuristic(*start), next(counter), 0.0, start[0], start[1], None, [])
+        start_states.append(entry)
+
+    heap = start_states
+    heapq.heapify(heap)
+
+    # visited: (x, y, direction) -> best cost seen
+    visited: dict[tuple[int, int, Dir | None], float] = {}
+
+    while heap:
+        _, _, cost, x, y, last_dir, path = heapq.heappop(heap)
+
+        # Check if we reached the end with correct direction
         if (x, y) == end:
-            # Convert path to belt placements
-            result = []
-            for px, py, out_dir in path:
-                # Rotation: 0=E, 1=S, 2=W, 3=N
-                rot = {Dir.E: 0, Dir.S: 1, Dir.W: 2, Dir.N: 3}[out_dir]
-                result.append((px, py, rot))
-            return result
+            if end_dir is None or (path and path[-1][2] == end_dir):
+                # Convert path to belt placements
+                result = []
+                for px, py, out_dir in path:
+                    rot = dir_to_rot[out_dir]
+                    result.append((px, py, rot))
+                return result
+            elif end_dir is not None and not path:
+                # We started at the end, no path needed
+                # but we can't satisfy end_dir constraint
+                continue
+
+        state = (x, y, last_dir)
+        if state in visited and visited[state] <= cost:
+            continue
+        visited[state] = cost
 
         # Try each neighbor
         for nx, ny, direction in grid.neighbors(x, y):
-            if (nx, ny) in visited:
-                continue
             if not grid.is_empty(nx, ny) and (nx, ny) != end:
                 continue
 
-            visited.add((nx, ny))
+            # Calculate move cost
+            move_cost = 1.0
+            if last_dir is not None and direction != last_dir:
+                move_cost += turn_cost  # Turn penalty
+
+            new_cost = cost + move_cost
             new_path = path + [(x, y, direction)]
-            queue.append((nx, ny, direction, new_path))
+
+            # Check if this direction satisfies end constraint
+            if (nx, ny) == end and end_dir is not None and direction != end_dir:
+                continue  # Can't reach end with wrong direction
+
+            new_state = (nx, ny, direction)
+            if new_state in visited and visited[new_state] <= new_cost:
+                continue
+
+            priority = new_cost + heuristic(nx, ny)
+            heapq.heappush(heap, (priority, next(counter), new_cost, nx, ny, direction, new_path))
 
     return None
+
+
+def route_to_port(
+    grid: Grid,
+    start: tuple[int, int],
+    port: tuple[int, int, Dir, int],
+    start_dir: Dir | None = None,
+) -> list[tuple[int, int, int]] | None:
+    """
+    Route from start to a building's input port.
+
+    The path includes belts up to and including the cell that feeds the port.
+
+    Args:
+        grid: The grid to route on
+        start: Starting cell (x, y)
+        port: Input port (x, y, from_direction, layer)
+        start_dir: If set, the first belt must point this direction
+
+    Returns:
+        List of (x, y, rotation) for belt placements, or None if no path.
+    """
+    port_x, port_y, from_dir, _layer = port
+
+    # Route TO the port cell itself (which is occupied by the building)
+    # The path will include belts up to the cell before the port
+    # The end_dir ensures the last belt points toward the port
+    end_dir = from_dir.opposite  # Belt points toward port
+
+    return find_path(grid, start, (port_x, port_y), start_dir=start_dir, end_dir=end_dir)
+
+
+def route_from_port(
+    grid: Grid,
+    port: tuple[int, int, Dir, int],
+    end: tuple[int, int],
+    end_dir: Dir | None = None,
+) -> list[tuple[int, int, int]] | None:
+    """
+    Route from a building's output port to end.
+
+    The path starts at the cell AFTER the port, receiving from it.
+
+    Args:
+        grid: The grid to route on
+        port: Output port (x, y, to_direction, layer)
+        end: Ending cell (x, y)
+        end_dir: If set, the final belt must point this direction
+
+    Returns:
+        List of (x, y, rotation) for belt placements, or None if no path.
+    """
+    port_x, port_y, to_dir, _layer = port
+
+    # The belt receives from the port, so starts adjacent in the output direction
+    start_x = port_x + to_dir.dx
+    start_y = port_y + to_dir.dy
+    start_dir = to_dir  # Belt continues in same direction as output
+
+    return find_path(grid, (start_x, start_y), end, start_dir=start_dir, end_dir=end_dir)
 
 
 def route_simple(
@@ -761,27 +876,47 @@ def demo_with_split():
 
 
 def demo_svg():
-    """Demo: render a grid with buildings to SVG."""
+    """Demo: render a grid with buildings and port-based routing to SVG."""
     from pathlib import Path
 
-    grid = Grid(12, 12)
+    grid = Grid(15, 12)
 
-    # Place some buildings
-    grid.place(Building("input", 2, 10, rotation=1))  # Input at top
-    grid.place(Building("cutter", 5, 6, rotation=1))  # Cutter in middle
-    grid.place(Building("rotator", 8, 4, rotation=1))
-    grid.place(Building("output", 5, 1, rotation=1))  # Output at bottom
+    # Place buildings
+    rotator = Building("rotator", 5, 6, rotation=0)  # R=0: input W, output E
+    grid.place(rotator)
 
-    # Find and place a simple path
-    path = find_path(grid, (2, 9), (5, 8))
-    if path:
-        for x, y, rot in path:
+    cutter = Building("cutter", 10, 6, rotation=0)
+    # Cutter is 1x2, mark both cells
+    for cell in cutter.get_cells():
+        grid.cells[cell] = cutter
+
+    # Route from (0, 6) to rotator's input port
+    input_port = rotator.get_input_ports()[0]
+    path1 = route_to_port(grid, (0, 6), input_port)
+
+    # Route from rotator's output to cutter's input
+    output_port = rotator.get_output_ports()[0]
+    cutter_input = cutter.get_input_ports()[0]
+    path2 = route_from_port(grid, output_port, (cutter_input[0], cutter_input[1]))
+
+    # Place belts
+    all_paths = []
+    if path1:
+        for x, y, rot in path1:
             grid.place(Building("belt", x, y, rot))
+        all_paths.extend(path1)
+    if path2:
+        for x, y, rot in path2:
+            grid.place(Building("belt", x, y, rot))
+        all_paths.extend(path2)
 
-    svg = render_svg(grid, cell_size=30, show_ports=True, path=path)
+    svg = render_svg(grid, cell_size=30, show_ports=True, path=all_paths)
     out_path = Path("/tmp/router_demo.svg")
     out_path.write_text(svg)
     print(f"SVG written to {out_path}")
+    print(f"Rotator input port: {input_port}")
+    print(f"Rotator output port: {output_port}")
+    print(f"Cutter input port: {cutter_input}")
     return grid
 
 

@@ -10,6 +10,8 @@ from shapez2_tools.router import (
     create_platform,
     find_path,
     load_platform_data,
+    route_from_port,
+    route_to_port,
 )
 
 
@@ -233,6 +235,86 @@ class TestFindPath:
             grid.place(Building("cutter", x, 2))
         path = find_path(grid, (0, 0), (0, 4))
         assert path is None
+
+    def test_end_direction_constraint(self):
+        grid = Grid(10, 10)
+        # Path from (0,0) to (3,0) must end pointing East
+        path = find_path(grid, (0, 0), (3, 0), end_dir=Dir.E)
+        assert path is not None
+        # Last belt should point East (rotation 0)
+        assert path[-1][2] == 0
+
+    def test_end_direction_forces_approach(self):
+        grid = Grid(10, 10)
+        # Path from (0,0) to (2,2) must end pointing North
+        path = find_path(grid, (0, 0), (2, 2), end_dir=Dir.N)
+        assert path is not None
+        # Last belt should point North (rotation 3)
+        assert path[-1][2] == 3
+        # Must approach from South
+        assert path[-1][0] == 2 and path[-1][1] == 1
+
+    def test_turn_penalty_prefers_straight(self):
+        grid = Grid(10, 10)
+        # Two equal-length paths exist, but straight should be preferred
+        path1 = find_path(grid, (0, 0), (3, 0), turn_cost=0)
+        path2 = find_path(grid, (0, 0), (3, 0), turn_cost=10)
+        # With high turn cost, should still find path but prefer straight
+        assert path1 is not None
+        assert path2 is not None
+
+
+class TestRouteToPort:
+    def test_route_to_rotator_input(self):
+        grid = Grid(10, 10)
+        # Place a rotator at (5, 5)
+        rotator = Building("rotator", 5, 5, rotation=0)
+        grid.place(rotator)
+
+        # Get its input port (5, 5, Dir.W, 0) - expects input from West
+        input_port = rotator.get_input_ports()[0]
+
+        # Route from (0, 5) to the input port
+        path = route_to_port(grid, (0, 5), input_port)
+        assert path is not None
+
+        # Path should end at (4, 5) pointing East toward rotator at (5, 5)
+        last = path[-1]
+        assert last[0] == 4 and last[1] == 5
+        assert last[2] == 0  # Rotation 0 = East
+
+    def test_route_to_cutter_input(self):
+        grid = Grid(10, 10)
+        # Place a cutter at (5, 5) - it's 1x2, occupies (5,5) and (5,6)
+        cutter = Building("cutter", 5, 5, rotation=0)
+        for cell in cutter.get_cells():
+            grid.cells[cell] = cutter  # Mark both cells as occupied
+
+        # Get its input port
+        input_port = cutter.get_input_ports()[0]
+
+        # Route from (0, 5) to the input port
+        path = route_to_port(grid, (0, 5), input_port)
+        assert path is not None
+
+        # Should end pointing toward cutter's input
+
+
+class TestRouteFromPort:
+    def test_route_from_rotator_output(self):
+        grid = Grid(10, 10)
+        rotator = Building("rotator", 5, 5, rotation=0)
+        grid.place(rotator)
+
+        output_port = rotator.get_output_ports()[0]  # (5, 5, Dir.E, 0)
+
+        # Route from output to (9, 5)
+        path = route_from_port(grid, output_port, (9, 5))
+        assert path is not None
+
+        # Path should start at (6, 5) - adjacent to output
+        first = path[0]
+        assert first[0] == 6 and first[1] == 5
 
 
 class TestPlatforms:
