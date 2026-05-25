@@ -54,15 +54,24 @@ class Grid:
     width: int
     height: int
     cells: dict[tuple[int, int], Building] = field(default_factory=dict)
+    valid_cells: set[tuple[int, int]] | None = None  # None = all cells valid
 
     def in_bounds(self, x: int, y: int) -> bool:
         return 0 <= x < self.width and 0 <= y < self.height
 
+    def is_valid(self, x: int, y: int) -> bool:
+        """Check if cell is within bounds and valid for placement."""
+        if not self.in_bounds(x, y):
+            return False
+        if self.valid_cells is None:
+            return True
+        return (x, y) in self.valid_cells
+
     def is_empty(self, x: int, y: int) -> bool:
-        return (x, y) not in self.cells and self.in_bounds(x, y)
+        return (x, y) not in self.cells and self.is_valid(x, y)
 
     def place(self, building: Building) -> bool:
-        """Place a building if cell is empty."""
+        """Place a building if cell is empty and valid."""
         if self.is_empty(building.x, building.y):
             self.cells[(building.x, building.y)] = building
             return True
@@ -75,8 +84,22 @@ class Grid:
         """Yield (nx, ny, direction_to_neighbor) for valid neighbors."""
         for d in Dir:
             nx, ny = x + d.dx, y + d.dy
-            if self.in_bounds(nx, ny):
+            if self.is_valid(nx, ny):
                 yield nx, ny, d
+
+    def set_valid_from_shape(self, shape: list[str], origin_x: int = 0, origin_y: int = 0) -> None:
+        """
+        Set valid cells from an ASCII shape mask.
+        '#' = valid, '.' = invalid
+        Shape is top-to-bottom (first row = highest Y).
+        """
+        self.valid_cells = set()
+        for row_idx, row in enumerate(shape):
+            y = origin_y + (len(shape) - 1 - row_idx)  # Flip Y so first row is top
+            for col_idx, char in enumerate(row):
+                x = origin_x + col_idx
+                if char == "#":
+                    self.valid_cells.add((x, y))
 
     def render(self) -> str:
         """Render grid as ASCII."""
@@ -227,7 +250,28 @@ def create_platform(
     p = platforms[layout]
     grid = Grid(p["grid_size"][0], p["grid_size"][1])
 
-    # Generate port positions
+    # Handle irregular shapes (L, T, Cross, etc.)
+    if "shape_units" in p:
+        unit_size = p.get("unit_size", 20)
+        origin_x, origin_y = p.get("shape_origin", [0, 0])
+        shape_units = p["shape_units"]
+
+        # Build valid_cells from unit grid
+        grid.valid_cells = set()
+        for row_idx, row in enumerate(shape_units):
+            # First row in shape_units is top (highest Y)
+            unit_y = len(shape_units) - 1 - row_idx
+            for col_idx, char in enumerate(row):
+                if char == "#":
+                    unit_x = col_idx
+                    # Expand unit to tiles
+                    tile_x_start = origin_x + unit_x * unit_size
+                    tile_y_start = origin_y + unit_y * unit_size
+                    for tx in range(tile_x_start, tile_x_start + unit_size):
+                        for ty in range(tile_y_start, tile_y_start + unit_size):
+                            grid.valid_cells.add((tx, ty))
+
+    # Generate port positions (simple case: top/bottom edges)
     inputs = []
     outputs = []
 

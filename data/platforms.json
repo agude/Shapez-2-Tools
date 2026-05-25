@@ -10,16 +10,16 @@
   },
   "Foundation_1x2": {
     "description": "1x2 platform",
-    "grid_size": [20, 36],
-    "bounds": {"x_min": 2, "x_max": 17, "y_min": -15, "y_max": 17},
+    "grid_size": [20, 40],
+    "bounds": {"x_min": 2, "x_max": 17, "y_min": -18, "y_max": 17},
     "ports_per_layer": 4,
     "input_y": 17,
-    "output_y": -15,
+    "output_y": -18,
     "port_x_range": [8, 11]
   },
   "Foundation_1x4": {
     "description": "Full belt platform (1x4)",
-    "grid_size": [72, 20],
+    "grid_size": [80, 20],
     "bounds": {"x_min": -12, "x_max": 51, "y_min": 2, "y_max": 17},
     "ports_per_layer": 16,
     "input_y": 17,
@@ -28,8 +28,8 @@
   },
   "Foundation_2x2": {
     "description": "2x2 platform",
-    "grid_size": [40, 36],
-    "bounds": {"x_min": -18, "x_max": 17, "y_min": -14, "y_max": 17},
+    "grid_size": [40, 40],
+    "bounds": {"x_min": -18, "x_max": 17, "y_min": -18, "y_max": 17},
     "ports_per_layer": 8,
     "notes": "Ports on multiple edges"
   },
@@ -57,5 +57,67 @@
     "input_y": 17,
     "output_y": -18,
     "port_x_range": [8, 11]
+  },
+  "Layout_Normal_3_L": {
+    "description": "L-shaped island (3 units)",
+    "grid_size": [40, 40],
+    "bounds": {"x_min": -18, "x_max": 17, "y_min": -18, "y_max": 17},
+    "unit_size": 20,
+    "shape_units": [
+      "#.",
+      "##"
+    ],
+    "shape_origin": [-18, -18],
+    "notes": "L-shape: top-left missing"
+  },
+  "Layout_Normal_4_T": {
+    "description": "T-shaped island (4 units)",
+    "grid_size": [60, 40],
+    "bounds": {"x_min": -18, "x_max": 37, "y_min": -18, "y_max": 17},
+    "unit_size": 20,
+    "shape_units": [
+      "###",
+      ".#."
+    ],
+    "shape_origin": [-18, -18],
+    "notes": "T-shape: top row full, bottom center only"
+  },
+  "Layout_Normal_4_2x2": {
+    "description": "2x2 square island (4 units)",
+    "grid_size": [40, 40],
+    "bounds": {"x_min": -18, "x_max": 17, "y_min": -18, "y_max": 17},
+    "unit_size": 20,
+    "shape_units": [
+      "##",
+      "##"
+    ],
+    "shape_origin": [-18, -18],
+    "notes": "Full 2x2 square"
+  },
+  "Layout_Normal_5_Cross": {
+    "description": "Cross-shaped island (5 units)",
+    "grid_size": [60, 60],
+    "bounds": {"x_min": -18, "x_max": 37, "y_min": -38, "y_max": 17},
+    "unit_size": 20,
+    "shape_units": [
+      ".#.",
+      "###",
+      ".#."
+    ],
+    "shape_origin": [-18, -38],
+    "notes": "Cross shape: center + 4 arms"
+  },
+  "Layout_Normal_9_3x3": {
+    "description": "3x3 square island (9 units)",
+    "grid_size": [60, 60],
+    "bounds": {"x_min": -18, "x_max": 37, "y_min": -38, "y_max": 17},
+    "unit_size": 20,
+    "shape_units": [
+      "###",
+      "###",
+      "###"
+    ],
+    "shape_origin": [-18, -38],
+    "notes": "Full 3x3 square"
   }
 }
