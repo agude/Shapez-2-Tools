@@ -201,25 +201,54 @@ def route_simple(
     return True
 
 
-def create_quarter_platform() -> tuple[Grid, list[tuple[int, int]], list[tuple[int, int]]]:
+def load_platform_data() -> dict:
+    """Load platform definitions from data file."""
+    import json
+    from pathlib import Path
+
+    data_file = Path(__file__).parent.parent.parent / "data" / "platforms.json"
+    if data_file.exists():
+        return json.loads(data_file.read_text())
+    return {}
+
+
+def create_platform(
+    layout: str = "Foundation_1x1",
+) -> tuple[Grid, list[tuple[int, int]], list[tuple[int, int]]]:
     """
-    Create a grid matching a Foundation_1x1 platform.
+    Create a grid for a given platform layout.
     Returns (grid, input_positions, output_positions).
     """
-    # Platform is roughly 20x20, usable area ~12x16
-    grid = Grid(20, 20)
+    platforms = load_platform_data()
 
-    # Ports: 4 inputs at top (Y=17), 4 outputs at bottom (Y=2)
-    inputs = [(8, 17), (9, 17), (10, 17), (11, 17)]
-    outputs = [(8, 2), (9, 2), (10, 2), (11, 2)]
+    if layout not in platforms:
+        raise ValueError(f"Unknown layout: {layout}. Available: {list(platforms.keys())}")
+
+    p = platforms[layout]
+    grid = Grid(p["grid_size"][0], p["grid_size"][1])
+
+    # Generate port positions
+    inputs = []
+    outputs = []
+
+    if "port_x_range" in p and "input_y" in p and "output_y" in p:
+        x_min, x_max = p["port_x_range"]
+        for x in range(x_min, x_max + 1):
+            inputs.append((x, p["input_y"]))
+            outputs.append((x, p["output_y"]))
 
     for x, y in inputs:
-        grid.place(Building("input", x, y, rotation=1))  # Facing South (into grid)
+        grid.place(Building("input", x, y, rotation=1))
 
     for x, y in outputs:
-        grid.place(Building("output", x, y, rotation=1))  # Facing South (out of grid)
+        grid.place(Building("output", x, y, rotation=1))
 
     return grid, inputs, outputs
+
+
+def create_quarter_platform() -> tuple[Grid, list[tuple[int, int]], list[tuple[int, int]]]:
+    """Create a Foundation_1x1 (quarter) platform."""
+    return create_platform("Foundation_1x1")
 
 
 def route_parallel_ops(

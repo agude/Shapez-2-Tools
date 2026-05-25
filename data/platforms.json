@@ -1,0 +1,61 @@
+{
+  "Foundation_1x1": {
+    "description": "Quarter platform (1x1)",
+    "grid_size": [20, 20],
+    "bounds": {"x_min": 2, "x_max": 17, "y_min": 2, "y_max": 17},
+    "ports_per_layer": 4,
+    "input_y": 17,
+    "output_y": 2,
+    "port_x_range": [8, 11]
+  },
+  "Foundation_1x2": {
+    "description": "1x2 platform",
+    "grid_size": [20, 36],
+    "bounds": {"x_min": 2, "x_max": 17, "y_min": -15, "y_max": 17},
+    "ports_per_layer": 4,
+    "input_y": 17,
+    "output_y": -15,
+    "port_x_range": [8, 11]
+  },
+  "Foundation_1x4": {
+    "description": "Full belt platform (1x4)",
+    "grid_size": [72, 20],
+    "bounds": {"x_min": -12, "x_max": 51, "y_min": 2, "y_max": 17},
+    "ports_per_layer": 16,
+    "input_y": 17,
+    "output_y": 2,
+    "port_x_range": [-9, 48]
+  },
+  "Foundation_2x2": {
+    "description": "2x2 platform",
+    "grid_size": [40, 36],
+    "bounds": {"x_min": -18, "x_max": 17, "y_min": -14, "y_max": 17},
+    "ports_per_layer": 8,
+    "notes": "Ports on multiple edges"
+  },
+  "Foundation_2x4": {
+    "description": "Full belt 2-row platform",
+    "grid_size": [80, 60],
+    "bounds": {"x_min": -18, "x_max": 57, "y_min": 2, "y_max": 37},
+    "ports_per_layer": 24,
+    "notes": "Used for painters, mixers with fluid input"
+  },
+  "Layout_Normal_1": {
+    "description": "Normal 1x1 island",
+    "grid_size": [20, 20],
+    "bounds": {"x_min": 2, "x_max": 17, "y_min": 2, "y_max": 17},
+    "ports_per_layer": 4,
+    "input_y": 17,
+    "output_y": 2,
+    "port_x_range": [8, 11]
+  },
+  "Layout_Normal_2": {
+    "description": "Normal 1x2 island",
+    "grid_size": [20, 40],
+    "bounds": {"x_min": 2, "x_max": 17, "y_min": -18, "y_max": 17},
+    "ports_per_layer": 4,
+    "input_y": 17,
+    "output_y": -18,
+    "port_x_range": [8, 11]
+  }
+}
