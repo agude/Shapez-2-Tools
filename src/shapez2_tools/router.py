@@ -378,6 +378,135 @@ class Grid:
         return "\n".join(lines)
 
 
+def render_svg(
+    grid: Grid,
+    cell_size: int = 20,
+    show_ports: bool = True,
+    path: list[tuple[int, int, int]] | None = None,
+) -> str:
+    """Render grid as SVG.
+
+    Args:
+        grid: The grid to render
+        cell_size: Size of each cell in pixels
+        show_ports: Whether to show input/output port indicators
+        path: Optional path to highlight [(x, y, rotation), ...]
+
+    Returns:
+        SVG string
+    """
+    width = grid.width * cell_size
+    height = grid.height * cell_size
+
+    # Colors for different building types
+    colors = {
+        "belt": "#4a9eff",
+        "input": "#4ade80",
+        "output": "#f87171",
+        "cutter": "#fbbf24",
+        "rotator": "#a78bfa",
+        "rotatorccw": "#a78bfa",
+        "rotatorhalf": "#a78bfa",
+        "stacker": "#fb923c",
+        "stackerstraight": "#fb923c",
+        "swapper": "#f472b6",
+        "trash": "#6b7280",
+        "splitter": "#22d3d8",
+        "merger": "#22d3d8",
+    }
+
+    # Direction arrows (as SVG path data, pointing in direction)
+    arrow_paths = {
+        Dir.N: "M 0,-4 L 3,2 L -3,2 Z",
+        Dir.E: "M 4,0 L -2,3 L -2,-3 Z",
+        Dir.S: "M 0,4 L 3,-2 L -3,-2 Z",
+        Dir.W: "M -4,0 L 2,3 L 2,-3 Z",
+    }
+
+    lines = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}">',
+        '<style>',
+        '  .cell { stroke: #333; stroke-width: 0.5; }',
+        '  .valid { fill: #1a1a2e; }',
+        '  .invalid { fill: #0a0a0a; }',
+        '  .building { stroke: #000; stroke-width: 1; }',
+        '  .arrow { fill: #fff; }',
+        '  .path { fill: #4a9eff; opacity: 0.8; }',
+        '  .port-in { fill: #4ade80; }',
+        '  .port-out { fill: #f87171; }',
+        '</style>',
+    ]
+
+    # Draw grid cells
+    for y in range(grid.height):
+        for x in range(grid.width):
+            # SVG Y is inverted (0 at top)
+            svg_y = (grid.height - 1 - y) * cell_size
+            svg_x = x * cell_size
+            valid = grid.is_valid(x, y)
+            css_class = "valid" if valid else "invalid"
+            lines.append(
+                f'<rect x="{svg_x}" y="{svg_y}" width="{cell_size}" '
+                f'height="{cell_size}" class="cell {css_class}"/>'
+            )
+
+    # Draw path if provided
+    if path:
+        for x, y, rot in path:
+            svg_y = (grid.height - 1 - y) * cell_size
+            svg_x = x * cell_size
+            lines.append(
+                f'<rect x="{svg_x}" y="{svg_y}" width="{cell_size}" '
+                f'height="{cell_size}" class="path"/>'
+            )
+
+    # Draw buildings
+    for (x, y), building in grid.cells.items():
+        svg_y = (grid.height - 1 - y) * cell_size
+        svg_x = x * cell_size
+        color = colors.get(building.type.lower(), "#888")
+        cx = svg_x + cell_size // 2
+        cy = svg_y + cell_size // 2
+
+        # Building rectangle
+        lines.append(
+            f'<rect x="{svg_x + 1}" y="{svg_y + 1}" '
+            f'width="{cell_size - 2}" height="{cell_size - 2}" '
+            f'fill="{color}" class="building"/>'
+        )
+
+        # Direction arrow
+        out_dir = building.output_dir()
+        arrow = arrow_paths.get(out_dir, "")
+        if arrow:
+            lines.append(
+                f'<path d="{arrow}" transform="translate({cx},{cy})" class="arrow"/>'
+            )
+
+        # Port indicators
+        if show_ports and building.get_definition():
+            for px, py, d, _layer in building.get_input_ports():
+                psvg_y = (grid.height - 1 - py) * cell_size + cell_size // 2
+                psvg_x = px * cell_size + cell_size // 2
+                # Offset toward the edge
+                psvg_x += d.dx * (cell_size // 3)
+                psvg_y -= d.dy * (cell_size // 3)  # SVG Y inverted
+                lines.append(
+                    f'<circle cx="{psvg_x}" cy="{psvg_y}" r="3" class="port-in"/>'
+                )
+            for px, py, d, _layer in building.get_output_ports():
+                psvg_y = (grid.height - 1 - py) * cell_size + cell_size // 2
+                psvg_x = px * cell_size + cell_size // 2
+                psvg_x += d.dx * (cell_size // 3)
+                psvg_y -= d.dy * (cell_size // 3)
+                lines.append(
+                    f'<circle cx="{psvg_x}" cy="{psvg_y}" r="3" class="port-out"/>'
+                )
+
+    lines.append("</svg>")
+    return "\n".join(lines)
+
+
 def find_path(
     grid: Grid,
     start: tuple[int, int],
@@ -631,5 +760,30 @@ def demo_with_split():
     return grid
 
 
+def demo_svg():
+    """Demo: render a grid with buildings to SVG."""
+    from pathlib import Path
+
+    grid = Grid(12, 12)
+
+    # Place some buildings
+    grid.place(Building("input", 2, 10, rotation=1))  # Input at top
+    grid.place(Building("cutter", 5, 6, rotation=1))  # Cutter in middle
+    grid.place(Building("rotator", 8, 4, rotation=1))
+    grid.place(Building("output", 5, 1, rotation=1))  # Output at bottom
+
+    # Find and place a simple path
+    path = find_path(grid, (2, 9), (5, 8))
+    if path:
+        for x, y, rot in path:
+            grid.place(Building("belt", x, y, rot))
+
+    svg = render_svg(grid, cell_size=30, show_ports=True, path=path)
+    out_path = Path("/tmp/router_demo.svg")
+    out_path.write_text(svg)
+    print(f"SVG written to {out_path}")
+    return grid
+
+
 if __name__ == "__main__":
-    demo()
+    demo_svg()
