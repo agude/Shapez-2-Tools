@@ -22,6 +22,12 @@ shapez2-tools/
 - Actual path: `/mnt/win/c/Users/agude/AppData/LocalLow/tobspr Games/shapez 2/blueprints`
 
 Keep the blueprints folder clean - any subfolder appears as an in-game category.
+Naming and icon conventions are documented in the blueprints repo's `CLAUDE.md`.
+
+## Data Files
+
+- `data/identifiers.json` - all game identifiers (icons, buildings, layouts)
+- `data/ICONS.md` - quick reference for icon names
 
 ## Development
 
@@ -53,8 +59,13 @@ JSON structure:
 
 Name is filename-only (no description field in format).
 
-## Goals
+## Status
 
-1. Organize blueprints (file operations)
-2. Edit icons programmatically
-3. (Stretch) Blueprint solver/designer
+Done:
+- Organize blueprints (file operations)
+- Edit icons programmatically
+- Naming convention: `Quarter` (old bandwidth) vs `Full Belt` (max throughput)
+- Icon convention documented
+
+Stretch:
+- Blueprint solver/designer
