@@ -368,6 +368,10 @@ class Grid:
                     row += "O"
                 elif b.type == "cutter":
                     row += "C"
+                elif b.type in ("rotator", "rotatorhalf", "rotatorccw"):
+                    row += "R"
+                elif b.type == "stacker" or b.type == "stackerstraight":
+                    row += "S"
                 elif b.type == "splitter":
                     row += "<"
                 elif b.type == "merger":
@@ -873,6 +877,103 @@ def demo_with_split():
     print("Split/merge demo (partial):")
     print(grid.render())
     return grid
+
+
+def solve_quarter_180_rotator() -> tuple[Grid, bool]:
+    """
+    Solve a Quarter 180 Rotator blueprint.
+
+    Layout:
+    - 4 input lanes at Y=17, X=8-11
+    - 8 RotatorHalf buildings (2 per lane)
+    - 4 output lanes at Y=2, X=8-11
+
+    Each lane: input → rotator1 → rotator2 → output
+
+    Returns:
+        (grid, success) tuple
+    """
+    from pathlib import Path
+
+    # Create quarter platform
+    grid, inputs, outputs = create_quarter_platform()
+
+    # Remove the auto-placed input/output markers (we'll route to the actual ports)
+    grid.cells.clear()
+
+    # Fixed rotator positions: 2 rows
+    # Row 1 at Y=12 (closer to input at Y=17)
+    # Row 2 at Y=7 (closer to output at Y=2)
+    rotator_y1 = 12
+    rotator_y2 = 7
+
+    # Rotators face South (R=1): input from North, output to South
+    rotation = 1  # Output South
+
+    rotators: list[Building] = []
+    for i, (inp_x, _) in enumerate(inputs):
+        # Two rotators per lane, aligned with input X
+        r1 = Building("rotatorhalf", inp_x, rotator_y1, rotation=rotation)
+        r2 = Building("rotatorhalf", inp_x, rotator_y2, rotation=rotation)
+        rotators.extend([r1, r2])
+        grid.place(r1)
+        grid.place(r2)
+
+    success = True
+    all_paths: list[tuple[int, int, int]] = []
+
+    # Route each lane
+    for i, ((inp_x, inp_y), (out_x, out_y)) in enumerate(zip(inputs, outputs)):
+        r1 = rotators[i * 2]
+        r2 = rotators[i * 2 + 1]
+
+        # Get ports
+        r1_in = r1.get_input_ports()[0]   # Input from North
+        r1_out = r1.get_output_ports()[0]  # Output to South
+        r2_in = r2.get_input_ports()[0]
+        r2_out = r2.get_output_ports()[0]
+
+        # Route: input → r1 input
+        # Start one cell below input port (Y=16), heading South
+        path1 = route_to_port(grid, (inp_x, inp_y - 1), r1_in, start_dir=Dir.S)
+        if path1 is None:
+            print(f"Lane {i}: Failed to route input to rotator1")
+            success = False
+        else:
+            for x, y, rot in path1:
+                grid.place(Building("belt", x, y, rot))
+            all_paths.extend(path1)
+
+        # Route: r1 output → r2 input
+        path2 = route_from_port(grid, r1_out, (r2_in[0], r2_in[1]))
+        if path2 is None:
+            print(f"Lane {i}: Failed to route rotator1 to rotator2")
+            success = False
+        else:
+            for x, y, rot in path2:
+                grid.place(Building("belt", x, y, rot))
+            all_paths.extend(path2)
+
+        # Route: r2 output → output port
+        # Route to the output itself so path includes belt feeding into it
+        path3 = route_from_port(grid, r2_out, (out_x, out_y), end_dir=Dir.S)
+        if path3 is None:
+            print(f"Lane {i}: Failed to route rotator2 to output")
+            success = False
+        else:
+            for x, y, rot in path3:
+                grid.place(Building("belt", x, y, rot))
+            all_paths.extend(path3)
+
+    # Render SVG
+    svg = render_svg(grid, cell_size=25, show_ports=True)
+    out_path = Path("/tmp/quarter_180_rotator.svg")
+    out_path.write_text(svg)
+    print(f"SVG written to {out_path}")
+    print(f"Success: {success}")
+    print(f"Total belts: {len(all_paths)}")
+
+    return grid, success
 
 
 def demo_svg():
