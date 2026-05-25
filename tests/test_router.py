@@ -3,6 +3,7 @@
 import pytest
 
 from shapez2_tools.router import (
+    BUILDING_DEFS,
     Building,
     Dir,
     Grid,
@@ -37,6 +38,111 @@ class TestBuilding:
     def test_input_dir(self):
         b = Building("belt", 0, 0, rotation=0)
         assert b.input_dir() == Dir.W
+
+    def test_rotator_ports(self):
+        # Rotator at origin, R=0 (output East)
+        b = Building("rotator", 5, 5, rotation=0)
+        inputs = b.get_input_ports()
+        outputs = b.get_output_ports()
+
+        assert len(inputs) == 1
+        assert inputs[0] == (5, 5, Dir.W, 0)  # input from West
+        assert len(outputs) == 1
+        assert outputs[0] == (5, 5, Dir.E, 0)  # output to East
+
+    def test_rotator_rotated(self):
+        # Rotator at origin, R=1 (output South)
+        b = Building("rotator", 5, 5, rotation=1)
+        inputs = b.get_input_ports()
+        outputs = b.get_output_ports()
+
+        assert inputs[0][2] == Dir.N  # input from North
+        assert outputs[0][2] == Dir.S  # output to South
+
+    def test_cutter_cells(self):
+        # Cutter is 1x2
+        b = Building("cutter", 5, 5, rotation=0)
+        cells = b.get_cells()
+        assert len(cells) == 2
+        assert (5, 5) in cells
+        assert (5, 6) in cells
+
+    def test_cutter_ports(self):
+        # Cutter R=0: input from West, outputs to East
+        b = Building("cutter", 5, 5, rotation=0)
+        inputs = b.get_input_ports()
+        outputs = b.get_output_ports()
+
+        assert len(inputs) == 1
+        assert inputs[0][2] == Dir.W  # input from West
+        assert len(outputs) == 2  # two output halves
+        assert all(o[2] == Dir.E for o in outputs)  # both output East
+
+    def test_cutter_rotated(self):
+        # Cutter R=1 (output South): becomes 2x1
+        b = Building("cutter", 5, 5, rotation=1)
+        cells = b.get_cells()
+        assert len(cells) == 2
+        # After 90° rotation, (0,0)->(0,0), (0,1)->(1,0)
+        assert (5, 5) in cells
+        assert (6, 5) in cells
+
+    def test_stacker_ports(self):
+        # Stacker has inputs on two layers
+        b = Building("stacker", 5, 5, rotation=0)
+        inputs = b.get_input_ports()
+        outputs = b.get_output_ports()
+
+        assert len(inputs) == 2
+        # Both inputs from same direction, different layers
+        assert inputs[0][2] == inputs[1][2]  # same direction
+        assert inputs[0][3] != inputs[1][3]  # different layers
+
+        assert len(outputs) == 1
+
+
+class TestBuildingDefs:
+    def test_all_defs_registered(self):
+        expected = [
+            "Rotator", "RotatorCCW", "RotatorHalf",
+            "HalfDestroyer", "PinPusher", "Trash",
+            "Cutter", "Swapper",
+            "StackerStraight", "StackerBent",
+        ]
+        for name in expected:
+            assert name in BUILDING_DEFS
+
+    def test_cutter_def(self):
+        cutter = BUILDING_DEFS["Cutter"]
+        assert len(cutter.cells) == 2
+        assert len(cutter.inputs) == 1
+        assert len(cutter.outputs) == 2
+
+    def test_swapper_def(self):
+        swapper = BUILDING_DEFS["Swapper"]
+        assert len(swapper.cells) == 2
+        assert len(swapper.inputs) == 2
+        assert len(swapper.outputs) == 2
+
+    def test_stacker_def(self):
+        stacker = BUILDING_DEFS["StackerBent"]
+        assert len(stacker.cells) == 1  # 1x1 footprint
+        assert len(stacker.inputs) == 2  # two layer inputs
+        assert stacker.inputs[0].layer == 0
+        assert stacker.inputs[1].layer == 1
+
+    def test_cutter_mirrored(self):
+        # Mirrored cutter should have input on other cell
+        b_normal = Building("cutter", 5, 5, rotation=0, mirrored=False)
+        b_mirror = Building("cutter", 5, 5, rotation=0, mirrored=True)
+
+        # Both occupy same cells
+        assert set(b_normal.get_cells()) == set(b_mirror.get_cells())
+
+        # Input positions differ (Y flipped)
+        inp_normal = b_normal.get_input_ports()[0]
+        inp_mirror = b_mirror.get_input_ports()[0]
+        assert inp_normal[1] != inp_mirror[1]  # different Y position
 
 
 class TestGrid:

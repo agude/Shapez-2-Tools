@@ -29,22 +29,267 @@ class Dir(Enum):
 
 
 @dataclass
+class Port:
+    """An input or output port on a building."""
+
+    rel_x: int  # relative to building origin
+    rel_y: int
+    direction: Dir  # direction items flow (into for input, out of for output)
+    layer: int = 0  # z-layer (0, 1, or 2)
+    mirror_swap: int | None = None  # if set, swap with this port index when mirrored
+
+
+@dataclass
+class BuildingDef:
+    """Definition of a building type's footprint and ports."""
+
+    name: str
+    cells: list[tuple[int, int]]  # cells occupied at R=0 (relative to origin)
+    inputs: list[Port]
+    outputs: list[Port]
+
+    def rotated_cells(self, rotation: int) -> list[tuple[int, int]]:
+        """Get cells after applying rotation."""
+        result = []
+        for x, y in self.cells:
+            for _ in range(rotation):
+                x, y = y, -x  # 90° CW rotation
+            result.append((x, y))
+        return result
+
+    def rotated_dir(self, d: Dir, rotation: int) -> Dir:
+        """Rotate a direction."""
+        dirs = [Dir.E, Dir.S, Dir.W, Dir.N]
+        idx = dirs.index(d)
+        return dirs[(idx + rotation) % 4]
+
+    def get_port_position(
+        self, port: Port, bx: int, by: int, rotation: int, mirrored: bool
+    ) -> tuple[int, int, Dir, int]:
+        """Get absolute position and direction of a port.
+
+        Returns (x, y, direction, layer).
+        """
+        rx, ry = port.rel_x, port.rel_y
+
+        # Apply mirroring (flip relative to building center)
+        if mirrored:
+            # Find the extent of the building in Y (before rotation)
+            max_y = max(c[1] for c in self.cells)
+            # Flip Y relative to center: ry -> max_y - ry
+            ry = max_y - ry
+
+        # Apply rotation
+        for _ in range(rotation):
+            rx, ry = ry, -rx
+
+        direction = self.rotated_dir(port.direction, rotation)
+
+        return (bx + rx, by + ry, direction, port.layer)
+
+
+# Building definitions at R=0 (output East, input West)
+# Coordinates: origin at (0,0), +Y is North
+BUILDING_DEFS: dict[str, BuildingDef] = {}
+
+
+def _register(b: BuildingDef) -> BuildingDef:
+    BUILDING_DEFS[b.name] = b
+    return b
+
+
+# === 1x1 Buildings ===
+
+_register(
+    BuildingDef(
+        name="Rotator",
+        cells=[(0, 0)],
+        inputs=[Port(0, 0, Dir.W)],
+        outputs=[Port(0, 0, Dir.E)],
+    )
+)
+
+_register(
+    BuildingDef(
+        name="RotatorCCW",
+        cells=[(0, 0)],
+        inputs=[Port(0, 0, Dir.W)],
+        outputs=[Port(0, 0, Dir.E)],
+    )
+)
+
+_register(
+    BuildingDef(
+        name="RotatorHalf",
+        cells=[(0, 0)],
+        inputs=[Port(0, 0, Dir.W)],
+        outputs=[Port(0, 0, Dir.E)],
+    )
+)
+
+_register(
+    BuildingDef(
+        name="HalfDestroyer",
+        cells=[(0, 0)],
+        inputs=[Port(0, 0, Dir.W)],
+        outputs=[Port(0, 0, Dir.E)],
+    )
+)
+
+_register(
+    BuildingDef(
+        name="PinPusher",
+        cells=[(0, 0)],
+        inputs=[Port(0, 0, Dir.W)],
+        outputs=[Port(0, 0, Dir.E)],
+    )
+)
+
+_register(
+    BuildingDef(
+        name="Trash",
+        cells=[(0, 0)],
+        inputs=[Port(0, 0, Dir.W)],
+        outputs=[],  # no output
+    )
+)
+
+# === 1x2 Buildings ===
+
+_register(
+    BuildingDef(
+        name="Cutter",
+        cells=[(0, 0), (0, 1)],  # 1 wide, 2 tall
+        inputs=[Port(0, 0, Dir.W)],  # input on cell (0,0); mirrored moves to (0,1)
+        outputs=[
+            Port(0, 0, Dir.E),  # one half
+            Port(0, 1, Dir.E),  # other half
+        ],
+    )
+)
+
+_register(
+    BuildingDef(
+        name="Swapper",
+        cells=[(0, 0), (0, 1)],
+        inputs=[
+            Port(0, 0, Dir.W),  # shape A input
+            Port(0, 1, Dir.W),  # shape B input
+        ],
+        outputs=[
+            Port(0, 0, Dir.E),  # shape A with B's half
+            Port(0, 1, Dir.E),  # shape B with A's half
+        ],
+    )
+)
+
+# === Multi-layer Buildings (1x1 footprint, spans Z) ===
+
+_register(
+    BuildingDef(
+        name="StackerStraight",
+        cells=[(0, 0)],
+        inputs=[
+            Port(0, 0, Dir.S, layer=0),  # bottom layer input
+            Port(0, 0, Dir.S, layer=1),  # top layer input
+        ],
+        outputs=[
+            Port(0, 0, Dir.N, layer=0),  # stacked output, straight through
+        ],
+    )
+)
+
+_register(
+    BuildingDef(
+        name="StackerBent",
+        cells=[(0, 0)],
+        inputs=[
+            Port(0, 0, Dir.S, layer=0),  # bottom layer input
+            Port(0, 0, Dir.S, layer=1),  # top layer input
+        ],
+        outputs=[
+            Port(0, 0, Dir.E, layer=0),  # stacked output, bent 90° (helicity)
+        ],
+    )
+)
+
+
+@dataclass
 class Building:
-    """A building on the grid."""
+    """A placed building on the grid."""
 
     type: str
     x: int
     y: int
     rotation: int = 0  # 0=E, 1=S, 2=W, 3=N (output direction for belts)
+    mirrored: bool = False
+    layer: int = 0  # z-layer this building is on
 
     def output_dir(self) -> Dir:
-        """Direction this building outputs to."""
+        """Direction this building outputs to (for simple 1x1 buildings)."""
         dirs = [Dir.E, Dir.S, Dir.W, Dir.N]
         return dirs[self.rotation]
 
     def input_dir(self) -> Dir:
-        """Direction this building receives from."""
+        """Direction this building receives from (for simple 1x1 buildings)."""
         return self.output_dir().opposite
+
+    def get_definition(self) -> BuildingDef | None:
+        """Get the building definition for this type."""
+        # Map blueprint type names to our definitions
+        type_map = {
+            "belt": None,  # belts don't have a BuildingDef
+            "input": None,
+            "output": None,
+            "cutter": "Cutter",
+            "rotator": "Rotator",
+            "rotatorccw": "RotatorCCW",
+            "rotatorhalf": "RotatorHalf",
+            "stacker": "StackerBent",
+            "stackerstraight": "StackerStraight",
+            "swapper": "Swapper",
+            "trash": "Trash",
+            "pinpusher": "PinPusher",
+            "halfdestroyer": "HalfDestroyer",
+        }
+        def_name = type_map.get(self.type.lower())
+        if def_name:
+            return BUILDING_DEFS.get(def_name)
+        return None
+
+    def get_cells(self) -> list[tuple[int, int]]:
+        """Get all cells this building occupies.
+
+        Mirroring does NOT affect the footprint - only which cell has ports.
+        """
+        defn = self.get_definition()
+        if defn is None:
+            return [(self.x, self.y)]
+        cells = defn.rotated_cells(self.rotation)
+        return [(self.x + dx, self.y + dy) for dx, dy in cells]
+
+    def get_input_ports(self) -> list[tuple[int, int, Dir, int]]:
+        """Get input port positions as (x, y, from_direction, layer)."""
+        defn = self.get_definition()
+        if defn is None:
+            # Default for simple buildings
+            return [(self.x, self.y, self.input_dir(), self.layer)]
+        result = []
+        for port in defn.inputs:
+            pos = defn.get_port_position(port, self.x, self.y, self.rotation, self.mirrored)
+            result.append(pos)
+        return result
+
+    def get_output_ports(self) -> list[tuple[int, int, Dir, int]]:
+        """Get output port positions as (x, y, to_direction, layer)."""
+        defn = self.get_definition()
+        if defn is None:
+            return [(self.x, self.y, self.output_dir(), self.layer)]
+        result = []
+        for port in defn.outputs:
+            pos = defn.get_port_position(port, self.x, self.y, self.rotation, self.mirrored)
+            result.append(pos)
+        return result
 
 
 @dataclass
