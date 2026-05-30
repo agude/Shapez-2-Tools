@@ -87,6 +87,33 @@ def cmd_show(args: argparse.Namespace) -> None:
     print(generator.render_text(bp, layer=args.layer))
 
 
+def cmd_lift(args: argparse.Namespace) -> None:
+    """Lift a blueprint layer to a netlist and summarize it."""
+    from collections import Counter
+
+    from shapez2_tools import interpret, lift
+    from shapez2_tools.shapes import Shape
+
+    bp = Blueprint.from_file(args.file)
+    nl = lift.trace_layer(bp, args.layer)
+    print(f"layer {args.layer}: {dict(Counter(n.kind for n in nl.nodes.values()))}")
+    print(f"unmatched legs: {lift.unmatched_legs(bp, args.layer)}")
+    print(f"edges: {dict(lift.edge_kinds(nl))}")
+    machines = Counter(
+        n.type.replace("InternalVariant", "")
+        for n in nl.nodes.values()
+        if n.kind == "machine"
+    )
+    if machines:
+        print(f"machines: {dict(machines)}")
+    try:
+        inputs = {p: Shape.parse("RuCuSuWu") for p, n in nl.nodes.items() if n.kind == "src"}
+        out = interpret.interpret(nl, inputs)
+        print(f"interpret RuCuSuWu -> {dict(Counter(str(s) for s in out.values()))}")
+    except Exception as exc:
+        print(f"interpret: n/a ({exc})")
+
+
 def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -144,6 +171,12 @@ def main() -> None:
     show.add_argument("file", type=Path, help="Blueprint file")
     show.add_argument("--layer", type=int, default=0, help="Floor 0/1/2")
     show.set_defaults(func=cmd_show)
+
+    # lift command
+    lift_cmd = subparsers.add_parser("lift", help="Lift a blueprint to a netlist")
+    lift_cmd.add_argument("file", type=Path, help="Blueprint file")
+    lift_cmd.add_argument("--layer", type=int, default=0, help="Floor 0/1/2")
+    lift_cmd.set_defaults(func=cmd_lift)
 
     args = parser.parse_args()
     args.func(args)
