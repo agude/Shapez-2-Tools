@@ -51,6 +51,42 @@ def cmd_icon(args: argparse.Namespace) -> None:
         print(f"Icon: {bp.icon}")
 
 
+def cmd_gen(args: argparse.Namespace) -> None:
+    """Generate a blueprint from a parametric template."""
+    from shapez2_tools import generator
+
+    bp = generator.generate_rotator(args.direction, platform=args.platform)
+    if args.output:
+        bp.to_file(args.output)
+        print(f"Wrote {args.output}")
+    else:
+        print(bp.to_string())
+
+
+def cmd_diff(args: argparse.Namespace) -> None:
+    """Compare two blueprints by functional entities."""
+    from shapez2_tools import generator
+
+    a = Blueprint.from_file(args.a)
+    b = Blueprint.from_file(args.b)
+    d = generator.diff_functional(a, b)
+    only_a = sum(d["only_in_first"].values())
+    only_b = sum(d["only_in_second"].values())
+    if not only_a and not only_b:
+        print("Functionally identical")
+        return
+    print(f"only in {args.a}: {only_a} entities")
+    print(f"only in {args.b}: {only_b} entities")
+
+
+def cmd_show(args: argparse.Namespace) -> None:
+    """Render a blueprint layer as a text map."""
+    from shapez2_tools import generator
+
+    bp = Blueprint.from_file(args.file)
+    print(generator.render_text(bp, layer=args.layer))
+
+
 def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -87,6 +123,27 @@ def main() -> None:
         help="Set icon slots (use 'null' for empty)",
     )
     icon.set_defaults(func=cmd_icon)
+
+    # gen command
+    gen = subparsers.add_parser("gen", help="Generate a blueprint")
+    gen_sub = gen.add_subparsers(dest="kind", required=True)
+    gen_rotate = gen_sub.add_parser("rotate", help="Rotator platform")
+    gen_rotate.add_argument("direction", choices=["180", "cw", "ccw"])
+    gen_rotate.add_argument("--platform", default="1x1", choices=["1x1", "1x4"])
+    gen_rotate.add_argument("-o", "--output", type=Path, help="Output blueprint file")
+    gen_rotate.set_defaults(func=cmd_gen)
+
+    # diff command
+    diff = subparsers.add_parser("diff", help="Compare two blueprints functionally")
+    diff.add_argument("a", type=Path, help="First blueprint")
+    diff.add_argument("b", type=Path, help="Second blueprint")
+    diff.set_defaults(func=cmd_diff)
+
+    # show command
+    show = subparsers.add_parser("show", help="Render a blueprint layer as text")
+    show.add_argument("file", type=Path, help="Blueprint file")
+    show.add_argument("--layer", type=int, default=0, help="Floor 0/1/2")
+    show.set_defaults(func=cmd_show)
 
     args = parser.parse_args()
     args.func(args)
