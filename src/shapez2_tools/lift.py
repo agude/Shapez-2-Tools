@@ -46,9 +46,17 @@ def routing_inout(type_: str, r: int):
     if "Splitter1To2L" in type_:
         outs = {E, N} if "Mirrored" in type_ else {E, S}
         return _rot({W}, r), _rot(outs, r)
+    if "Splitter1To3" in type_:  # 1 in (back), 3 out
+        return _rot({W}, r), _rot({E, N, S}, r)
+    if "SplitterTShape" in type_:  # 1 in (back), 2 out (both sides)
+        return _rot({W}, r), _rot({N, S}, r)
     if "Merger2To1L" in type_:
         ins = {N, W} if "Mirrored" in type_ else {S, W}
         return _rot(ins, r), _rot({E}, r)
+    if "Merger3To1" in type_:  # 3 in, 1 out (front)
+        return _rot({N, S, W}, r), _rot({E}, r)
+    if "MergerTShape" in type_:  # 2 in (both sides), 1 out (front)
+        return _rot({N, S}, r), _rot({E}, r)
     if "Left" in type_:  # Left turn; Mirrored = right turn
         out = N if "Mirrored" in type_ else S
         return _rot({W}, r), _rot({out}, r)

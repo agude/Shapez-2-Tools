@@ -9,6 +9,7 @@ from shapez2_tools.blueprint import Blueprint
 REF = Path(__file__).resolve().parent.parent / "data" / "reference"
 QUARTER = REF / "quarter_rotate_180.spz2bp"
 FULL = REF / "full_belt_rotate_180.spz2bp"
+DESTROY = REF / "quarter_destroy_west_half.spz2bp"
 
 
 class TestBeltModel:
@@ -46,3 +47,12 @@ class TestTrace:
         ek = lift.edge_kinds(nl)
         assert ek[("src", "machine")] == 32
         assert ek[("machine", "sink")] == 32
+
+
+class TestJunctions:
+    def test_half_destroyer_lifts_clean(self):
+        # Exercises Splitter1To3 / Merger3To1: 4 inputs -> 12 half-cutters -> 4 out.
+        bp = Blueprint.from_file(DESTROY)
+        assert lift.unmatched_legs(bp, 0) == 0
+        kinds = Counter(n.kind for n in lift.trace_layer(bp, 0).nodes.values())
+        assert kinds == Counter({"machine": 12, "src": 4, "sink": 4})

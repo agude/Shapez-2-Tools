@@ -55,9 +55,12 @@ regression floor. The hard target is intra-platform **place-and-route**.
 - Validated on the rotator quarter: **0 unmatched legs**, and `lift.trace_layer`
   recovers its exact netlist (4 inputs each split to 2 rotators, 8 rotators each
   merge to 1 output) — and the full belt as 4× that. See `lift.py`.
-- Calibrated: Forward / Left(+mir) / Filter / Reader, `Splitter1To2L`(+mir),
-  `Merger2To1L`(+mir), ports, rotator. Still need entries: the other junctions
-  (`3To1` / `1To3` / `TShape`) and multi-port machines (cutters, stackers, …).
+- Calibrated (0 unmatched legs on the rotator quarter *and* the half-destroyer):
+  all routing variants — Forward / Left(+mir) / Filter / Reader, `Splitter`
+  `1To2L`(+mir)/`1To3`/`TShape`, `Merger` `2To1L`(+mir)/`3To1`/`TShape`, ports,
+  rotator. Remaining gap: **multi-port machines** (cutters 1→2, swappers 2→2) —
+  they read as vertical pass-through cells but still leave unmatched legs, so
+  footprint/side-port handling is the next milestone.
 
 ### Decoration is per-blueprint signage
 - `Trash` spells pixel-art names (e.g. "180"/"CW"/"CCW") on the rotators' L0 —
@@ -118,10 +121,10 @@ spec library and the measuring stick.
   × 1×1/1×4) + `gen`/`diff` CLI verbs; extend the tile family to half-destroyers
   and speed-readers. This is the regression floor, not the product.
 - **Rung 1 — Lift (underway).** Decompile a placed blueprint into a netlist by
-  tracing the oriented belt graph. The belt-direction model is calibrated and
-  `lift.py` recovers the rotator family's netlist exactly (see §1). Next:
-  calibrate the remaining junction variants and multi-port machines, then lift a
-  diagonal extractor — the real hard example.
+  tracing the oriented belt graph. All routing variants are calibrated; `lift.py`
+  lifts the rotator family and the half-destroyer at 0 unmatched legs (see §1).
+  Next: multi-port machine port-defs (cutters, swappers), then lift a diagonal
+  extractor — the real hard example.
 - **Rung 2 — Simulate.** Shape model + op transforms + physical validator. Makes
   "correct" mean *computes the function*, not *belts connect*. Needed in full only
   at Rung 4 — Rung 3 can defer it via structural validation (see below).
