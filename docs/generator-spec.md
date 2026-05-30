@@ -1,6 +1,6 @@
 # Blueprint Synthesis — Plan
 
-**Status:** Draft, updated 2026-05-29.
+**Status:** Draft, updated 2026-05-30.
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -11,6 +11,46 @@ product.
 **Easy platforms are the test harness, not the goal.** A "rotate 12 belts 180°"
 is a 10-second hand build; here it exists only as an end-to-end test and a
 regression floor. The hard target is intra-platform **place-and-route**.
+
+---
+
+## 0. Status & handoff (2026-05-30)
+
+**Built and green** (93 tests + 1 xfail, `just test`, ruff clean):
+- `blueprint.py` — faithful `.spz2bp` codec.
+- `generator.py` — tile-replication generator: builds the rotator family
+  (180/cw/ccw × 1×1/1×4) from one lifted tile. `Entity`, lift/stamp/build,
+  functional `diff`, per-floor text `render`.
+- `data/platforms.json` — seam-aware platform geometry (interior = 20·units − 4).
+- `lift.py` — recovers a machine-level netlist from a placed blueprint. Belt
+  direction is calibrated for **all** routing variants (belts + every
+  splitter/merger). `trace_layer`, `unmatched_legs`, `edge_kinds`. **Lifts the
+  rotator family + half-destroyer at 0 unmatched legs.**
+- `shapes.py` — shape model + absolute ops (rotate / cut / half-destroy /
+  swap-west). Convention: quadrants `(NE, SE, SW, NW)`, west = `SW+NW`.
+- `interpret.py` — pushes shapes through a lifted netlist. **Functional
+  verification works**: lifted rotators + half-destroyer compute the right
+  transform on every lane (quarter and the full belt's 48 lanes).
+- CLI: `gen`, `diff`, `show`, `lift`. `data/reference/` holds oracle fixtures.
+
+**The one blocker: multi-port machine ports (cutter / swapper).**
+- Footprints are known (see `docs/machines.md`): cutter 1×2 **1-in/2-out** (input
+  tile passes the east half straight through + an **output-only** tile for the
+  west half); swapper 1×2 2-in/2-out; in ports left/W, out right/E. Half-destroyer
+  1×1 1/1 already works.
+- The lifter still models machines as generic 1-in/1-out, so it miscounts belts
+  that route **past** a cutter's output-only tile as inputs. Pinned by the xfail
+  `test_belts_routing_past_a_machine_are_not_inputs` (should be 8 inputs, not 16).
+- **Unresolved:** the validated belt model says belts feed *both* cutter tiles,
+  which clashes with 1-in. The `.spz2bp` **encoding** of a 1×2 cutter is unclear —
+  two entities = one cutter? one entity + an implied 2nd cell? two separate
+  cutters? Images can't disambiguate; the actual data can.
+
+**Do this first (needs the user):** decode a **clean cutter blueprint** — a single
+cutter (or the four fed-from-south ones) exported to `.spz2bp`. See
+`docs/QUESTIONS.md` Q1. Then: model machine ports → xfail flips green → lift the
+diagonal extractor → `interpret` confirms it produces the two diagonals → on to
+Rung 3 (re-route a known netlist) and Rung 4 (synthesize from a spec).
 
 ---
 

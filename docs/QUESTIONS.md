@@ -3,13 +3,14 @@
 Accumulated during autonomous work; each answer unblocks a specific next step.
 Most-blocking first.
 
-## 1. Cutter input tile  *(blocks finishing the lift)*
-A cutter is `CutterDefault` + `CutterDefaultMirrored` — two tiles (1×2). One is
-the **input tile** (in + out), the other **output-only**. Which entity is which,
-and how are the two arranged relative to the building's rotation `R`? That lets
-me model the cutter's ports and lift the diagonal extractor.
-*(Shortcut: for a `Default` cutter at its default rotation, which side is the
-single input on?)*
+## 1. Export a clean cutter blueprint  *(do this first — blocks the lift)*
+The cutter's structure is confirmed (1×2, 1-in/2-out), but its **file encoding**
+is not: is a 1×2 cutter two entities (`Default` + `Mirrored`) = one cutter, one
+entity with an implied 2nd cell, or two separate single-tile cutters? Each
+predicts different ports, and the dense `12 to 24 Cutter` plus the screenshots
+can't disambiguate. **Please export a single cutter (or the four fed-from-south
+ones) to a `.spz2bp` and paste it.** Decoding a clean example settles the encoding
+in one pass and unblocks the whole machine-port model.
 
 ## 2. Pass-by mechanic  *(pins the connection rule)*
 In tight routing a belt can run *past* a machine without connecting. When a
