@@ -123,8 +123,15 @@ spec library and the measuring stick.
 - **Rung 1 — Lift (underway).** Decompile a placed blueprint into a netlist by
   tracing the oriented belt graph. All routing variants are calibrated; `lift.py`
   lifts the rotator family and the half-destroyer at 0 unmatched legs (see §1).
-  Next: multi-port machine port-defs (cutters, swappers), then lift a diagonal
-  extractor — the real hard example.
+  Next: a **machine-definition table** (footprint + ports per type). The generic
+  1-in/1-out "straight through" machine model holds only when belts sit on both
+  ends; in dense packing it breaks — e.g. a rotator fed by a belt on its east and
+  a cutter on its south has no west input at all. Cutters (1×2, 1 in / 2 out) and
+  swappers (1×2, 2 in / 2 out) compound this: their belt-facing ports match, but
+  the second output and machine-to-machine couplings don't, so downstream
+  machines get dangling inputs. Derive footprints + ports per type from the pure
+  blueprints by examining *all* neighbours (belts and machines), then the
+  extractor lifts.
 - **Rung 2 — Simulate.** Shape model + op transforms + physical validator. Makes
   "correct" mean *computes the function*, not *belts connect*. Needed in full only
   at Rung 4 — Rung 3 can defer it via structural validation (see below).
