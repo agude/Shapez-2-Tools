@@ -1,8 +1,24 @@
 {
+  "_model": {
+    "_comment": "Platform geometry for Shapez 2. See docs/generator-spec.md.",
+    "unit_size": 20,
+    "border": 2,
+    "seam": 4,
+    "interior_per_axis": "20*units - 4 (each unit is a 20x20 bounding cell with a 16x16 buildable interior; each internal join fills the shared 2+2 border, +4 per seam)",
+    "units_order": "[along_X, along_Y] in the platform-local frame (independent of the placed platform's R)",
+    "verified": {
+      "Foundation_1x1": "16x16 interior, 290 corpus blueprints (square, rotation-invariant)",
+      "Foundation_1x4": "4 units at coordinate pitch 20 in X, reproduced exactly by generator M2"
+    },
+    "caveats": "Multi-unit interiors are model-derived, not independently measured. Corpus extents are confounded by per-platform rotation and by belts/ports reaching the rim, so single designs read slightly under the true interior. input_y/output_y/port_x_range are the rotator-style port convention, not platform invariants."
+  },
+
   "Foundation_1x1": {
     "description": "Quarter platform (1x1)",
+    "units": [1, 1],
     "grid_size": [20, 20],
-    "bounds": {"x_min": 2, "x_max": 17, "y_min": 2, "y_max": 17},
+    "interior": [16, 16],
+    "verified": "corpus",
     "ports_per_layer": 4,
     "input_y": 17,
     "output_y": 2,
@@ -10,8 +26,10 @@
   },
   "Foundation_1x2": {
     "description": "1x2 platform",
+    "units": [1, 2],
     "grid_size": [20, 40],
-    "bounds": {"x_min": 2, "x_max": 17, "y_min": -18, "y_max": 17},
+    "interior": [16, 36],
+    "verified": "model",
     "ports_per_layer": 4,
     "input_y": 17,
     "output_y": -18,
@@ -19,31 +37,48 @@
   },
   "Foundation_1x4": {
     "description": "Full belt platform (1x4)",
+    "units": [4, 1],
     "grid_size": [80, 20],
-    "bounds": {"x_min": -12, "x_max": 51, "y_min": 2, "y_max": 17},
+    "interior": [76, 16],
+    "verified": "M2",
     "ports_per_layer": 16,
     "input_y": 17,
     "output_y": 2,
-    "port_x_range": [-9, 48]
+    "_port_note": "Ports span four units; the single port_x_range model does not apply. Per-unit ports sit at the same offset as the 1x1, repeated at unit pitch 20."
   },
   "Foundation_2x2": {
     "description": "2x2 platform",
+    "units": [2, 2],
     "grid_size": [40, 40],
-    "bounds": {"x_min": -18, "x_max": 17, "y_min": -18, "y_max": 17},
+    "interior": [36, 36],
+    "verified": "model",
     "ports_per_layer": 8,
-    "notes": "Ports on multiple edges"
+    "_port_note": "Ports on multiple edges."
   },
   "Foundation_2x4": {
-    "description": "Full belt 2-row platform",
-    "grid_size": [80, 60],
-    "bounds": {"x_min": -18, "x_max": 57, "y_min": 2, "y_max": 37},
+    "description": "Full belt 2-row platform (2x4)",
+    "units": [4, 2],
+    "grid_size": [80, 40],
+    "interior": [76, 36],
+    "verified": "model",
     "ports_per_layer": 24,
-    "notes": "Used for painters, mixers with fluid input"
+    "_note": "Corrected grid_size: was [80, 60]. Used for painters, mixers with fluid input."
   },
+  "Foundation_2x4_Flipped": {
+    "description": "Flipped 2x4 (full-belt stacker)",
+    "units": [4, 2],
+    "grid_size": [80, 40],
+    "interior": [76, 36],
+    "verified": "model",
+    "_note": "Geometry assumed identical to Foundation_2x4; flip affects port arrangement only."
+  },
+
   "Layout_Normal_1": {
     "description": "Normal 1x1 island",
+    "units": [1, 1],
     "grid_size": [20, 20],
-    "bounds": {"x_min": 2, "x_max": 17, "y_min": 2, "y_max": 17},
+    "interior": [16, 16],
+    "verified": "corpus",
     "ports_per_layer": 4,
     "input_y": 17,
     "output_y": 2,
@@ -51,8 +86,10 @@
   },
   "Layout_Normal_2": {
     "description": "Normal 1x2 island",
+    "units": [1, 2],
     "grid_size": [20, 40],
-    "bounds": {"x_min": 2, "x_max": 17, "y_min": -18, "y_max": 17},
+    "interior": [16, 36],
+    "verified": "model",
     "ports_per_layer": 4,
     "input_y": 17,
     "output_y": -18,
@@ -60,44 +97,49 @@
   },
   "Layout_Normal_3_L": {
     "description": "L-shaped island (3 units)",
+    "units": 3,
     "grid_size": [40, 40],
-    "bounds": {"x_min": -18, "x_max": 17, "y_min": -18, "y_max": 17},
     "unit_size": 20,
     "shape_units": [
       "#.",
       "##"
     ],
     "shape_origin": [-18, -18],
-    "notes": "L-shape: top-left missing"
+    "verified": "model",
+    "_interior_note": "Irregular: interior = union of per-unit 16x16 plus +4 per internal adjacency; compute from shape_units.",
+    "_note": "L-shape: top-left missing"
   },
   "Layout_Normal_4_T": {
     "description": "T-shaped island (4 units)",
+    "units": 4,
     "grid_size": [60, 40],
-    "bounds": {"x_min": -18, "x_max": 37, "y_min": -18, "y_max": 17},
     "unit_size": 20,
     "shape_units": [
       "###",
       ".#."
     ],
     "shape_origin": [-18, -18],
-    "notes": "T-shape: top row full, bottom center only"
+    "verified": "model",
+    "_note": "T-shape: top row full, bottom center only"
   },
   "Layout_Normal_4_2x2": {
     "description": "2x2 square island (4 units)",
+    "units": [2, 2],
     "grid_size": [40, 40],
-    "bounds": {"x_min": -18, "x_max": 17, "y_min": -18, "y_max": 17},
+    "interior": [36, 36],
     "unit_size": 20,
     "shape_units": [
       "##",
       "##"
     ],
     "shape_origin": [-18, -18],
-    "notes": "Full 2x2 square"
+    "verified": "model",
+    "_note": "Full 2x2 square; same footprint as Foundation_2x2"
   },
   "Layout_Normal_5_Cross": {
     "description": "Cross-shaped island (5 units)",
+    "units": 5,
     "grid_size": [60, 60],
-    "bounds": {"x_min": -18, "x_max": 37, "y_min": -38, "y_max": 17},
     "unit_size": 20,
     "shape_units": [
       ".#.",
@@ -105,12 +147,14 @@
       ".#."
     ],
     "shape_origin": [-18, -38],
-    "notes": "Cross shape: center + 4 arms"
+    "verified": "model",
+    "_note": "Cross shape: center + 4 arms"
   },
   "Layout_Normal_9_3x3": {
     "description": "3x3 square island (9 units)",
+    "units": [3, 3],
     "grid_size": [60, 60],
-    "bounds": {"x_min": -18, "x_max": 37, "y_min": -38, "y_max": 17},
+    "interior": [56, 56],
     "unit_size": 20,
     "shape_units": [
       "###",
@@ -118,6 +162,30 @@
       "###"
     ],
     "shape_origin": [-18, -38],
-    "notes": "Full 3x3 square"
+    "verified": "model",
+    "_note": "Full 3x3 square"
+  },
+
+  "Layout_ShapeMiner": {
+    "description": "Shape miner platform",
+    "verified": "measured-approx",
+    "interior": [14, 14],
+    "_note": "Non-standard size (does not follow the 20-unit foundation model). Measured from corpus; verify."
+  },
+  "Layout_ShapeMinerExtensionx3": {
+    "description": "Shape miner 3-wide extension",
+    "verified": "unverified",
+    "_note": "Miner extension platform; geometry not yet measured."
+  },
+  "Layout_FluidMiner": {
+    "description": "Fluid miner platform",
+    "verified": "measured-approx",
+    "interior": [11, 7],
+    "_note": "Non-standard size; fluid (pipe) ports only. Measured from corpus; verify."
+  },
+  "Layout_FluidMinerExtensionx3": {
+    "description": "Fluid miner 3-wide extension",
+    "verified": "unverified",
+    "_note": "Miner extension platform; geometry not yet measured."
   }
 }
