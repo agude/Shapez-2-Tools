@@ -57,6 +57,10 @@ holds the input.
 Swaps the **west halves** of two shapes. Halves stay side by side (not stacked),
 so crystals survive. Two tiles, two inputs, two outputs.
 
+**Works on empty parts too.** Feed one shape with only its north quadrants and
+another with only its south quadrants, swap the (absolute) west halves, and the
+two **diagonals** fall out. This is the core trick of the diagonal extractors.
+
 ```
   O    O      two outputs
  [ |  | ]     1×2 footprint
@@ -89,3 +93,6 @@ two separate cutters, or one entity with an implied second cell), or one of thos
 belt connections isn't what the model thinks. Needs an in-game check or a
 clarifying example before the lifter can place machine ports — the last piece to
 lift the diagonal extractor.
+
+(Rejected theory: "cutter = one entity + one *implied* empty footprint cell" —
+tested and false; no empty cells next to cutters receive any inflow.)
