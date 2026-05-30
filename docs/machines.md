@@ -83,16 +83,20 @@ legs, flow direction decides split vs merge.
 
 ---
 
-## Open: tile↔port mapping for the 1×2 machines
-The wiki gives the footprints and port counts above, **but the corpus seems to
-contradict them.** A cutter appears as a `Default`+`Mirrored` pair of tiles
-adjacent N–S, and *both* tiles show a belt input (back) **and** a belt output
-(front) under the calibrated belt model — i.e. it reads as **2 in / 2 out**, not
-the wiki's 1 in / 2 out. So either "two tiles = one cutter" is wrong (they may be
-two separate cutters, or one entity with an implied second cell), or one of those
-belt connections isn't what the model thinks. Needs an in-game check or a
-clarifying example before the lifter can place machine ports — the last piece to
-lift the diagonal extractor.
+## Resolved: cutter is 1-in/2-out; the "2-in" was belts routing past
+A cutter is a `Default`+`Mirrored` tile pair (1×2). One tile is the **input tile**
+(in on the back, out on the front); the other is **output-only** (out on the
+front; its half comes from the cut internally). Building images confirm the
+canonical layout: **in ports on the left (W), out ports on the right (E).** The
+swapper is the symmetric version — both tiles in W / out E, swap internal.
+
+The corpus *looked* like 2-in/2-out only because the leg model counted belts
+**routing past** the output-only tile as inputs. A count over the pure cutter: 16
+cutter cells, **16 belt-outs (correct: 8 cutters × 2)** but **16 belt-ins, 8 of
+them spurious** — exactly the 8 output-only tiles. So the lifter must (a) model the
+cutter's two tiles distinctly (one output-only) and (b) require a machine *port*
+to agree with the belt leg — a belt merely pointing at a machine's non-port side
+is routing past, not connecting.
 
 (Rejected theory: "cutter = one entity + one *implied* empty footprint cell" —
 tested and false; no empty cells next to cutters receive any inflow.)
