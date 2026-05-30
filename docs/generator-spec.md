@@ -62,6 +62,16 @@ regression floor. The hard target is intra-platform **place-and-route**.
   they read as vertical pass-through cells but still leave unmatched legs, so
   footprint/side-port handling is the next milestone.
 
+### Shapes have absolute orientation
+- A shape's orientation is fixed in **world** space — north is always north.
+- Cut / swap / half-destroy act on the **absolute** west/east halves regardless of
+  building rotation; rotating those buildings only re-routes belts, not function.
+  **Only a Rotator re-orients a shape.**
+- So to reach a non-west part you rotate the shape west, apply the op, rotate back
+  — which is why extractors are dominated by rotators (they are *addressing*).
+- This is a **simulator** fact (Rungs 2/4); it does not affect the belt-topology
+  lift (ports still rotate with `R`). Detail in `docs/machines.md`.
+
 ### Decoration is per-blueprint signage
 - `Trash` spells pixel-art names (e.g. "180"/"CW"/"CCW") on the rotators' L0 —
   ad-hoc, not systematic, and absent from most families.
