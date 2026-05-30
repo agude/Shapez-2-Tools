@@ -3,6 +3,8 @@
 from collections import Counter
 from pathlib import Path
 
+import pytest
+
 from shapez2_tools import lift
 from shapez2_tools.blueprint import Blueprint
 
@@ -10,6 +12,7 @@ REF = Path(__file__).resolve().parent.parent / "data" / "reference"
 QUARTER = REF / "quarter_rotate_180.spz2bp"
 FULL = REF / "full_belt_rotate_180.spz2bp"
 DESTROY = REF / "quarter_destroy_west_half.spz2bp"
+CUTTER = REF / "cutter_12_to_24.spz2bp"
 
 
 class TestBeltModel:
@@ -56,3 +59,16 @@ class TestJunctions:
         assert lift.unmatched_legs(bp, 0) == 0
         kinds = Counter(n.kind for n in lift.trace_layer(bp, 0).nodes.values())
         assert kinds == Counter({"machine": 12, "src": 4, "sink": 4})
+
+
+@pytest.mark.xfail(strict=True, reason="machine-port model (output-only cutter tile) not built yet")
+def test_belts_routing_past_a_machine_are_not_inputs():
+    # A cutter is 1-in/2-out across two tiles, so the pure 12->24 cutter is 8
+    # cutters with exactly 8 inputs - not 16. The extra 8 come from belts that
+    # L-turn *past* the output-only tiles, which must not count as connections.
+    nl = lift.trace_layer(Blueprint.from_file(CUTTER), 0)
+    cutter_nodes = {
+        p for p, n in nl.nodes.items() if "Cutter" in n.type and "Half" not in n.type
+    }
+    inputs = sum(1 for _a, b in nl.edges if b in cutter_nodes)
+    assert inputs == 8
