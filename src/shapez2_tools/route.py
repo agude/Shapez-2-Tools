@@ -238,14 +238,23 @@ def _rebuild_blueprint(bp: Blueprint, entities: list[Entity]) -> Blueprint:
 def reroute(stripped: Blueprint, netlist: lift.Netlist, layer: int = 0) -> Blueprint:
     """Re-route a netlist using the machine positions from stripped blueprint.
 
-    Generates belt entities to realize every edge in the netlist, then
-    combines them with the non-belt entities from stripped.
+    Builds a cell occupancy map from all edges, then emits the appropriate belt
+    type for each cell based on its input/output directions. Cells with multiple
+    inputs or outputs become junctions (splitters/mergers).
     """
     # Get kept entities (machines + ports)
     kept = [e for e in _all_entities(stripped) if e.layer == layer]
 
-    # Route each edge using port directions from the netlist
-    routed_belts: list[Entity] = []
+    # Build cell occupancy: cell -> (set of input dirs, set of output dirs)
+    cell_io: dict[tuple[int, int], tuple[set, set]] = {}
+
+    def add_cell(x: int, y: int, in_dir: tuple[int, int], out_dir: tuple[int, int]):
+        if (x, y) not in cell_io:
+            cell_io[(x, y)] = (set(), set())
+        cell_io[(x, y)][0].add(in_dir)
+        cell_io[(x, y)][1].add(out_dir)
+
+    # Route each edge and collect cell I/O
     for src_anchor, dst_anchor in netlist.edges:
         src_node = netlist.nodes[src_anchor]
         dst_node = netlist.nodes[dst_anchor]
@@ -254,27 +263,113 @@ def reroute(stripped: Blueprint, netlist: lift.Netlist, layer: int = 0) -> Bluep
         _, src_outs = lift._inout(src_node.type, src_node.rotation)
         dst_ins, _ = lift._inout(dst_node.type, dst_node.rotation)
 
-        # For 1-out/1-in nodes, use the single direction
-        # For multi-port, we'd need to match specific ports (TODO for cutters/swappers)
         src_out_dir = next(iter(src_outs)) if len(src_outs) == 1 else None
         dst_in_dir = next(iter(dst_ins)) if len(dst_ins) == 1 else None
 
-        # Route with port awareness
-        belts = route_edge(src_anchor, dst_anchor, layer, src_out_dir, dst_in_dir)
-        routed_belts.extend(belts)
+        # Get path cells with their I/O directions
+        path = _get_path_cells(src_anchor, dst_anchor, src_out_dir, dst_in_dir)
+        for x, y, in_d, out_d in path:
+            add_cell(x, y, in_d, out_d)
 
-    # Deduplicate routed belts by position (overlapping paths merge)
-    seen_positions: set[tuple[int, int]] = set()
-    deduped_belts: list[Entity] = []
-    for belt in routed_belts:
-        pos = (belt.x, belt.y)
-        if pos not in seen_positions:
-            seen_positions.add(pos)
-            deduped_belts.append(belt)
+    # Emit belt entities based on cell I/O
+    routed_belts: list[Entity] = []
+    for (x, y), (ins, outs) in cell_io.items():
+        belt_type, r = _belt_for_cell(frozenset(ins), frozenset(outs))
+        routed_belts.append(Entity(x=x, y=y, type=belt_type, rotation=r, layer=layer))
 
-    # Combine kept + deduped
-    all_entities = kept + deduped_belts
+    # Combine kept + routed
+    all_entities = kept + routed_belts
     return _rebuild_blueprint(stripped, all_entities)
+
+
+def _get_path_cells(
+    src: tuple[int, int],
+    dst: tuple[int, int],
+    src_out_dir: tuple[int, int] | None,
+    dst_in_dir: tuple[int, int] | None,
+) -> list[tuple[int, int, tuple[int, int], tuple[int, int]]]:
+    """Get path cells with (x, y, in_dir, out_dir) for each."""
+    # Determine start and end points for the belt path
+    if src_out_dir:
+        start = (src[0] + src_out_dir[0], src[1] + src_out_dir[1])
+        first_in_dir = _neg(src_out_dir)
+    else:
+        dx = dst[0] - src[0]
+        dy = dst[1] - src[1]
+        if abs(dx) >= abs(dy) and dx != 0:
+            step = E if dx > 0 else W
+        elif dy != 0:
+            step = N if dy > 0 else S
+        else:
+            step = E
+        start = (src[0] + step[0], src[1] + step[1])
+        first_in_dir = _neg(step)
+
+    if dst_in_dir:
+        end = (dst[0] + dst_in_dir[0], dst[1] + dst_in_dir[1])
+        last_out_dir = _neg(dst_in_dir)
+    else:
+        dx = dst[0] - src[0]
+        dy = dst[1] - src[1]
+        if abs(dx) >= abs(dy) and dy != 0:
+            step = N if dy > 0 else S
+        elif dx != 0:
+            step = E if dx > 0 else W
+        elif dy != 0:
+            step = N if dy > 0 else S
+        else:
+            step = E
+        end = (dst[0] - step[0], dst[1] - step[1])
+        last_out_dir = step
+
+    if start == end:
+        return [(start[0], start[1], first_in_dir, last_out_dir)]
+
+    return _find_path(start, end, first_in_dir, last_out_dir)
+
+
+def _belt_for_cell(ins: frozenset, outs: frozenset) -> tuple[str, int]:
+    """Return (type, rotation) for a belt cell with given input/output direction sets.
+
+    Handles simple belts (1-in/1-out), turns, splitters (1-in/2-out), and
+    mergers (2-in/1-out).
+    """
+    # Try each belt variant at each rotation
+    variants = [
+        "BeltDefaultForwardInternalVariant",
+        "BeltDefaultLeftInternalVariant",
+        "BeltDefaultLeftInternalVariantMirrored",
+        "Splitter1To2LInternalVariant",
+        "Splitter1To2LInternalVariantMirrored",
+        "Splitter1To3InternalVariant",
+        "SplitterTShapeInternalVariant",
+        "Merger2To1LInternalVariant",
+        "Merger2To1LInternalVariantMirrored",
+        "Merger3To1InternalVariant",
+        "MergerTShapeInternalVariant",
+    ]
+
+    for variant in variants:
+        for r in range(4):
+            result = lift.routing_inout(variant, r)
+            if result:
+                v_ins, v_outs = result
+                if v_ins == ins and v_outs == outs:
+                    return variant, r
+
+    # Fallback: if no exact match, try to find a superset match
+    # (a belt that has at least the required I/O)
+    for variant in variants:
+        for r in range(4):
+            result = lift.routing_inout(variant, r)
+            if result:
+                v_ins, v_outs = result
+                if ins.issubset(v_ins) and outs.issubset(v_outs):
+                    return variant, r
+
+    # No belt type can handle this I/O configuration (e.g., 2-in/2-out crossing)
+    # Return a placeholder that will cause unmatched legs — better than crashing
+    return "BeltDefaultForwardInternalVariant", 0
 
 
 def _anchor_of(cell: tuple[int, int], netlist: lift.Netlist) -> tuple[int, int] | None:
