@@ -20,7 +20,6 @@ def _lift(name, layer=0):
     return lift.trace_layer(Blueprint.from_file(REF / name), layer)
 
 
-@pytest.mark.xfail(strict=True, reason="WP-A: lift.isomorphic not implemented yet")
 class TestIsomorphism:
     def test_self_isomorphic(self):
         q = _lift("quarter_rotate_180.spz2bp")

@@ -24,6 +24,8 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
+import networkx as nx
+
 from shapez2_tools.blueprint import Blueprint
 from shapez2_tools.generator import DECORATION_TYPES, all_entities
 
@@ -247,3 +249,28 @@ def trace_layer(bp: Blueprint, layer: int) -> Netlist:
 def edge_kinds(nl: Netlist) -> Counter:
     """Count netlist edges by (source kind, destination kind)."""
     return Counter((nl.nodes[a].kind, nl.nodes[b].kind) for a, b in nl.edges)
+
+
+def to_graph(nl: Netlist) -> nx.MultiDiGraph:
+    """Convert a Netlist to a networkx MultiDiGraph for isomorphism tests.
+
+    Node attributes: (kind, type) — kind distinguishes src/sink/machine; type
+    distinguishes machine variants (rotator cw vs ccw). Edges are unlabelled.
+    Using a MultiDiGraph because parallel edges (multiple lanes) are possible.
+    """
+    g = nx.MultiDiGraph()
+    for anchor, node in nl.nodes.items():
+        g.add_node(anchor, kind=node.kind, type=node.type)
+    for src, dst in nl.edges:
+        g.add_edge(src, dst)
+    return g
+
+
+def isomorphic(a: Netlist, b: Netlist) -> bool:
+    """Placement-independent equality: same graph structure and node types."""
+    ga, gb = to_graph(a), to_graph(b)
+
+    def node_match(n1, n2):
+        return n1["kind"] == n2["kind"] and n1["type"] == n2["type"]
+
+    return nx.is_isomorphic(ga, gb, node_match=node_match)
