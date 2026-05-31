@@ -100,9 +100,7 @@ def cmd_lift(args: argparse.Namespace) -> None:
     print(f"unmatched legs: {lift.unmatched_legs(bp, args.layer)}")
     print(f"edges: {dict(lift.edge_kinds(nl))}")
     machines = Counter(
-        n.type.replace("InternalVariant", "")
-        for n in nl.nodes.values()
-        if n.kind == "machine"
+        n.type.replace("InternalVariant", "") for n in nl.nodes.values() if n.kind == "machine"
     )
     if machines:
         print(f"machines: {dict(machines)}")

@@ -32,7 +32,6 @@ class TestValidate:
 
     def test_overlap_detected(self):
         from shapez2_tools import lift
-        from shapez2_tools.generator import Entity
 
         # Hand-build a blueprint with two entities at the same position.
         bp = Blueprint.from_file(REF / "quarter_rotate_180.spz2bp")

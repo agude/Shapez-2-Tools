@@ -301,7 +301,7 @@ def validate(bp: Blueprint) -> list[Problem]:
         occupied[key].append(e.type)
         # Multi-cell machines: also check their footprint cells.
         if kind(e.type) == "machine":
-            for (dx, dy) in _machine_footprint(e.type, e.rotation):
+            for dx, dy in _machine_footprint(e.type, e.rotation):
                 if (dx, dy) != (0, 0):
                     key2 = (e.x + dx, e.y + dy, e.layer)
                     occupied[key2].append(f"{e.type}[+{dx},{dy}]")
@@ -309,18 +309,14 @@ def validate(bp: Blueprint) -> list[Problem]:
     # Check for overlaps.
     for (x, y, layer), types in occupied.items():
         if len(types) > 1:
-            problems.append(Problem(
-                "overlap",
-                f"({x}, {y}, L{layer}) occupied by: {', '.join(types)}"
-            ))
+            problems.append(
+                Problem("overlap", f"({x}, {y}, L{layer}) occupied by: {', '.join(types)}")
+            )
 
     # Check for dangling legs on each floor.
     for layer in range(3):
         legs = unmatched_legs(bp, layer)
         if legs > 0:
-            problems.append(Problem(
-                "dangling",
-                f"layer {layer} has {legs} unmatched legs"
-            ))
+            problems.append(Problem("dangling", f"layer {layer} has {legs} unmatched legs"))
 
     return problems

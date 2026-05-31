@@ -8,8 +8,6 @@ bar of the TDD loop for the isomorphism backbone that Rungs 3-4 validate against
 
 from pathlib import Path
 
-import pytest
-
 from shapez2_tools import lift
 from shapez2_tools.blueprint import Blueprint
 

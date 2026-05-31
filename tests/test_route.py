@@ -27,7 +27,6 @@ CLOSED_FIXTURES = [
 ]
 
 
-@pytest.mark.xfail(strict=True, reason="WP-C: route module not implemented yet")
 class TestRouteBasics:
     """Unit tests for individual routing operations."""
 
@@ -79,7 +78,7 @@ class TestRouteBasics:
         assert nl.edges[0] == ((0, 0), (3, 0))
 
 
-@pytest.mark.xfail(strict=True, reason="WP-C: route module not implemented yet")
+@pytest.mark.xfail(strict=True, reason="WP-C: machine-aware routing not implemented yet")
 class TestReroute:
     """Round-trip tests: strip belts, re-route, lift must be isomorphic."""
 

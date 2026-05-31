@@ -20,9 +20,7 @@ from shapez2_tools.blueprint import Blueprint
 
 # Building types that are decoration, not function (spec section 2.2):
 # the blueprint name tag and the trash pixel-art signage.
-DECORATION_TYPES = frozenset(
-    {"LabelDefaultInternalVariant", "TrashDefaultInternalVariant"}
-)
+DECORATION_TYPES = frozenset({"LabelDefaultInternalVariant", "TrashDefaultInternalVariant"})
 
 # A blueprint platform unit is 20x20 tiles; the three floors are L0/L1/L2.
 UNIT_PITCH = 20
@@ -92,9 +90,7 @@ def _platform_entries(bp: Blueprint) -> list[dict]:
 def functional_entities(bp: Blueprint) -> list[Entity]:
     """All non-decoration building entities in a blueprint."""
     return [
-        e
-        for d in _platform_entries(bp)
-        if (e := Entity.from_dict(d)).type not in DECORATION_TYPES
+        e for d in _platform_entries(bp) if (e := Entity.from_dict(d)).type not in DECORATION_TYPES
     ]
 
 
@@ -118,12 +114,7 @@ def stamp(
     layers: tuple[int, ...] = FLOORS,
 ) -> list[Entity]:
     """Replicate a tile across floors and across platform units in X."""
-    return [
-        e.translated(dx=dx, layer=layer)
-        for layer in layers
-        for dx in x_offsets
-        for e in tile
-    ]
+    return [e.translated(dx=dx, layer=layer) for layer in layers for dx in x_offsets for e in tile]
 
 
 def stamp_platform(tile: list[Entity], platform: str) -> list[Entity]:
@@ -185,9 +176,7 @@ def reference(name: str) -> Path:
 
 def substitute(tile: list[Entity], mapping: dict[str, str]) -> list[Entity]:
     """Return a copy of the tile with building types remapped."""
-    return [
-        Entity(e.x, e.y, mapping.get(e.type, e.type), e.rotation, e.layer) for e in tile
-    ]
+    return [Entity(e.x, e.y, mapping.get(e.type, e.type), e.rotation, e.layer) for e in tile]
 
 
 def generate_rotator(direction: str, platform: str = "1x1") -> Blueprint:
@@ -255,8 +244,7 @@ def render_text(bp: Blueprint, layer: int = 0) -> str:
     lines = []
     for y in range(max(ys), min(ys) - 1, -1):
         row = "".join(
-            _symbol(cells[(x, y)]) if (x, y) in cells else "·"
-            for x in range(min(xs), max(xs) + 1)
+            _symbol(cells[(x, y)]) if (x, y) in cells else "·" for x in range(min(xs), max(xs) + 1)
         )
         lines.append(f"{y:3} {row}")
     lines.append("    " + "".join(str(x % 10) for x in range(min(xs), max(xs) + 1)))
