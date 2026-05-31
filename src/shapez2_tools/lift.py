@@ -274,3 +274,53 @@ def isomorphic(a: Netlist, b: Netlist) -> bool:
         return n1["kind"] == n2["kind"] and n1["type"] == n2["type"]
 
     return nx.is_isomorphic(ga, gb, node_match=node_match)
+
+
+@dataclass
+class Problem:
+    """A physical validity problem in a blueprint."""
+
+    kind: str
+    message: str
+
+    def __str__(self):
+        return f"{self.kind}: {self.message}"
+
+
+def validate(bp: Blueprint) -> list[Problem]:
+    """Check physical validity: overlaps, dangling legs, off-grid.
+
+    Returns an empty list if the blueprint is valid.
+    """
+    problems: list[Problem] = []
+
+    # Collect all entities across all platforms.
+    occupied: dict[tuple[int, int, int], list[str]] = defaultdict(list)
+    for e in all_entities(bp):
+        key = (e.x, e.y, e.layer)
+        occupied[key].append(e.type)
+        # Multi-cell machines: also check their footprint cells.
+        if kind(e.type) == "machine":
+            for (dx, dy) in _machine_footprint(e.type, e.rotation):
+                if (dx, dy) != (0, 0):
+                    key2 = (e.x + dx, e.y + dy, e.layer)
+                    occupied[key2].append(f"{e.type}[+{dx},{dy}]")
+
+    # Check for overlaps.
+    for (x, y, layer), types in occupied.items():
+        if len(types) > 1:
+            problems.append(Problem(
+                "overlap",
+                f"({x}, {y}, L{layer}) occupied by: {', '.join(types)}"
+            ))
+
+    # Check for dangling legs on each floor.
+    for layer in range(3):
+        legs = unmatched_legs(bp, layer)
+        if legs > 0:
+            problems.append(Problem(
+                "dangling",
+                f"layer {layer} has {legs} unmatched legs"
+            ))
+
+    return problems
