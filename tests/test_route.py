@@ -30,6 +30,82 @@ CLOSED_FIXTURES = [
 class TestRouteBasics:
     """Unit tests for individual routing operations."""
 
+    def test_route_fanout(self):
+        """One source → two destinations emits a splitter junction."""
+        from shapez2_tools import route
+        from shapez2_tools.generator import Entity
+
+        # Source at (0, 0), two sinks at (3, 1) and (3, -1)
+        # All facing East (R=0), so source outputs E, sinks accept from W
+        src = Entity(type="BeltPortReceiverInternalVariant", x=0, y=0, rotation=0, layer=0)
+        sink1 = Entity(type="BeltPortSenderInternalVariant", x=3, y=1, rotation=0, layer=0)
+        sink2 = Entity(type="BeltPortSenderInternalVariant", x=3, y=-1, rotation=0, layer=0)
+
+        # Route the fan-out: one source to two sinks
+        # src_out_dir = E (1,0): source outputs to the east
+        # dst_in_dirs = W (-1,0): sinks accept from the west
+        entities = route.route_fanout(
+            src_pos=(0, 0),
+            dst_positions=[(3, 1), (3, -1)],
+            src_out_dir=(1, 0),  # E
+            dst_in_dirs=[(-1, 0), (-1, 0)],  # both sinks accept from W
+            layer=0,
+        )
+
+        # Should include at least one splitter
+        types = [e.type for e in entities]
+        has_splitter = any("Splitter" in t for t in types)
+        assert has_splitter, f"Expected a splitter, got types: {types}"
+
+        # Build blueprint and lift to verify connectivity
+        all_ents = [src, sink1, sink2] + entities
+        bp = route.entities_to_blueprint(all_ents, platform="Foundation_1x1")
+        nl = lift.trace_layer(bp, 0)
+
+        # Should have 2 edges: src → sink1 and src → sink2
+        assert len(nl.edges) == 2
+        edge_set = {(tuple(e[0]), tuple(e[1])) for e in nl.edges}
+        assert ((0, 0), (3, 1)) in edge_set
+        assert ((0, 0), (3, -1)) in edge_set
+
+    def test_route_fanin(self):
+        """Two sources → one destination emits a merger junction."""
+        from shapez2_tools import route
+        from shapez2_tools.generator import Entity
+
+        # Two sources at (0, 1) and (0, -1), one sink at (3, 0)
+        # All facing East (R=0): sources output E, sink accepts from W
+        src1 = Entity(type="BeltPortReceiverInternalVariant", x=0, y=1, rotation=0, layer=0)
+        src2 = Entity(type="BeltPortReceiverInternalVariant", x=0, y=-1, rotation=0, layer=0)
+        sink = Entity(type="BeltPortSenderInternalVariant", x=3, y=0, rotation=0, layer=0)
+
+        # Route the fan-in: two sources to one sink
+        # src_out_dirs = E (1,0): sources output to the east
+        # dst_in_dir = W (-1,0): sink accepts from the west
+        entities = route.route_fanin(
+            src_positions=[(0, 1), (0, -1)],
+            dst_pos=(3, 0),
+            src_out_dirs=[(1, 0), (1, 0)],  # both sources output E
+            dst_in_dir=(-1, 0),  # sink accepts from W
+            layer=0,
+        )
+
+        # Should include at least one merger
+        types = [e.type for e in entities]
+        has_merger = any("Merger" in t for t in types)
+        assert has_merger, f"Expected a merger, got types: {types}"
+
+        # Build blueprint and lift to verify connectivity
+        all_ents = [src1, src2, sink] + entities
+        bp = route.entities_to_blueprint(all_ents, platform="Foundation_1x1")
+        nl = lift.trace_layer(bp, 0)
+
+        # Should have 2 edges: src1 → sink and src2 → sink
+        assert len(nl.edges) == 2
+        edge_set = {(tuple(e[0]), tuple(e[1])) for e in nl.edges}
+        assert ((0, 1), (3, 0)) in edge_set
+        assert ((0, -1), (3, 0)) in edge_set
+
     def test_route_straight(self):
         """One source → one destination in a line emits Forward belts."""
         from shapez2_tools import route
