@@ -59,77 +59,148 @@ def route_edge(
     src: tuple[int, int],
     dst: tuple[int, int],
     layer: int = 0,
+    src_out_dir: tuple[int, int] | None = None,
+    dst_in_dir: tuple[int, int] | None = None,
 ) -> list[Entity]:
     """Route a single edge from src to dst, emitting belt entities.
 
-    Uses a simple Manhattan path: horizontal first, then vertical (or vice versa
-    if that would work better). No obstacle avoidance yet.
+    If src_out_dir is given, the first belt starts at (src + src_out_dir) and
+    receives from src_out_dir. If dst_in_dir is given, the last belt feeds into
+    dst from that direction.
 
     The src and dst cells are NOT included in the output — they're assumed to be
     the machine/port positions. Only the intermediate belt cells are returned.
     """
-    x, y = src
-    dx, dy = dst[0] - src[0], dst[1] - src[1]
     entities: list[Entity] = []
 
-    # Decide primary direction based on which axis has more distance
-    # (arbitrary choice — could be optimized later)
-    if abs(dx) >= abs(dy):
-        # Horizontal first
-        h_dir = E if dx > 0 else W
-        v_dir = N if dy > 0 else S
-        h_steps = abs(dx)
-        v_steps = abs(dy)
+    # Determine start and end points for the belt path
+    if src_out_dir:
+        # Start at the cell adjacent to src in the output direction
+        start = (src[0] + src_out_dir[0], src[1] + src_out_dir[1])
+        first_in_dir = _neg(src_out_dir)  # belt receives from src
     else:
-        # Vertical first
-        h_dir = E if dx > 0 else W
-        v_dir = N if dy > 0 else S
-        h_steps = abs(dx)
-        v_steps = abs(dy)
-        # Swap order
-        h_dir, v_dir = v_dir, h_dir
-        h_steps, v_steps = v_steps, h_steps
+        # No port direction — start one cell toward dst (exclude src)
+        # Use primary axis (horizontal if |dx| >= |dy|)
+        dx = dst[0] - src[0]
+        dy = dst[1] - src[1]
+        if abs(dx) >= abs(dy) and dx != 0:
+            step = E if dx > 0 else W
+        elif dy != 0:
+            step = N if dy > 0 else S
+        else:
+            step = E  # shouldn't happen (src == dst)
+        start = (src[0] + step[0], src[1] + step[1])
+        first_in_dir = _neg(step)
 
-    prev_dir = None
-    cx, cy = x, y
+    if dst_in_dir:
+        # End at the cell adjacent to dst that feeds into it
+        end = (dst[0] + dst_in_dir[0], dst[1] + dst_in_dir[1])
+        last_out_dir = _neg(dst_in_dir)  # belt outputs toward dst
+    else:
+        # No port direction — end one cell before dst (exclude dst)
+        # Use the axis we'll be traveling on last (vertical if we went horizontal first)
+        dx = dst[0] - src[0]
+        dy = dst[1] - src[1]
+        if abs(dx) >= abs(dy) and dy != 0:
+            # Horizontal first, so approach dst vertically
+            step = N if dy > 0 else S
+        elif dx != 0:
+            step = E if dx > 0 else W
+        elif dy != 0:
+            step = N if dy > 0 else S
+        else:
+            step = E  # shouldn't happen
+        end = (dst[0] - step[0], dst[1] - step[1])
+        last_out_dir = step
 
-    def emit(in_d, out_d, ex, ey):
-        """Emit a belt at (ex, ey) with the given in/out directions."""
+    # Handle adjacent cells (1 step apart) — no intermediate belts needed
+    if start == end:
+        if first_in_dir and last_out_dir:
+            belt_type, r = _belt_for_inout(first_in_dir, last_out_dir)
+            entities.append(Entity(x=start[0], y=start[1], type=belt_type, rotation=r, layer=layer))
+        return entities
+
+    # Handle src == dst or dst one step from src
+    sx, sy = start
+    ex, ey = end
+    if sx == ex and sy == ey:
+        return entities  # Nothing to route
+
+    # Route from start to end
+    path = _find_path(start, end, first_in_dir, last_out_dir)
+    for x, y, in_d, out_d in path:
         belt_type, r = _belt_for_inout(in_d, out_d)
-        entities.append(Entity(x=ex, y=ey, type=belt_type, rotation=r, layer=layer))
-
-    # Move in primary direction
-    for _ in range(h_steps):
-        # Step forward
-        ncx, ncy = cx + h_dir[0], cy + h_dir[1]
-        # The cell we're leaving becomes a belt (unless it's src)
-        if (cx, cy) != src:
-            in_d = _neg(prev_dir) if prev_dir else _neg(h_dir)  # from where we came
-            out_d = h_dir  # to where we're going
-            emit(in_d, out_d, cx, cy)
-        prev_dir = h_dir
-        cx, cy = ncx, ncy
-
-    # Turn if needed
-    if v_steps > 0 and (cx, cy) != dst:
-        # Emit a turn at the corner
-        in_d = _neg(prev_dir)
-        out_d = v_dir
-        emit(in_d, out_d, cx, cy)
-        prev_dir = v_dir
-        cx, cy = cx + v_dir[0], cy + v_dir[1]
-
-    # Move in secondary direction
-    for _ in range(v_steps - 1):  # -1 because we already took one step at the turn
-        ncx, ncy = cx + v_dir[0], cy + v_dir[1]
-        if (cx, cy) != src and (cx, cy) != dst:
-            in_d = _neg(prev_dir)
-            out_d = v_dir
-            emit(in_d, out_d, cx, cy)
-        prev_dir = v_dir
-        cx, cy = ncx, ncy
+        entities.append(Entity(x=x, y=y, type=belt_type, rotation=r, layer=layer))
 
     return entities
+
+
+def _find_path(
+    start: tuple[int, int],
+    end: tuple[int, int],
+    first_in_dir: tuple[int, int] | None,
+    last_out_dir: tuple[int, int] | None,
+) -> list[tuple[int, int, tuple[int, int], tuple[int, int]]]:
+    """Find a Manhattan path, returning [(x, y, in_dir, out_dir), ...].
+
+    Simple L-shaped routing: go horizontal first, then vertical.
+    Respects entry (first_in_dir) and exit (last_out_dir) constraints.
+    """
+    sx, sy = start
+    ex, ey = end
+    dx, dy = ex - sx, ey - sy
+
+    if dx == 0 and dy == 0:
+        return []
+
+    path: list[tuple[int, int, tuple[int, int], tuple[int, int]]] = []
+
+    # Build the sequence of cells and directions
+    cells = [(sx, sy)]
+    cx, cy = sx, sy
+
+    # Horizontal movement first
+    h_dir = E if dx > 0 else W if dx < 0 else None
+    while h_dir and cx != ex:
+        cx = cx + h_dir[0]
+        cells.append((cx, cy))
+
+    # Then vertical movement
+    v_dir = N if dy > 0 else S if dy < 0 else None
+    while v_dir and cy != ey:
+        cy = cy + v_dir[1]
+        cells.append((cx, cy))
+
+    # Now assign in/out directions to each cell
+    for i, (x, y) in enumerate(cells):
+        if i == 0:
+            # First cell: use first_in_dir if given, else derive from next cell
+            if first_in_dir:
+                in_d = first_in_dir
+            elif len(cells) > 1:
+                nx, ny = cells[1]
+                in_d = _neg((nx - x, ny - y))
+            else:
+                in_d = W  # default
+        else:
+            # Input is opposite of how we got here
+            px, py = cells[i - 1]
+            in_d = (px - x, py - y)
+
+        if i == len(cells) - 1:
+            # Last cell: use last_out_dir if given
+            if last_out_dir:
+                out_d = last_out_dir
+            else:
+                out_d = _neg(in_d)  # continue straight
+        else:
+            # Output is toward next cell
+            nx, ny = cells[i + 1]
+            out_d = (nx - x, ny - y)
+
+        path.append((x, y, in_d, out_d))
+
+    return path
 
 
 def strip_belts(bp: Blueprint, layer: int) -> Blueprint:
@@ -173,27 +244,36 @@ def reroute(stripped: Blueprint, netlist: lift.Netlist, layer: int = 0) -> Bluep
     # Get kept entities (machines + ports)
     kept = [e for e in _all_entities(stripped) if e.layer == layer]
 
-    # Route each edge in the netlist
+    # Route each edge using port directions from the netlist
     routed_belts: list[Entity] = []
     for src_anchor, dst_anchor in netlist.edges:
-        # Get the actual cells from port_edges if available
-        port_edge_cells = [
-            (s, d)
-            for s, d in netlist.port_edges
-            if _anchor_of(s, netlist) == src_anchor and _anchor_of(d, netlist) == dst_anchor
-        ]
+        src_node = netlist.nodes[src_anchor]
+        dst_node = netlist.nodes[dst_anchor]
 
-        if port_edge_cells:
-            for src_cell, dst_cell in port_edge_cells:
-                belts = route_edge(src_cell, dst_cell, layer)
-                routed_belts.extend(belts)
-        else:
-            # Fallback: route from src anchor to dst anchor
-            belts = route_edge(src_anchor, dst_anchor, layer)
-            routed_belts.extend(belts)
+        # Get port directions from _inout
+        _, src_outs = lift._inout(src_node.type, src_node.rotation)
+        dst_ins, _ = lift._inout(dst_node.type, dst_node.rotation)
 
-    # Combine kept + routed
-    all_entities = kept + routed_belts
+        # For 1-out/1-in nodes, use the single direction
+        # For multi-port, we'd need to match specific ports (TODO for cutters/swappers)
+        src_out_dir = next(iter(src_outs)) if len(src_outs) == 1 else None
+        dst_in_dir = next(iter(dst_ins)) if len(dst_ins) == 1 else None
+
+        # Route with port awareness
+        belts = route_edge(src_anchor, dst_anchor, layer, src_out_dir, dst_in_dir)
+        routed_belts.extend(belts)
+
+    # Deduplicate routed belts by position (overlapping paths merge)
+    seen_positions: set[tuple[int, int]] = set()
+    deduped_belts: list[Entity] = []
+    for belt in routed_belts:
+        pos = (belt.x, belt.y)
+        if pos not in seen_positions:
+            seen_positions.add(pos)
+            deduped_belts.append(belt)
+
+    # Combine kept + deduped
+    all_entities = kept + deduped_belts
     return _rebuild_blueprint(stripped, all_entities)
 
 
