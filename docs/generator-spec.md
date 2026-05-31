@@ -38,22 +38,27 @@ regression floor. The hard target is intra-platform **place-and-route**.
 - `validate.py` — physical validator (WP-B done). Checks overlap, dangling legs,
   off-grid placement. Corpus sweep passes on all closed fixtures.
 - `route.py` — routing primitives (WP-C partial). `route_edge`, `route_fanout`,
-  `route_fanin` work for isolated cases. Full `reroute` still produces crossing
-  conflicts (10 xfail tests).
+  `route_fanin` work for isolated cases. A* routing with obstacle avoidance works
+  for simple netlists (11 xfail tests remain for complex patterns).
 - CLI: `gen`, `diff`, `show`, `lift`. `data/reference/` holds oracle fixtures.
 
 **WP-A and WP-B: DONE.** Netlist isomorphism via networkx graph comparison; physical
 validator with corpus sweep. Both green.
 
-**WP-C (routing): PARTIAL.** Primitives work:
+**WP-C (routing): PARTIAL.** Working primitives:
 - `route_edge(src, dst, ...)` — single edge with L-shaped path
 - `route_fanout(src, dsts, ...)` — 1→N with T-splitter junction
 - `route_fanin(srcs, dst, ...)` — N→1 with T-merger junction
+- `route_astar(src, dst, obstacles, ...)` — A* pathfinding with obstacle avoidance
+- `route_edges_sequential(edges, ...)` — routes edges one at a time, marking each
+  as obstacle for subsequent paths (prevents crossings)
 
-The full `reroute(stripped_bp, netlist)` fails because independent L-shaped paths
-cross each other, creating impossible 2-in/2-out cells. **Next: sequential A\* with
-obstacle marking** — route nets one at a time, marking routed cells as obstacles.
-See §7.2 WP-C for the revised approach based on VLSI/PCB routing research.
+A* sequential routing works for simple netlists (test_reroute_crossing_edges passes).
+The full `reroute_with_junctions` fails on complex patterns like the rotator quarter
+because simplistic "place merger adjacent to sink" doesn't account for geometric
+constraints — sources may not align to approach mergers from different directions.
+**Next:** smarter junction placement that considers source geometry, or route
+fan-in edges to a shared merge point before the sink.
 
 **Cutter + swapper: SOLVED (the cutter was the blocker).** Machines now expand to
 footprints (`_machine_footprint`); each is one entity + a second cell to the
