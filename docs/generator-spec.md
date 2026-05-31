@@ -16,7 +16,7 @@ regression floor. The hard target is intra-platform **place-and-route**.
 
 ## 0. Status & handoff (2026-05-30)
 
-**Built and green** (93 tests + 1 xfail, `just test`, ruff clean):
+**Built and green** (100 tests, `just test`, ruff clean):
 - `blueprint.py` — faithful `.spz2bp` codec.
 - `generator.py` — tile-replication generator: builds the rotator family
   (180/cw/ccw × 1×1/1×4) from one lifted tile. `Entity`, lift/stamp/build,
@@ -24,33 +24,50 @@ regression floor. The hard target is intra-platform **place-and-route**.
 - `data/platforms.json` — seam-aware platform geometry (interior = 20·units − 4).
 - `lift.py` — recovers a machine-level netlist from a placed blueprint. Belt
   direction is calibrated for **all** routing variants (belts + every
-  splitter/merger). `trace_layer`, `unmatched_legs`, `edge_kinds`. **Lifts the
-  rotator family + half-destroyer at 0 unmatched legs.**
+  splitter/merger); **machines expand to multi-cell footprints**
+  (`_machine_footprint`). `trace_layer`, `unmatched_legs`, `edge_kinds`. **Lifts
+  the rotator family + half-destroyer + the cutter at 0 unmatched legs.**
 - `shapes.py` — shape model + absolute ops (rotate / cut / half-destroy /
   swap-west). Convention: quadrants `(NE, SE, SW, NW)`, west = `SW+NW`.
-- `interpret.py` — pushes shapes through a lifted netlist. **Functional
-  verification works**: lifted rotators + half-destroyer compute the right
-  transform on every lane (quarter and the full belt's 48 lanes).
+- `interpret.py` — pushes shapes through a lifted netlist, **per cell** via the
+  netlist's `port_edges`, so multi-port machines work. Verified: rotators +
+  half-destroyer on every lane (quarter + full belt's 48), the **cutter** (1→2,
+  east/west), and the **swapper** (2→2) including the **diagonal trick**
+  (north-only + south-only in → the two diagonals out).
 - CLI: `gen`, `diff`, `show`, `lift`. `data/reference/` holds oracle fixtures.
 
-**The one blocker: multi-port machine ports (cutter / swapper).**
-- Footprints are known (see `docs/machines.md`): cutter 1×2 **1-in/2-out** (input
-  tile passes the east half straight through + an **output-only** tile for the
-  west half); swapper 1×2 2-in/2-out; in ports left/W, out right/E. Half-destroyer
-  1×1 1/1 already works.
-- The lifter still models machines as generic 1-in/1-out, so it miscounts belts
-  that route **past** a cutter's output-only tile as inputs. Pinned by the xfail
-  `test_belts_routing_past_a_machine_are_not_inputs` (should be 8 inputs, not 16).
-- **Unresolved:** the validated belt model says belts feed *both* cutter tiles,
-  which clashes with 1-in. The `.spz2bp` **encoding** of a 1×2 cutter is unclear —
-  two entities = one cutter? one entity + an implied 2nd cell? two separate
-  cutters? Images can't disambiguate; the actual data can.
+**Cutter + swapper: SOLVED (the cutter was the blocker).** Machines now expand to
+footprints (`_machine_footprint`); each is one entity + a second cell to the
+right of flow (Default) / left (Mirrored):
+- **Cutter** (1-in/2-out): second cell output-only — pass-by belts don't connect.
+  Dense `12→24` lifts at **0 unmatched legs** (16 cutters × in-1/out-2).
+- **Swapper** (2-in/2-out): second cell mirrors the anchor. Determined **without a
+  belted template** — brute-forced against `Swap Diagonal`, which lifts at **0
+  unmatched legs** (32 swappers × in-2/out-2). So the **diagonal extractor's
+  topology is lifted** (the north-star demo, structurally).
 
-**Do this first (needs the user):** decode a **clean cutter blueprint** — a single
-cutter (or the four fed-from-south ones) exported to `.spz2bp`. See
-`docs/QUESTIONS.md` Q1. Then: model machine ports → xfail flips green → lift the
-diagonal extractor → `interpret` confirms it produces the two diagonals → on to
-Rung 3 (re-route a known netlist) and Rung 4 (synthesize from a spec).
+`tests/test_lift.py::TestCutter`/`TestSwapper`. See `docs/machines.md`,
+`QUESTIONS.md` Q1.
+
+**Rung 2 (interpret) — multi-port done; full-blueprint drive remaining.** The
+interpreter is now port-aware (`Node.rotation`, `Netlist.port_edges`, per-cell
+propagation) and the cutter/swapper ops + the diagonal trick are verified on
+hand-built netlists (`tests/test_interpret.py::TestMultiPort`). What's *not* yet
+done: driving the **whole** `swap_diagonal` blueprint end-to-end. Its sinks gather
+several machines through throughput mergers, so it only computes the diagonals
+under its **intended input pattern** (specific north-feed / south-feed sources) —
+feeding all sources one shape makes the gather points see different shapes (the
+interpreter correctly refuses). Next: identify which source ports are which feed
+(port labelling / structural analysis), then assert the diagonals fall out of the
+real blueprint.
+
+**Next steps — see §7 for the full test-first work plan.** Critical path to the
+north star (synthesis): **WP-A** netlist isomorphism → **WP-B** validator + corpus
+sweep → **WP-C** Rung 3 re-route (the router, validated by `lift∘route ≅ netlist`)
+→ **WP-D** placement (CP-SAT) → **WP-E** synthesize. The diagonal extractor needs
+**none** of the breadth work (stacker WP-F, painter WP-G, full-blueprint sim
+WP-H) — its machines (rotators, swappers, belts) are already lifted and simulated.
+WP-A is scaffolded as `tests/test_netlist.py` (xfail until implemented).
 
 ---
 
@@ -98,9 +115,9 @@ Rung 3 (re-route a known netlist) and Rung 4 (synthesize from a spec).
 - Calibrated (0 unmatched legs on the rotator quarter *and* the half-destroyer):
   all routing variants — Forward / Left(+mir) / Filter / Reader, `Splitter`
   `1To2L`(+mir)/`1To3`/`TShape`, `Merger` `2To1L`(+mir)/`3To1`/`TShape`, ports,
-  rotator. Remaining gap: **multi-port machines** (cutters 1→2, swappers 2→2) —
-  they read as vertical pass-through cells but still leave unmatched legs, so
-  footprint/side-port handling is the next milestone.
+  rotator, and the **cutter** (one entity + an output-only second cell, 1→2 — the
+  dense `12→24` blueprint lifts at 0 unmatched legs). Remaining gap: the swapper
+  (2→2), stacker (2→1), and painter (needs a pipe routing layer).
 
 ### Shapes have absolute orientation
 - A shape's orientation is fixed in **world** space — north is always north.
@@ -221,7 +238,9 @@ Guiding principle: **buy the generic search, build the domain.** You cannot buy
 Shapez-2 shape/format/belt knowledge; you should not hand-roll a constraint solver.
 
 - **Codec** (gzip/base64/json): stdlib. Built.
-- **Netlist graph**: likely `networkx` (traversal, topo-sort, connectivity).
+- **Netlist graph + isomorphism**: `networkx` (traversal, topo-sort, and
+  `is_isomorphic` with a node-type matcher for the round-trip invariants I4/I5).
+  Needed from **WP-A**.
 - **Shape model + simulator**: in-house (domain-specific to Shapez 2). Survey
   existing community tooling first for a reference implementation (web search was
   rate-limited; revisit).
@@ -240,3 +259,222 @@ to Rung 4.
 
 **The corpus de-risks every buy:** validate CP-SAT placement and the router
 against human-optimal layouts before trusting them on novel specs.
+
+---
+
+## 7. Execution plan (test-first)
+
+The concrete, TDD-ordered work plan. It supersedes §0's prose "next steps" and
+details §3's ladder. **Methodology: write the test first, watch it fail, make it
+pass, refactor.** A red bar that cannot pass yet is captured as
+`@pytest.mark.xfail(strict=True, reason=...)` (the cutter precedent) so `just
+test` stays green, the gap is visible in the run output, and the marker removes
+itself the moment the feature lands (strict ⇒ an unexpected pass fails the suite).
+
+### 7.0 Test taxonomy
+
+Six flavours; each work package below says which it adds.
+
+1. **Calibration (unit).** Pure functions — `_machine_footprint`,
+   `routing_inout`, pipe directions, shape ops. Exact, fast, no fixtures.
+2. **Structural lift.** On a *closed* oracle fixture (a port on every lane):
+   `unmatched_legs == 0` plus node/edge counts and per-type degree. "Topology is
+   right."
+3. **Functional sim.** `interpret(...)` yields the expected shapes — lane-wise on
+   a corpus fixture, or exact on a hand-built minimal netlist.
+4. **Round-trip / isomorphism.** The inverse-pair invariants (§7.1): routing and
+   synthesis are checked by lifting their output back and comparing graphs.
+5. **Physical validity.** `validate(bp)` passes for the corpus and fails — with a
+   specific reason — on hand-built broken inputs (overlap, dangling, off-grid).
+6. **Corpus sweep (regression).** One parametrized test over every closed
+   fixture, asserting flavours 2 and 5. The blanket safety net.
+
+### 7.1 Master invariants
+
+Everything reduces to these; each WP moves one closer to green.
+
+- **I1 — well-formed lift:** a closed corpus blueprint ⇒ `unmatched_legs == 0`.
+- **I2 — correct lift:** recovered nodes / edges / degrees == the known structure.
+- **I3 — correct sim:** `interpret(lift(bp), inputs) == expected_outputs`.
+- **I4 — route is lift's inverse (Rung 3):** `isomorphic(lift(route(N, P)), N)`
+  for a netlist `N` placed at fixed positions `P`.
+- **I5 — synthesis is correct (Rung 4):** `isomorphic(lift(synth(spec)),
+  netlist(spec))` **and** `interpret(lift(synth(spec)), in) == spec(in)`.
+- **I6 — physical validity:** `validate(bp)` ⇔ `bp` is placeable and legal.
+- **I7 — compactness (soft):** `belts(synth(spec)) ≤ k · belts(oracle)` — measured
+  and tracked against the human oracle, not a hard gate.
+
+Lifting is the trusted core (I1–I3, green for rotators/half-destroyer/cutter/
+swapper). I4 and I5 *bootstrap off it*: we never hand-verify routed/synthesized
+geometry — we lift it back and compare to the intended netlist. Route and synth
+must therefore emit exactly the belt/junction types+rotations that
+`lift.routing_inout` decodes; the calibration table is the single source of truth
+shared by both directions, which is what makes the round-trip exact.
+
+### 7.2 Work packages
+
+Ordered along the **critical path to the north star**. The diagonal extractor (the
+headline demo) uses only rotators, swappers, and belts — all already lifted and
+simulated — so the path is IR → router → placement → synth, needing **no**
+stacker/painter work. Machine-table breadth (WP-F/G/H) is a parallel track that
+widens the spec space but blocks nothing on the diagonal extractor.
+
+#### WP-A — Netlist isomorphism *(validation backbone; critical path)*
+- **Goal:** a placement-independent equality on lifted netlists — the substrate
+  for I4/I5. Lets us assert "this routed/synthesized blueprint realizes that
+  netlist" without comparing coordinates.
+- **Tests first** (`tests/test_netlist.py`, flavour 4 — scaffolded as xfail now):
+  - `test_self_isomorphic` — `isomorphic(trace_layer(Q,0), trace_layer(Q,0))`.
+  - `test_floors_are_isomorphic` — `isomorphic(trace_layer(Q,0),
+    trace_layer(Q,1))` True: identical structure, different layer/coords ⇒ proves
+    coordinate-independence on a *real* example.
+  - `test_cw_ccw_180_quarters_not_isomorphic` — pairwise False: identical topology
+    (4→8→4) but different rotator **type** ⇒ proves type-sensitivity.
+  - `test_cutter_not_isomorphic_to_rotator`, `test_full_belt_not_isomorphic_to_
+    quarter` — False (different op/degree; different size).
+- **Implementation:** `lift.to_graph(nl) -> nx.MultiDiGraph` (node attr =
+  `(kind, type)`, edges from `nl.edges`); `lift.isomorphic(a, b)` via
+  `nx.is_isomorphic(..., node_match=by (kind, type))`. Add the `networkx` dep.
+  *Port-aware* isomorphism (distinguishing a swapper's two inputs) is **deferred** —
+  Rung-3 structural validity does not need it (§3).
+- **Done when:** the five tests are green; `networkx` added; xfail removed.
+
+#### WP-B — Physical validator + corpus sweep *(safety net; critical path)*
+- **Goal:** I6, plus a blanket regression that makes every later change cheap to
+  trust.
+- **Tests first:**
+  - `tests/test_validate.py` (flavour 5): `test_corpus_is_valid` parametrized over
+    closed fixtures ⇒ `validate(bp) == []`; `test_overlap_detected`,
+    `test_dangling_leg_detected`, `test_offgrid_detected` on hand-built broken
+    blueprints ⇒ a non-empty problem list naming the cause.
+  - `tests/test_corpus.py` (flavour 6): `test_closed_fixtures_lift_clean`
+    parametrized over the closed registry ⇒ `unmatched_legs == 0` on every floor.
+- **Implementation:** `validate(bp) -> list[Problem]` (empty ⇒ valid): (a) no two
+  entities share `(x, y, L)`; (b) `unmatched_legs == 0` across floors (reuse
+  lift); (c) every cell inside the platform interior (use `platforms.json` + the
+  seam model). A `CLOSED_FIXTURES` / `OPEN_FIXTURES` registry in `conftest.py`
+  (closed = ported, assert 0 unmatched; open = the pinwheel exports, dangling by
+  design).
+- **Done when:** the sweep is green over closed fixtures; broken inputs rejected
+  with the right reason.
+
+#### WP-C — Rung 3: re-route at fixed placement *(the router core; critical path)*
+- **Goal:** I4. Given a netlist + the machines' existing cells, regenerate belts
+  realizing every edge; lifting the result reproduces the netlist. The hardest
+  near-term WP — TDD it bottom-up, each step a fresh red.
+- **Tests first** (`tests/test_router.py`, rewritten; flavours 4 + 5):
+  1. `test_route_straight` — one src cell → one dst in a line ⇒ Forward belts
+     (correct R); `lift` yields the single edge.
+  2. `test_route_one_turn` — offset on both axes ⇒ Forward + `Left`/`…Mirrored`;
+     `lift` ⇒ the edge.
+  3. `test_route_fanout` / `test_route_fanin` — 1→2 emits a `Splitter`; 2→1 emits
+     a `Merger`; `lift` ⇒ all edges.
+  4. `test_route_avoids_obstacle` — a blocked cell forces a detour; still routes.
+  5. `test_reroute_rotator_quarter` — strip belts from the lifted quarter (keep
+     the 8 rotators + 8 ports at their cells), re-route the 4→8→4 netlist, then
+     `isomorphic(lift(result), original)` **and** `validate(result)`.
+  6. `test_reroute_roundtrip` parametrized over closed fixtures (quarter
+     cw/ccw/180, half-destroyer, `cutter_12_to_24`, `swap_diagonal`):
+     `isomorphic(lift(route(strip(bp))), lift(bp))`.
+- **Implementation:**
+  - `nets(nl) -> list[Net]` — group `port_edges` into nets (source port → set of
+    sink ports) with throughput.
+  - `router.route(placement, nets, platform) -> list[Entity]` — A* per net on the
+    3-D grid (cells × layers, lifts as vias), emitting turn-typed
+    `Forward`/`Left`(+mir) belts and `Splitter`/`Merger` junctions for fan-out/in;
+    obstacles = occupied cells; lean on `networkx` for the A* graph.
+  - Emit exactly the types+rotations `lift.routing_inout` decodes — shared table,
+    so the round-trip is exact by construction.
+- **Done when:** tests 1–6 green over the listed fixtures.
+- **Defer:** throughput-aware **parallel-lane** routing (a net wider than one
+  belt's rate) — start at one belt per edge; add a `test_reroute_full_belt`
+  (48 lanes) once the simple round-trip is green.
+- **Note:** WP-C **supersedes the deprecated `router.py` + `tests/test_router.py`**
+  (38 tests for an unused A* prototype, not part of the regression contract);
+  replace them when this lands.
+
+#### WP-D — Placement (CP-SAT) *(Rung 3→4; critical path)*
+- **Goal:** choose machine cells + rotations for a netlist on a platform, instead
+  of reusing the oracle's placement.
+- **Tests first:** `test_place_two_rotators` (feasible: no overlap, legal cells,
+  ports orientable to be routable); `test_place_then_route_rotator_quarter`
+  (place → WP-C route ⇒ `isomorphic` + `validate`); `test_placement_compact`
+  (soft, I7: bounding box / belt count within `k×` the oracle).
+- **Implementation:** OR-Tools CP-SAT — vars = `(cell, rotation)` per machine;
+  constraints = no overlap, on-grid, port-adjacency feasibility; objective =
+  bounding box / wire-length proxy.
+- **Done when:** place+route reproduces the quarter and full belt structurally;
+  compactness tracked.
+
+#### WP-E — Rung 4: synthesize from spec *(the product; critical path)*
+- **Goal:** I5. Spec → netlist → place (D) → route (C) → entities → file.
+- **Tests first:** `test_synth_rotate_180_quarter` (`isomorphic(lift(synth),
+  netlist(spec))` + `interpret == rotate_180` per lane + `validate`);
+  `test_synth_diagonal_extractor` (north-star spec ⇒ structurally iso to a
+  hand-derived netlist + `interpret` yields the two diagonals + compactness vs
+  `Swap Diagonal`); `test_synth_loads_in_game` (manual gate).
+- **Implementation:** a small spec language (named ops + lane signature + output
+  pinning) → `netlist(spec)` builder → the lowering pipeline (D then C) →
+  `generator`/`blueprint` to a file.
+- **Done when:** both synth tests green; manual in-game load passes.
+
+#### WP-F — Stacker cross-floor lift *(breadth track)*
+- **Goal:** lift inter-floor machines; complete the table for stacking specs.
+- **Tests first:** `test_stacker_footprint_vertical_input` (unit: the 3-D
+  `_machine_footprint` puts the secondary input one floor up at the anchor,
+  offset `(0,0,+1)`, accepting from the back; output front=straight /
+  right=`StackerDefault` / left=`…Mirrored`); `test_stacker_blueprint_lifts_clean`
+  (save `Full Belt Stacker` → `data/reference/stacker_full_belt.spz2bp`; whole-
+  blueprint `unmatched_legs == 0`; stackers = 2-in (one cross-floor) / 1-out);
+  `test_independent_floors_unchanged` (rotator quarter/full belt still lift
+  per-floor at 0 — the 3-D change must not break independent-floor families).
+- **Implementation:** occupancy keyed by `(x, y, layer)`; `_machine_footprint`
+  returns 3-tuple offsets; add `trace(bp)` spanning floors (keep `trace_layer` for
+  single-floor families). The stacker claims the cell **directly above** its
+  anchor as an input port (the L+1 feed belt's output lands there). `down`/`reach`
+  / `unmatched_legs` operate in 3-D.
+- **Then (separate sub-task):** the stacker shape op needs a **layered** shape
+  model — `Shape` is single-layer today; extend to N layers before `interpret`
+  can stack.
+
+#### WP-G — Painter pipe layer *(breadth track)*
+- **Goal:** lift fluid machines (painter, later crystallizer/miner).
+- **Tests first:** `test_pipe_directions` (unit: pipe Forward/turn/junction in/out
+  sides per R, calibrated like belts); `test_painter_lifts_clean` (a clean
+  belted+piped painter lifts at 0 unmatched across **both** layers; the painter
+  node has shape-in + paint-in + shape-out).
+- **Implementation:** a `pipe_inout` table mirroring `routing_inout`; a two-graph
+  occupancy (belts carry shapes, pipes carry fluid); the painter consumes from
+  both. Likely needs a fresh export with belts **and** pipes on its I/O —
+  `QUESTIONS.md` Q4b. Sim needs a color model (defer).
+
+#### WP-H — Full-blueprint functional drive *(breadth track; confidence, not capability)*
+- **Goal:** I3 on a whole dense blueprint, not just hand-built netlists.
+- **Problem:** a closed extractor's sinks gather several machines through
+  throughput mergers, so it resolves to single shapes only under its **intended
+  input pattern**; uniform input makes a gather see different shapes (the
+  interpreter rightly refuses — observed on `swap_diagonal`).
+- **Tests first:** `test_swap_diagonal_computes_diagonals` — feed the intended
+  per-source pattern (north-feed / south-feed lanes) ⇒ the two diagonals at the
+  labelled sinks.
+- **Implementation:** derive each source's input role and each sink's output role
+  structurally (trace reachable machines / feeders), or take the I/O contract from
+  the blueprint name / user. Lower priority: the ops are already proven on minimal
+  netlists, so this is confidence, not new capability.
+
+### 7.3 Sequencing & dependencies
+- **Critical path:** A → B → C → D → E, each gated by the prior's invariant.
+- A and B are cheap and unblock everything — do them first (≈ a session each).
+- C (the router) is the hard, high-value core — budget the most TDD iterations
+  there; keep parallel-lane throughput deferred until the simple round-trip is
+  green.
+- F / G / H run in parallel whenever a stacker / painter / confidence need
+  arises; none block the diagonal-extractor north star.
+- New deps (§6): A/H add `networkx`; D adds `OR-Tools`. Nothing else.
+
+### 7.4 Test infrastructure to build first
+- `tests/conftest.py`: fixture loaders + the `CLOSED_FIXTURES` / `OPEN_FIXTURES`
+  registry, and a `tiny_netlist(...)` builder (promote the helper from
+  `tests/test_interpret.py::TestMultiPort`) for hand-built I4/I5 cases.
+- Treat the deprecated `router.py` + `tests/test_router.py` as **out of the
+  regression contract**; WP-C replaces them.

@@ -3,14 +3,12 @@
 Accumulated during autonomous work; each answer unblocks a specific next step.
 Most-blocking first.
 
-## 1. Export a clean cutter blueprint  *(do this first — blocks the lift)*
-The cutter's structure is confirmed (1×2, 1-in/2-out), but its **file encoding**
-is not: is a 1×2 cutter two entities (`Default` + `Mirrored`) = one cutter, one
-entity with an implied 2nd cell, or two separate single-tile cutters? Each
-predicts different ports, and the dense `12 to 24 Cutter` plus the screenshots
-can't disambiguate. **Please export a single cutter (or the four fed-from-south
-ones) to a `.spz2bp` and paste it.** Decoding a clean example settles the encoding
-in one pass and unblocks the whole machine-port model.
+## 1. Swapper ports — RESOLVED (no export needed; see Resolved)
+Solved by brute-forcing the footprint against the existing `Swap Diagonal`
+blueprint instead of a belted template: 2-in/2-out, second cell right of flow,
+both cells in-back/out-front. `Swap Diagonal` now lifts at 0 unmatched legs.
+The remaining swapper-related *open* questions are the simulator's (Q3 shape
+convention, and the swapper's exact swap semantics).
 
 ## 2. Pass-by mechanic  *(pins the connection rule)*
 In tight routing a belt can run *past* a machine without connecting. When a
@@ -25,9 +23,21 @@ with the west half = `SW + NW`. The diagonal-swap test passes with this, but doe
 it match the game's shape-code order (e.g. `RuCuSuWu`)? A wrong labeling would
 still pass the structural tests yet mislabel parts.
 
-## 4. Stacker  *(to extend simulator + lifter)*
-Footprint, port layout, and semantics — how does a stacker combine two input
-shapes (stack layers)? Needed before the simulator/lifter can handle stacking.
+## 4. Stacker stacking semantics  *(simulator only — ports are solved)*
+The stacker **structure is fully solved** (see Resolved): 1×1, primary input on
+the back (same floor), **secondary input from the floor above** (dropped onto the
+anchor), output front (`StackerStraight`) or to the side (bent `StackerDefault`
+right / `…Mirrored` left). Lifting it is gated on cross-floor support in the
+lifter (my work, not a question). The remaining *question*: confirm the stacking
+**semantics** for the simulator — how do the two input shapes combine into
+layers (primary = bottom, secondary = top)? What happens on collisions / full
+stacks?
+
+## 4b. Painter pipe layer  *(blocks lifting painters)*
+Painters consume paint on a separate **pipe** transport layer (`PipeForward`, …)
+alongside shape belts, so the lifter needs a pipe routing model (calibrate
+pipe Forward/turn/junction in/out sides, like belts) before painters lift. A
+clean painter with belts **and** pipes on its I/O would calibrate it.
 
 ## 5. Non-1×1/1×4 platform ports  *(calibration)*
 The swapper (2×2) and painter (2×4) blueprints leave unmatched legs at their
@@ -48,3 +58,20 @@ icons should settle it).
   the left (W), out on the right (E).
 - The cutter's apparent "2 inputs" was belts routing *past* output-only tiles.
 - Swappers swap west halves including empty parts (the diagonal trick).
+- **Cutter encoding (Q1, was the blocker):** a cutter is **one entity + an
+  output-only second cell**, *not* a `Default`+`Mirrored` tile pair. The second
+  cell is right of flow (`Default`) / left (`Mirrored`); one input on the anchor
+  back, two outputs on the fronts. The dense `12→24` blueprint lifts at 0
+  unmatched legs (16 cutters × in-1/out-2). Modeled in `lift._machine_footprint`;
+  the disproven "tile pair" note in `machines.md` is corrected.
+- **Stacker structure:** 1×1, 2-in/1-out. Primary input on the anchor's back
+  (same floor); **secondary input from the floor above** (the L+1 belt's output
+  lands on the anchor). Output: front (`StackerStraight`) / right (bent
+  `StackerDefault`) / left (`…Mirrored`). The first machine with a **cross-floor**
+  connection — lifting it needs vertical-port support (not yet built).
+- **Swapper ports (Q1):** 2-in/2-out, one entity + a second cell to the right of
+  flow (Default) / left (Mirrored), both cells in-back/out-front. Found **without
+  a belted template** — brute-forced footprint hypotheses against the existing
+  `Swap Diagonal` blueprint; the winning model lifts it at 0 unmatched legs (32
+  swappers × in-2/out-2), so the diagonal extractor's topology is lifted. Modeled
+  in `lift._machine_footprint`; fixture `data/reference/swap_diagonal.spz2bp`.

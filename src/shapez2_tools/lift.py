@@ -11,14 +11,18 @@ merge to an output).
 
 Calibrated: Forward / Left (+Mirrored) / Filter / Reader (1-in/1-out),
 Splitter1To2L (+Mirrored), Merger2To1L (+Mirrored), ports, and the rotator.
-Not yet calibrated: other junctions (3To1, 1To3, TShape) and multi-port machines
-(cutters, stackers, ...), which need their own entries.
+Machines may span more than one cell: a machine entity is expanded into its
+footprint (see ``_machine_footprint``). Calibrated machines: rotators and the
+half-destroyer (1×1), the cutter (1-in/2-out) and the swapper (2-in/2-out) — each
+one entity + a second cell to the side. Not yet handled: the stacker (its second
+input is on the floor above — needs cross-floor support) and the painter (needs a
+pipe routing layer).
 """
 
 from __future__ import annotations
 
-from collections import Counter
-from dataclasses import dataclass
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field
 
 from shapez2_tools.blueprint import Blueprint
 from shapez2_tools.generator import DECORATION_TYPES, all_entities
@@ -39,6 +43,13 @@ def _rot(sides: set[tuple[int, int]], r: int) -> frozenset[tuple[int, int]]:
     for _ in range(r):
         sides = {_ccw(d) for d in sides}
     return frozenset(sides)
+
+
+def _rotd(d: tuple[int, int], r: int) -> tuple[int, int]:
+    """Rotate a single direction +90 deg CCW, r times."""
+    for _ in range(r):
+        d = _ccw(d)
+    return d
 
 
 def routing_inout(type_: str, r: int):
@@ -88,6 +99,39 @@ def _inout(type_: str, r: int):
     return _rot({W}, r), _rot({E}, r)
 
 
+def _machine_footprint(type_: str, r: int) -> dict[tuple[int, int], tuple[frozenset, frozenset]]:
+    """Occupied cells of a machine as offsets from its anchor -> (ins, outs).
+
+    Default machine: a single 1-in/1-out cell (rotators, half-destroyer). The
+    cutter and swapper each span a second cell **to the right of flow** for the
+    Default variant (``Mirrored`` puts it left); both take input(s) on the back
+    and emit on the front:
+      - cutter (1-in/2-out): the second cell is **output-only** (its half comes
+        from the internal cut), so belts merely routing past it never connect.
+      - swapper (2-in/2-out): the second cell mirrors the anchor (in-back,
+        out-front); the two west halves are swapped internally.
+    Verified at 0 unmatched legs against data/reference/cutter_12_to_24.spz2bp
+    and swap_diagonal.spz2bp (plus the pinwheel exports), every rotation/variant.
+    """
+    back, fwd = _rotd(W, r), _rotd(E, r)
+    through = (frozenset({back}), frozenset({fwd}))  # 1-in (back) / 1-out (front)
+    if ("Cutter" in type_ and "Half" not in type_) or "Swapper" in type_:
+        second = _rotd(N, r) if "Mirrored" in type_ else _rotd(S, r)
+        output_only = (frozenset(), frozenset({fwd}))
+        return {(0, 0): through, second: through if "Swapper" in type_ else output_only}
+    return {(0, 0): through}
+
+
+@dataclass(frozen=True)
+class _Cell:
+    """One occupied tile in a placed blueprint, owned by an entity ``anchor``."""
+
+    ins: frozenset
+    outs: frozenset
+    anchor: tuple[int, int]
+    is_belt: bool
+
+
 @dataclass(frozen=True)
 class Node:
     x: int
@@ -95,74 +139,109 @@ class Node:
     layer: int
     type: str
     kind: str
+    rotation: int = 0
+
+
+# A cell is an (x, y) tile; an edge is a pair of cells or a pair of node anchors.
+Cell = tuple[int, int]
 
 
 @dataclass
 class Netlist:
-    nodes: dict[tuple[int, int], Node]
-    edges: list[tuple[tuple[int, int], tuple[int, int]]]
+    nodes: dict[Cell, Node]
+    edges: list[tuple[Cell, Cell]]  # node-anchor to node-anchor (machine/port level)
+    # Port-level edges (output cell -> input cell), so multi-port machines keep
+    # which output/input each connection uses. ``edges`` is these collapsed to
+    # node anchors. Used by the interpreter to route shapes per port.
+    port_edges: list[tuple[Cell, Cell]] = field(default_factory=list)
 
 
-def _cells(bp: Blueprint, layer: int) -> dict[tuple[int, int], object]:
-    # Exclude decoration. This is the rotator-family assumption (trash = signage);
-    # in the Trash family it is functional, so this filter must become family-aware.
-    return {
-        (e.x, e.y): e
-        for e in all_entities(bp)
-        if e.layer == layer and e.type not in DECORATION_TYPES
-    }
+def _occupancy(bp: Blueprint, layer: int) -> dict[tuple[int, int], _Cell]:
+    """Map every occupied tile on a floor to its ports and owning entity.
+
+    Routing cells and ports occupy their own tile; a machine is expanded into
+    its footprint (``_machine_footprint``), so multi-cell machines (cutters)
+    contribute one tile per cell, all owned by the entity's anchor. Decoration
+    is excluded -- the rotator-family assumption (trash = signage); in the Trash
+    family it is functional, so this filter must become family-aware.
+    """
+    occ: dict[tuple[int, int], _Cell] = {}
+    for e in all_entities(bp):
+        if e.layer != layer or e.type in DECORATION_TYPES:
+            continue
+        anchor = (e.x, e.y)
+        if kind(e.type) == "machine":
+            for (dx, dy), (ins, outs) in _machine_footprint(e.type, e.rotation).items():
+                occ[(e.x + dx, e.y + dy)] = _Cell(ins, outs, anchor, False)
+        else:
+            ins, outs = _inout(e.type, e.rotation)
+            occ[anchor] = _Cell(ins, outs, anchor, kind(e.type) == "belt")
+    return occ
 
 
 def unmatched_legs(bp: Blueprint, layer: int) -> int:
     """Count routing legs with no matching partner (0 means well-formed)."""
-    cells = _cells(bp, layer)
+    occ = _occupancy(bp, layer)
     bad = 0
-    for (x, y), e in cells.items():
-        ins, outs = _inout(e.type, e.rotation)
-        for d in outs:
-            n = cells.get((x + d[0], y + d[1]))
-            if not (n and _neg(d) in _inout(n.type, n.rotation)[0]):
+    for (x, y), c in occ.items():
+        for d in c.outs:
+            n = occ.get((x + d[0], y + d[1]))
+            if not (n and _neg(d) in n.ins):
                 bad += 1
-        for d in ins:
-            n = cells.get((x + d[0], y + d[1]))
-            if not (n and _neg(d) in _inout(n.type, n.rotation)[1]):
+        for d in c.ins:
+            n = occ.get((x + d[0], y + d[1]))
+            if not (n and _neg(d) in n.outs):
                 bad += 1
     return bad
 
 
 def trace_layer(bp: Blueprint, layer: int) -> Netlist:
     """Recover the machine/port-level netlist for one floor."""
-    cells = _cells(bp, layer)
+    occ = _occupancy(bp, layer)
+    anchor_cells: dict[tuple[int, int], list[tuple[int, int]]] = defaultdict(list)
+    for cell, c in occ.items():
+        anchor_cells[c.anchor].append(cell)
 
-    def down(p):
-        _, outs = _inout(cells[p].type, cells[p].rotation)
+    def down(cell):
         result = []
-        for d in outs:
-            n = (p[0] + d[0], p[1] + d[1])
-            if n in cells and _neg(d) in _inout(cells[n].type, cells[n].rotation)[0]:
+        for d in occ[cell].outs:
+            n = (cell[0] + d[0], cell[1] + d[1])
+            nc = occ.get(n)
+            if nc and _neg(d) in nc.ins:
                 result.append(n)
         return result
 
-    def reach(p):
-        out, seen, stack = set(), set(), list(down(p))
+    def reach_cells(start):
+        """Non-belt cells reachable downstream of one output cell (contract belts)."""
+        out, seen, stack = set(), set(), list(down(start))
         while stack:
-            c = stack.pop()
-            if c in seen:
+            cell = stack.pop()
+            if cell in seen:
                 continue
-            seen.add(c)
-            if kind(cells[c].type) == "belt":
-                stack.extend(down(c))
+            seen.add(cell)
+            if occ[cell].is_belt:
+                stack.extend(down(cell))
             else:
-                out.add(c)
+                out.add(cell)
         return out
 
-    nodes = {
-        p: Node(p[0], p[1], layer, e.type, kind(e.type))
-        for p, e in cells.items()
-        if kind(e.type) != "belt"
-    }
-    edges = [(p, d) for p in nodes for d in reach(p)]
-    return Netlist(nodes, edges)
+    nodes = {}
+    for e in all_entities(bp):
+        if e.layer != layer or e.type in DECORATION_TYPES:
+            continue
+        if kind(e.type) != "belt":
+            nodes[(e.x, e.y)] = Node(e.x, e.y, layer, e.type, kind(e.type), e.rotation)
+
+    # Port edges: a specific output cell -> the input cell it lands on downstream.
+    port_edges = [
+        (out_cell, dst_cell)
+        for anchor in nodes
+        for out_cell in anchor_cells[anchor]
+        for dst_cell in reach_cells(out_cell)
+    ]
+    # Collapse to node-anchor granularity for the kind-level view (back-compat).
+    edges = sorted({(occ[s].anchor, occ[d].anchor) for s, d in port_edges})
+    return Netlist(nodes, edges, port_edges)
 
 
 def edge_kinds(nl: Netlist) -> Counter:
