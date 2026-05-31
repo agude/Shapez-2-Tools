@@ -153,6 +153,131 @@ class TestRouteBasics:
         assert len(nl.edges) == 1
         assert nl.edges[0] == ((0, 0), (3, 0))
 
+    def test_route_avoids_obstacle(self):
+        """A* routing detours around an obstacle."""
+        from shapez2_tools import route
+        from shapez2_tools.generator import Entity
+
+        # Source at (0, 0), sink at (4, 0), obstacle at (2, 0)
+        # Direct path would be (0,0) → (1,0) → (2,0) → (3,0) → (4,0)
+        # With obstacle at (2, 0), must detour via (2, 1) or (2, -1)
+        src = Entity(type="BeltPortReceiverInternalVariant", x=0, y=0, rotation=0, layer=0)
+        sink = Entity(type="BeltPortSenderInternalVariant", x=4, y=0, rotation=0, layer=0)
+
+        obstacles = {(2, 0)}
+        entities = route.route_astar(
+            src_pos=(0, 0),
+            dst_pos=(4, 0),
+            src_out_dir=(1, 0),  # E
+            dst_in_dir=(-1, 0),  # W
+            obstacles=obstacles,
+            layer=0,
+        )
+
+        # Path should not include the obstacle
+        routed_cells = {(e.x, e.y) for e in entities}
+        assert (2, 0) not in routed_cells
+
+        # Build blueprint and verify connectivity
+        all_ents = [src, sink] + entities
+        bp = route.entities_to_blueprint(all_ents, platform="Foundation_1x1")
+        nl = lift.trace_layer(bp, 0)
+
+        assert len(nl.edges) == 1
+        assert nl.edges[0] == ((0, 0), (4, 0))
+
+
+class TestAStarReroute:
+    """A*-based sequential routing tests."""
+
+    def test_reroute_simple_two_edges(self):
+        """Route two non-crossing edges sequentially."""
+        from shapez2_tools import route
+        from shapez2_tools.generator import Entity
+
+        # Two parallel edges that shouldn't cross:
+        # src1 at (0, 1) → sink1 at (4, 1)
+        # src2 at (0, 0) → sink2 at (4, 0)
+        src1 = Entity(type="BeltPortReceiverInternalVariant", x=0, y=1, rotation=0, layer=0)
+        sink1 = Entity(type="BeltPortSenderInternalVariant", x=4, y=1, rotation=0, layer=0)
+        src2 = Entity(type="BeltPortReceiverInternalVariant", x=0, y=0, rotation=0, layer=0)
+        sink2 = Entity(type="BeltPortSenderInternalVariant", x=4, y=0, rotation=0, layer=0)
+
+        # Route both edges using sequential A*
+        edges = [
+            ((0, 1), (4, 1), (1, 0), (-1, 0)),  # src1 → sink1
+            ((0, 0), (4, 0), (1, 0), (-1, 0)),  # src2 → sink2
+        ]
+        entities = route.route_edges_sequential(edges, layer=0)
+
+        # Build blueprint and verify both edges exist
+        all_ents = [src1, sink1, src2, sink2] + entities
+        bp = route.entities_to_blueprint(all_ents, platform="Foundation_1x1")
+        nl = lift.trace_layer(bp, 0)
+
+        assert len(nl.edges) == 2
+        edge_set = {tuple(e) for e in nl.edges}
+        assert ((0, 1), (4, 1)) in edge_set
+        assert ((0, 0), (4, 0)) in edge_set
+
+    def test_reroute_crossing_edges(self):
+        """Route two crossing edges — second must detour around first."""
+        from shapez2_tools import route
+        from shapez2_tools.generator import Entity
+
+        # Two edges that would cross if routed naively:
+        # src1 at (0, 0) → sink1 at (4, 0) (horizontal)
+        # src2 at (2, -2) → sink2 at (2, 2) (vertical, crosses at (2, 0))
+        # R=0: source outputs E(1,0), sink accepts from W(-1,0)
+        # R=1: source outputs N(0,1), sink accepts from S(0,-1)
+        src1 = Entity(type="BeltPortReceiverInternalVariant", x=0, y=0, rotation=0, layer=0)
+        sink1 = Entity(type="BeltPortSenderInternalVariant", x=4, y=0, rotation=0, layer=0)
+        src2 = Entity(type="BeltPortReceiverInternalVariant", x=2, y=-2, rotation=1, layer=0)  # R=1: outputs N
+        sink2 = Entity(type="BeltPortSenderInternalVariant", x=2, y=2, rotation=1, layer=0)  # R=1: accepts from S
+
+        # Route horizontal first, then vertical must detour
+        # src_out_dir=N(0,1), dst_in_dir=S(0,-1) means belt approaches sink from below (y=1)
+        edges = [
+            ((0, 0), (4, 0), (1, 0), (-1, 0)),  # horizontal
+            ((2, -2), (2, 2), (0, 1), (0, -1)),  # vertical (out=N, in=S: approach from south)
+        ]
+        entities = route.route_edges_sequential(edges, layer=0)
+
+        # Build blueprint and verify both edges exist
+        all_ents = [src1, sink1, src2, sink2] + entities
+        bp = route.entities_to_blueprint(all_ents, platform="Foundation_1x1")
+        nl = lift.trace_layer(bp, 0)
+
+        assert len(nl.edges) == 2
+        edge_set = {tuple(e) for e in nl.edges}
+        assert ((0, 0), (4, 0)) in edge_set
+        assert ((2, -2), (2, 2)) in edge_set
+
+    @pytest.mark.xfail(strict=True, reason="WP-C: fan-in/fan-out routing not implemented yet")
+    def test_reroute_astar_rotator_quarter(self):
+        """Use A*-based reroute on the rotator quarter.
+
+        Requires fan-in (2→1 merger) and fan-out (1→2 splitter) handling.
+        The rotator quarter has 4 sources each fanning out to 2 machines,
+        and 4 sinks each receiving from 2 machines.
+        """
+        from shapez2_tools import route
+
+        bp = Blueprint.from_file(REF / "quarter_rotate_180.spz2bp")
+        original = lift.trace_layer(bp, 0)
+
+        # Strip belts, keep machines and ports
+        stripped = route.strip_belts(bp, layer=0)
+
+        # Re-route using A* sequential routing
+        rerouted_bp = route.reroute_astar(stripped, original, layer=0)
+
+        # Lift the result and compare
+        rerouted = lift.trace_layer(rerouted_bp, 0)
+
+        # Check structural equivalence
+        assert lift.isomorphic(original, rerouted)
+
 
 @pytest.mark.xfail(strict=True, reason="WP-C: machine-aware routing not implemented yet")
 class TestReroute:

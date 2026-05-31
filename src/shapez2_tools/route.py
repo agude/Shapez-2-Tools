@@ -3,9 +3,17 @@
 Routes edges between machine/port positions, emitting belt entities that
 round-trip through lift. The belt type+rotation table is inverted from
 lift.routing_inout, so both directions share the same calibration.
+
+The main routing approach is sequential A* with obstacle marking:
+1. Build a grid graph for the routing area
+2. Route each edge using networkx.astar_path()
+3. After routing, mark those cells as obstacles for subsequent edges
+4. Convert path cells to belt entities with correct type/rotation
 """
 
 from __future__ import annotations
+
+import networkx as nx
 
 from shapez2_tools import lift
 from shapez2_tools.blueprint import Blueprint
@@ -29,8 +37,8 @@ def _belt_for_inout(in_dir: tuple[int, int], out_dir: tuple[int, int]) -> tuple[
     # So if in and out are opposite, we need a Forward belt rotated so that
     # the output direction matches.
     if in_dir == _neg(out_dir):
-        # Straight belt. Rotation maps E→S→W→N for out_dir.
-        r = {E: 0, S: 1, W: 2, N: 3}[out_dir]
+        # Straight belt. Rotation maps out_dir: E→R0, N→R1, W→R2, S→R3.
+        r = {E: 0, N: 1, W: 2, S: 3}[out_dir]
         return "BeltDefaultForwardInternalVariant", r
 
     # Turn: in from back (W at R=0), out to side (S for Left, N for LeftMirrored).
@@ -338,6 +346,191 @@ def route_fanin(
     return entities
 
 
+# =============================================================================
+# A* routing with obstacle avoidance
+# =============================================================================
+
+
+def _build_grid_graph(
+    bounds: tuple[int, int, int, int],
+    obstacles: set[tuple[int, int]] | None = None,
+) -> nx.Graph:
+    """Build a 2D grid graph for A* routing.
+
+    Args:
+        bounds: (min_x, min_y, max_x, max_y) inclusive
+        obstacles: set of (x, y) cells to exclude from the graph
+
+    Returns:
+        An undirected grid graph with nodes at each non-obstacle cell.
+    """
+    min_x, min_y, max_x, max_y = bounds
+    width = max_x - min_x + 1
+    height = max_y - min_y + 1
+
+    # Create grid graph with offset coordinates
+    G = nx.grid_2d_graph(width, height)
+
+    # Relabel nodes to actual coordinates
+    mapping = {(i, j): (min_x + i, min_y + j) for i in range(width) for j in range(height)}
+    G = nx.relabel_nodes(G, mapping)
+
+    # Remove obstacle nodes
+    if obstacles:
+        for obs in obstacles:
+            if obs in G:
+                G.remove_node(obs)
+
+    return G
+
+
+def _manhattan_distance(a: tuple[int, int], b: tuple[int, int]) -> int:
+    """Manhattan distance heuristic for A*."""
+    return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+
+def route_astar(
+    src_pos: tuple[int, int],
+    dst_pos: tuple[int, int],
+    src_out_dir: tuple[int, int],
+    dst_in_dir: tuple[int, int],
+    obstacles: set[tuple[int, int]] | None = None,
+    layer: int = 0,
+    bounds: tuple[int, int, int, int] | None = None,
+) -> list[Entity]:
+    """Route a single edge using A* pathfinding with obstacle avoidance.
+
+    Args:
+        src_pos: Source position (machine/port cell)
+        dst_pos: Destination position (machine/port cell)
+        src_out_dir: Direction source outputs to
+        dst_in_dir: Direction destination accepts from
+        obstacles: Cells that cannot be routed through
+        layer: Layer for generated entities
+        bounds: (min_x, min_y, max_x, max_y) for the routing area.
+                If None, computed from src/dst with margin.
+
+    Returns:
+        List of belt entities connecting src to dst.
+    """
+    obstacles = obstacles or set()
+
+    # Start cell is one step from src in output direction
+    start = (src_pos[0] + src_out_dir[0], src_pos[1] + src_out_dir[1])
+    # End cell is one step from dst in input direction (belt approaches from there)
+    end = (dst_pos[0] + dst_in_dir[0], dst_pos[1] + dst_in_dir[1])
+
+    if start == end:
+        # Adjacent: just one belt
+        in_d = _neg(src_out_dir)
+        out_d = _neg(dst_in_dir)
+        belt_type, r = _belt_for_inout(in_d, out_d)
+        return [Entity(x=start[0], y=start[1], type=belt_type, rotation=r, layer=layer)]
+
+    # Compute bounds if not provided
+    if bounds is None:
+        all_x = [src_pos[0], dst_pos[0], start[0], end[0]]
+        all_y = [src_pos[1], dst_pos[1], start[1], end[1]]
+        margin = max(abs(dst_pos[0] - src_pos[0]), abs(dst_pos[1] - src_pos[1])) + 2
+        bounds = (
+            min(all_x) - margin,
+            min(all_y) - margin,
+            max(all_x) + margin,
+            max(all_y) + margin,
+        )
+
+    # Build grid graph excluding obstacles and src/dst positions
+    full_obstacles = obstacles | {src_pos, dst_pos}
+    G = _build_grid_graph(bounds, full_obstacles)
+
+    # Ensure start and end are in the graph
+    if start not in G:
+        return []  # Can't route
+    if end not in G:
+        return []  # Can't route
+
+    # Find path using A*
+    try:
+        path = nx.astar_path(G, start, end, heuristic=_manhattan_distance)
+    except nx.NetworkXNoPath:
+        return []  # No path exists
+
+    # Convert path to belt entities
+    entities: list[Entity] = []
+    for i, (x, y) in enumerate(path):
+        # Determine input direction
+        if i == 0:
+            in_d = _neg(src_out_dir)  # First cell receives from source
+        else:
+            px, py = path[i - 1]
+            in_d = (px - x, py - y)  # Receives from previous cell
+
+        # Determine output direction
+        if i == len(path) - 1:
+            out_d = _neg(dst_in_dir)  # Last cell outputs to destination
+        else:
+            nx_, ny = path[i + 1]
+            out_d = (nx_ - x, ny - y)  # Outputs to next cell
+
+        belt_type, r = _belt_for_inout(in_d, out_d)
+        entities.append(Entity(x=x, y=y, type=belt_type, rotation=r, layer=layer))
+
+    return entities
+
+
+def route_edges_sequential(
+    edges: list[tuple[tuple[int, int], tuple[int, int], tuple[int, int], tuple[int, int]]],
+    layer: int = 0,
+    initial_obstacles: set[tuple[int, int]] | None = None,
+) -> list[Entity]:
+    """Route multiple edges sequentially, each becoming an obstacle for the next.
+
+    Args:
+        edges: List of (src_pos, dst_pos, src_out_dir, dst_in_dir) tuples
+        layer: Layer for generated entities
+        initial_obstacles: Pre-existing obstacles (e.g., machine positions)
+
+    Returns:
+        List of all belt entities for all edges.
+    """
+    obstacles = set(initial_obstacles) if initial_obstacles else set()
+    all_entities: list[Entity] = []
+
+    # Compute bounds from all edges
+    all_x = []
+    all_y = []
+    for src_pos, dst_pos, _, _ in edges:
+        all_x.extend([src_pos[0], dst_pos[0]])
+        all_y.extend([src_pos[1], dst_pos[1]])
+
+    margin = 5
+    bounds = (
+        min(all_x) - margin,
+        min(all_y) - margin,
+        max(all_x) + margin,
+        max(all_y) + margin,
+    )
+
+    # Add ALL src/dst positions to obstacles upfront (machines can't be routed through)
+    for src_pos, dst_pos, _, _ in edges:
+        obstacles.add(src_pos)
+        obstacles.add(dst_pos)
+
+    for src_pos, dst_pos, src_out_dir, dst_in_dir in edges:
+        entities = route_astar(
+            src_pos, dst_pos, src_out_dir, dst_in_dir,
+            obstacles=obstacles, layer=layer, bounds=bounds
+        )
+
+        # Add routed cells to obstacles for next edge
+        for e in entities:
+            obstacles.add((e.x, e.y))
+
+        all_entities.extend(entities)
+
+    return all_entities
+
+
 def route_edge(
     src: tuple[int, int],
     dst: tuple[int, int],
@@ -494,6 +687,62 @@ def strip_belts(bp: Blueprint, layer: int) -> Blueprint:
             continue  # skip belt
         kept.append(e)
     return _rebuild_blueprint(bp, kept)
+
+
+def reroute_astar(stripped: Blueprint, netlist: lift.Netlist, layer: int = 0) -> Blueprint:
+    """Re-route a netlist using A*-based sequential routing.
+
+    Routes each edge one at a time using A* pathfinding. After routing each edge,
+    the routed cells become obstacles for subsequent edges, preventing crossings.
+
+    Args:
+        stripped: Blueprint with belts removed (machines and ports only)
+        netlist: The netlist to realize
+        layer: Layer to route on
+
+    Returns:
+        Blueprint with new belt routing.
+    """
+    # Get kept entities (machines + ports)
+    kept = [e for e in _all_entities(stripped) if e.layer == layer]
+
+    # Collect machine/port positions as initial obstacles
+    initial_obstacles: set[tuple[int, int]] = set()
+    for e in kept:
+        initial_obstacles.add((e.x, e.y))
+        # Add footprint cells for multi-cell machines
+        footprint = lift._machine_footprint(e.type, e.rotation)
+        for dx, dy in footprint:
+            initial_obstacles.add((e.x + dx, e.y + dy))
+
+    # Build edge list with port directions
+    edges: list[tuple[tuple[int, int], tuple[int, int], tuple[int, int], tuple[int, int]]] = []
+    for src_anchor, dst_anchor in netlist.edges:
+        src_node = netlist.nodes[src_anchor]
+        dst_node = netlist.nodes[dst_anchor]
+
+        _, src_outs = lift._inout(src_node.type, src_node.rotation)
+        dst_ins, _ = lift._inout(dst_node.type, dst_node.rotation)
+
+        # Use first output/input direction (single-port assumption for now)
+        src_out_dir = next(iter(src_outs)) if src_outs else E
+        dst_in_dir = next(iter(dst_ins)) if dst_ins else W
+
+        edges.append((src_anchor, dst_anchor, src_out_dir, dst_in_dir))
+
+    # Sort edges: longer edges first (more routing freedom)
+    def edge_length(e):
+        src, dst, _, _ = e
+        return abs(dst[0] - src[0]) + abs(dst[1] - src[1])
+
+    edges.sort(key=edge_length, reverse=True)
+
+    # Route all edges sequentially
+    routed_belts = route_edges_sequential(edges, layer=layer, initial_obstacles=initial_obstacles)
+
+    # Combine kept + routed
+    all_entities = kept + routed_belts
+    return _rebuild_blueprint(stripped, all_entities)
 
 
 def _all_entities(bp: Blueprint) -> list[Entity]:
