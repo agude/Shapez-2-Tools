@@ -232,8 +232,12 @@ class TestAStarReroute:
         # R=1: source outputs N(0,1), sink accepts from S(0,-1)
         src1 = Entity(type="BeltPortReceiverInternalVariant", x=0, y=0, rotation=0, layer=0)
         sink1 = Entity(type="BeltPortSenderInternalVariant", x=4, y=0, rotation=0, layer=0)
-        src2 = Entity(type="BeltPortReceiverInternalVariant", x=2, y=-2, rotation=1, layer=0)  # R=1: outputs N
-        sink2 = Entity(type="BeltPortSenderInternalVariant", x=2, y=2, rotation=1, layer=0)  # R=1: accepts from S
+        src2 = Entity(
+            type="BeltPortReceiverInternalVariant", x=2, y=-2, rotation=1, layer=0
+        )  # R=1: outputs N
+        sink2 = Entity(
+            type="BeltPortSenderInternalVariant", x=2, y=2, rotation=1, layer=0
+        )  # R=1: accepts from S
 
         # Route horizontal first, then vertical must detour
         # src_out_dir=N(0,1), dst_in_dir=S(0,-1) means belt approaches sink from below (y=1)
@@ -253,13 +257,20 @@ class TestAStarReroute:
         assert ((0, 0), (4, 0)) in edge_set
         assert ((2, -2), (2, 2)) in edge_set
 
-    @pytest.mark.xfail(strict=True, reason="WP-C: fan-in/fan-out routing not implemented yet")
-    def test_reroute_astar_rotator_quarter(self):
-        """Use A*-based reroute on the rotator quarter.
+    @pytest.mark.xfail(
+        strict=True, reason="WP-C: junction routing needs geometric constraint handling"
+    )
+    def test_reroute_with_junctions_rotator_quarter(self):
+        """Use junction-aware reroute on the rotator quarter.
 
-        Requires fan-in (2→1 merger) and fan-out (1→2 splitter) handling.
         The rotator quarter has 4 sources each fanning out to 2 machines,
-        and 4 sinks each receiving from 2 machines.
+        and 4 sinks each receiving from 2 machines. This tests the full
+        fan-in/fan-out handling.
+
+        Currently fails because the simplistic "place merger adjacent to sink"
+        approach doesn't account for geometric constraints. The sources may not
+        be aligned to approach the merger from different directions, requiring
+        a more sophisticated placement strategy.
         """
         from shapez2_tools import route
 
@@ -269,8 +280,8 @@ class TestAStarReroute:
         # Strip belts, keep machines and ports
         stripped = route.strip_belts(bp, layer=0)
 
-        # Re-route using A* sequential routing
-        rerouted_bp = route.reroute_astar(stripped, original, layer=0)
+        # Re-route using junction-aware routing
+        rerouted_bp = route.reroute_with_junctions(stripped, original, layer=0)
 
         # Lift the result and compare
         rerouted = lift.trace_layer(rerouted_bp, 0)

@@ -154,7 +154,9 @@ def route_fanout(
     # Place the splitter at split point
     split_in = _neg(src_out_dir)
     splitter_type, splitter_r = _belt_for_cell(frozenset({split_in}), frozenset(split_outs))
-    entities.append(Entity(x=split_x, y=split_y, type=splitter_type, rotation=splitter_r, layer=layer))
+    entities.append(
+        Entity(x=split_x, y=split_y, type=splitter_type, rotation=splitter_r, layer=layer)
+    )
 
     # Route from splitter to each destination via its approach cell
     for approach, dst_pos, dst_in_dir, out_dir in branch_info:
@@ -167,7 +169,9 @@ def route_fanout(
             in_d = _neg(out_dir)
             out_d = _neg(dst_in_dir)
             belt_type, r = _belt_for_inout(in_d, out_d)
-            entities.append(Entity(x=approach[0], y=approach[1], type=belt_type, rotation=r, layer=layer))
+            entities.append(
+                Entity(x=approach[0], y=approach[1], type=belt_type, rotation=r, layer=layer)
+            )
         else:
             # Multiple cells: straight belts + final turn
             # Go perpendicular from split until we reach approach's perpendicular coord
@@ -176,7 +180,11 @@ def route_fanout(
                 step = 1 if out_dir == N else -1
                 y = branch_start[1]
                 # Use range to avoid infinite loop
-                y_range = range(branch_start[1], approach[1], step) if step > 0 else range(branch_start[1], approach[1], step)
+                y_range = (
+                    range(branch_start[1], approach[1], step)
+                    if step > 0
+                    else range(branch_start[1], approach[1], step)
+                )
                 for y in y_range:
                     belt_type, r = _belt_for_inout(_neg(out_dir), out_dir)
                     entities.append(Entity(x=split_x, y=y, type=belt_type, rotation=r, layer=layer))
@@ -184,11 +192,17 @@ def route_fanout(
                 in_d = _neg(out_dir)
                 out_d = _neg(dst_in_dir)
                 belt_type, r = _belt_for_inout(in_d, out_d)
-                entities.append(Entity(x=approach[0], y=approach[1], type=belt_type, rotation=r, layer=layer))
+                entities.append(
+                    Entity(x=approach[0], y=approach[1], type=belt_type, rotation=r, layer=layer)
+                )
             else:
                 # Going E/W, need to reach approach[0]
                 step = 1 if out_dir == E else -1
-                x_range = range(branch_start[0], approach[0], step) if step > 0 else range(branch_start[0], approach[0], step)
+                x_range = (
+                    range(branch_start[0], approach[0], step)
+                    if step > 0
+                    else range(branch_start[0], approach[0], step)
+                )
                 for x in x_range:
                     belt_type, r = _belt_for_inout(_neg(out_dir), out_dir)
                     entities.append(Entity(x=x, y=split_y, type=belt_type, rotation=r, layer=layer))
@@ -196,7 +210,9 @@ def route_fanout(
                 in_d = _neg(out_dir)
                 out_d = _neg(dst_in_dir)
                 belt_type, r = _belt_for_inout(in_d, out_d)
-                entities.append(Entity(x=approach[0], y=approach[1], type=belt_type, rotation=r, layer=layer))
+                entities.append(
+                    Entity(x=approach[0], y=approach[1], type=belt_type, rotation=r, layer=layer)
+                )
 
     return entities
 
@@ -256,8 +272,6 @@ def route_fanin(
             merge_y = max(merge_y, approach_y + 1) if approach_y < merge_y else merge_y
         merge_x = dst_pos[0]  # Same x as dst for vertical trunk
 
-    merge_pos = (merge_x, merge_y)
-
     # Determine input directions to merge from each branch
     merge_ins: set[tuple[int, int]] = set()
     branch_info: list[tuple[tuple[int, int], tuple[int, int], tuple[int, int]]] = []
@@ -308,7 +322,9 @@ def route_fanin(
             in_d = _neg(src_out_dir)
             out_d = in_dir  # Output in the direction merge accepts from (toward merge)
             belt_type, r = _belt_for_inout(in_d, out_d)
-            entities.append(Entity(x=departure[0], y=departure[1], type=belt_type, rotation=r, layer=layer))
+            entities.append(
+                Entity(x=departure[0], y=departure[1], type=belt_type, rotation=r, layer=layer)
+            )
         else:
             # Multiple cells: initial turn + straight belts to merge
             # First belt turns from src direction to branch direction
@@ -318,13 +334,19 @@ def route_fanin(
                 in_d = _neg(src_out_dir)
                 out_d = in_dir  # Output in the direction merge accepts from
                 belt_type, r = _belt_for_inout(in_d, out_d)
-                entities.append(Entity(x=departure[0], y=departure[1], type=belt_type, rotation=r, layer=layer))
+                entities.append(
+                    Entity(x=departure[0], y=departure[1], type=belt_type, rotation=r, layer=layer)
+                )
 
                 # Straight belts from departure toward branch_end
                 step = -1 if in_dir == S else 1  # S means we go south (y decreases)
                 start_y = departure[1] + step
                 end_y = branch_end[1] + step
-                y_range = range(start_y, end_y, step) if (step > 0 and start_y < end_y) or (step < 0 and start_y > end_y) else []
+                y_range = (
+                    range(start_y, end_y, step)
+                    if (step > 0 and start_y < end_y) or (step < 0 and start_y > end_y)
+                    else []
+                )
                 for y in y_range:
                     belt_type, r = _belt_for_inout(_neg(in_dir), in_dir)
                     entities.append(Entity(x=merge_x, y=y, type=belt_type, rotation=r, layer=layer))
@@ -333,12 +355,18 @@ def route_fanin(
                 in_d = _neg(src_out_dir)
                 out_d = in_dir  # Output in the direction merge accepts from
                 belt_type, r = _belt_for_inout(in_d, out_d)
-                entities.append(Entity(x=departure[0], y=departure[1], type=belt_type, rotation=r, layer=layer))
+                entities.append(
+                    Entity(x=departure[0], y=departure[1], type=belt_type, rotation=r, layer=layer)
+                )
 
                 step = 1 if in_dir == W else -1
                 start_x = departure[0] + step
                 end_x = branch_end[0] + step
-                x_range = range(start_x, end_x, step) if (step > 0 and start_x < end_x) or (step < 0 and start_x > end_x) else []
+                x_range = (
+                    range(start_x, end_x, step)
+                    if (step > 0 and start_x < end_x) or (step < 0 and start_x > end_x)
+                    else []
+                )
                 for x in x_range:
                     belt_type, r = _belt_for_inout(_neg(in_dir), in_dir)
                     entities.append(Entity(x=x, y=merge_y, type=belt_type, rotation=r, layer=layer))
@@ -518,8 +546,13 @@ def route_edges_sequential(
 
     for src_pos, dst_pos, src_out_dir, dst_in_dir in edges:
         entities = route_astar(
-            src_pos, dst_pos, src_out_dir, dst_in_dir,
-            obstacles=obstacles, layer=layer, bounds=bounds
+            src_pos,
+            dst_pos,
+            src_out_dir,
+            dst_in_dir,
+            obstacles=obstacles,
+            layer=layer,
+            bounds=bounds,
         )
 
         # Add routed cells to obstacles for next edge
@@ -695,6 +728,10 @@ def reroute_astar(stripped: Blueprint, netlist: lift.Netlist, layer: int = 0) ->
     Routes each edge one at a time using A* pathfinding. After routing each edge,
     the routed cells become obstacles for subsequent edges, preventing crossings.
 
+    Note: This basic version routes edges independently and doesn't handle
+    fan-in (N→1) or fan-out (1→N) patterns that require merger/splitter junctions.
+    Use reroute_with_junctions() for netlists with fan patterns.
+
     Args:
         stripped: Blueprint with belts removed (machines and ports only)
         netlist: The netlist to realize
@@ -742,6 +779,221 @@ def reroute_astar(stripped: Blueprint, netlist: lift.Netlist, layer: int = 0) ->
 
     # Combine kept + routed
     all_entities = kept + routed_belts
+    return _rebuild_blueprint(stripped, all_entities)
+
+
+def reroute_with_junctions(stripped: Blueprint, netlist: lift.Netlist, layer: int = 0) -> Blueprint:
+    """Re-route a netlist handling fan-in and fan-out with junctions.
+
+    Analyzes the netlist for fan patterns:
+    - Fan-out (1→N): source with multiple outgoing edges → splitter junction
+    - Fan-in (N→1): destination with multiple incoming edges → merger junction
+
+    Routes using A* with obstacle avoidance, placing appropriate junction belts
+    where flows split or merge.
+
+    Args:
+        stripped: Blueprint with belts removed (machines and ports only)
+        netlist: The netlist to realize
+        layer: Layer to route on
+
+    Returns:
+        Blueprint with new belt routing including junctions.
+    """
+    from collections import defaultdict
+
+    # Get kept entities (machines + ports)
+    kept = [e for e in _all_entities(stripped) if e.layer == layer]
+
+    # Collect machine/port positions as initial obstacles
+    obstacles: set[tuple[int, int]] = set()
+    for e in kept:
+        obstacles.add((e.x, e.y))
+        footprint = lift._machine_footprint(e.type, e.rotation)
+        for dx, dy in footprint:
+            obstacles.add((e.x + dx, e.y + dy))
+
+    # Analyze netlist for fan patterns
+    outgoing: dict[tuple[int, int], list[tuple[int, int]]] = defaultdict(list)
+    incoming: dict[tuple[int, int], list[tuple[int, int]]] = defaultdict(list)
+    for src, dst in netlist.edges:
+        outgoing[src].append(dst)
+        incoming[dst].append(src)
+
+    # Build node info (position -> (type, rotation, in_dir, out_dir))
+    node_info: dict[tuple[int, int], tuple[str, int, tuple[int, int], tuple[int, int]]] = {}
+    for anchor, node in netlist.nodes.items():
+        ins, outs = lift._inout(node.type, node.rotation)
+        in_dir = next(iter(ins)) if ins else W
+        out_dir = next(iter(outs)) if outs else E
+        node_info[anchor] = (node.type, node.rotation, in_dir, out_dir)
+
+    routed_entities: list[Entity] = []
+
+    # Compute bounds for the routing area
+    all_x = [pos[0] for pos in netlist.nodes]
+    all_y = [pos[1] for pos in netlist.nodes]
+    margin = 5
+    bounds = (min(all_x) - margin, min(all_y) - margin, max(all_x) + margin, max(all_y) + margin)
+
+    # Process fan-out groups (1→N)
+    fanout_processed: set[tuple[int, int]] = set()
+    for src, dsts in outgoing.items():
+        if len(dsts) <= 1:
+            continue
+        fanout_processed.add(src)
+        _, _, _, src_out_dir = node_info[src]
+
+        # Place splitter one cell from source
+        split_pos = (src[0] + src_out_dir[0], src[1] + src_out_dir[1])
+
+        # Determine output directions for the splitter based on destination positions
+        split_outs: set[tuple[int, int]] = set()
+        for dst in dsts:
+            dx = dst[0] - split_pos[0]
+            dy = dst[1] - split_pos[1]
+            # Choose the primary direction toward destination
+            if abs(dx) >= abs(dy):
+                out_d = E if dx > 0 else W
+            else:
+                out_d = N if dy > 0 else S
+            split_outs.add(out_d)
+
+        # The splitter receives from the source direction
+        split_in = _neg(src_out_dir)
+        splitter_type, splitter_r = _belt_for_cell(frozenset({split_in}), frozenset(split_outs))
+        routed_entities.append(
+            Entity(
+                x=split_pos[0], y=split_pos[1], type=splitter_type, rotation=splitter_r, layer=layer
+            )
+        )
+        obstacles.add(split_pos)
+
+        # Route from splitter to each destination
+        for dst in dsts:
+            _, _, dst_in_dir, _ = node_info[dst]
+            # Choose the output direction that gets us closer to dst
+            dx = dst[0] - split_pos[0]
+            dy = dst[1] - split_pos[1]
+            if abs(dx) >= abs(dy):
+                branch_out_dir = E if dx > 0 else W
+            else:
+                branch_out_dir = N if dy > 0 else S
+
+            # Start routing from cell after splitter in branch direction
+            branch_start = (split_pos[0] + branch_out_dir[0], split_pos[1] + branch_out_dir[1])
+            # End at cell before destination
+            branch_end = (dst[0] + dst_in_dir[0], dst[1] + dst_in_dir[1])
+
+            if branch_start == branch_end:
+                # Just one belt
+                belt_type, r = _belt_for_inout(_neg(branch_out_dir), _neg(dst_in_dir))
+                routed_entities.append(
+                    Entity(
+                        x=branch_start[0],
+                        y=branch_start[1],
+                        type=belt_type,
+                        rotation=r,
+                        layer=layer,
+                    )
+                )
+                obstacles.add(branch_start)
+            else:
+                # Route with A*
+                path_entities = route_astar(
+                    split_pos,
+                    dst,
+                    branch_out_dir,
+                    dst_in_dir,
+                    obstacles=obstacles,
+                    layer=layer,
+                    bounds=bounds,
+                )
+                for e in path_entities:
+                    obstacles.add((e.x, e.y))
+                routed_entities.extend(path_entities)
+
+    # Process fan-in groups (N→1)
+    fanin_processed: set[tuple[int, int]] = set()
+    for dst, srcs in incoming.items():
+        if len(srcs) <= 1:
+            continue
+        fanin_processed.add(dst)
+        _, _, dst_in_dir, _ = node_info[dst]
+
+        # Place merger one cell before destination
+        merge_pos = (dst[0] + dst_in_dir[0], dst[1] + dst_in_dir[1])
+
+        # Determine input directions for the merger based on source positions
+        merge_ins: set[tuple[int, int]] = set()
+        for src in srcs:
+            # Skip sources already processed via fanout
+            if src in fanout_processed:
+                # For fanout sources, the path already ends at the splitter branch
+                # We need to account for paths coming from the splitter
+                pass
+            dx = src[0] - merge_pos[0]
+            dy = src[1] - merge_pos[1]
+            if abs(dx) >= abs(dy):
+                in_d = E if dx > 0 else W
+            else:
+                in_d = N if dy > 0 else S
+            merge_ins.add(in_d)
+
+        # The merger outputs toward destination
+        merge_out = _neg(dst_in_dir)
+        merger_type, merger_r = _belt_for_cell(frozenset(merge_ins), frozenset({merge_out}))
+        routed_entities.append(
+            Entity(x=merge_pos[0], y=merge_pos[1], type=merger_type, rotation=merger_r, layer=layer)
+        )
+        obstacles.add(merge_pos)
+
+        # Route from each source to the merger
+        for src in srcs:
+            # Skip if this source was part of a fanout group (already routed)
+            if src in fanout_processed:
+                continue
+
+            _, _, _, src_out_dir = node_info[src]
+            dx = merge_pos[0] - src[0]
+            dy = merge_pos[1] - src[1]
+
+            # Determine direction toward merger
+            if abs(dx) >= abs(dy):
+                approach_dir = W if dx < 0 else E
+            else:
+                approach_dir = S if dy < 0 else N
+
+            # Route from source to merger
+            path_entities = route_astar(
+                src,
+                merge_pos,
+                src_out_dir,
+                approach_dir,
+                obstacles=obstacles,
+                layer=layer,
+                bounds=bounds,
+            )
+            for e in path_entities:
+                obstacles.add((e.x, e.y))
+            routed_entities.extend(path_entities)
+
+    # Route simple 1→1 edges (not part of fanout/fanin groups)
+    for src, dst in netlist.edges:
+        if src in fanout_processed or dst in fanin_processed:
+            continue
+        _, _, _, src_out_dir = node_info[src]
+        _, _, dst_in_dir, _ = node_info[dst]
+
+        path_entities = route_astar(
+            src, dst, src_out_dir, dst_in_dir, obstacles=obstacles, layer=layer, bounds=bounds
+        )
+        for e in path_entities:
+            obstacles.add((e.x, e.y))
+        routed_entities.extend(path_entities)
+
+    # Combine kept + routed
+    all_entities = kept + routed_entities
     return _rebuild_blueprint(stripped, all_entities)
 
 
