@@ -16,7 +16,7 @@ regression floor. The hard target is intra-platform **place-and-route**.
 
 ## 0. Status & handoff (2026-05-30)
 
-**Built and green** (100 tests, `just test`, ruff clean):
+**Built and green** (92 tests pass, 10 xfail, `just test`, ruff clean):
 - `blueprint.py` — faithful `.spz2bp` codec.
 - `generator.py` — tile-replication generator: builds the rotator family
   (180/cw/ccw × 1×1/1×4) from one lifted tile. `Entity`, lift/stamp/build,
@@ -27,6 +27,7 @@ regression floor. The hard target is intra-platform **place-and-route**.
   splitter/merger); **machines expand to multi-cell footprints**
   (`_machine_footprint`). `trace_layer`, `unmatched_legs`, `edge_kinds`. **Lifts
   the rotator family + half-destroyer + the cutter at 0 unmatched legs.**
+  Includes `isomorphic(a, b)` for structural netlist comparison (WP-A done).
 - `shapes.py` — shape model + absolute ops (rotate / cut / half-destroy /
   swap-west). Convention: quadrants `(NE, SE, SW, NW)`, west = `SW+NW`.
 - `interpret.py` — pushes shapes through a lifted netlist, **per cell** via the
@@ -34,7 +35,25 @@ regression floor. The hard target is intra-platform **place-and-route**.
   half-destroyer on every lane (quarter + full belt's 48), the **cutter** (1→2,
   east/west), and the **swapper** (2→2) including the **diagonal trick**
   (north-only + south-only in → the two diagonals out).
+- `validate.py` — physical validator (WP-B done). Checks overlap, dangling legs,
+  off-grid placement. Corpus sweep passes on all closed fixtures.
+- `route.py` — routing primitives (WP-C partial). `route_edge`, `route_fanout`,
+  `route_fanin` work for isolated cases. Full `reroute` still produces crossing
+  conflicts (10 xfail tests).
 - CLI: `gen`, `diff`, `show`, `lift`. `data/reference/` holds oracle fixtures.
+
+**WP-A and WP-B: DONE.** Netlist isomorphism via networkx graph comparison; physical
+validator with corpus sweep. Both green.
+
+**WP-C (routing): PARTIAL.** Primitives work:
+- `route_edge(src, dst, ...)` — single edge with L-shaped path
+- `route_fanout(src, dsts, ...)` — 1→N with T-splitter junction
+- `route_fanin(srcs, dst, ...)` — N→1 with T-merger junction
+
+The full `reroute(stripped_bp, netlist)` fails because independent L-shaped paths
+cross each other, creating impossible 2-in/2-out cells. **Next: sequential A\* with
+obstacle marking** — route nets one at a time, marking routed cells as obstacles.
+See §7.2 WP-C for the revised approach based on VLSI/PCB routing research.
 
 **Cutter + swapper: SOLVED (the cutter was the blocker).** Machines now expand to
 footprints (`_machine_footprint`); each is one entity + a second cell to the
@@ -62,12 +81,11 @@ interpreter correctly refuses). Next: identify which source ports are which feed
 real blueprint.
 
 **Next steps — see §7 for the full test-first work plan.** Critical path to the
-north star (synthesis): **WP-A** netlist isomorphism → **WP-B** validator + corpus
-sweep → **WP-C** Rung 3 re-route (the router, validated by `lift∘route ≅ netlist`)
-→ **WP-D** placement (CP-SAT) → **WP-E** synthesize. The diagonal extractor needs
-**none** of the breadth work (stacker WP-F, painter WP-G, full-blueprint sim
-WP-H) — its machines (rotators, swappers, belts) are already lifted and simulated.
-WP-A is scaffolded as `tests/test_netlist.py` (xfail until implemented).
+north star (synthesis): ~~WP-A~~ ✓ → ~~WP-B~~ ✓ → **WP-C** Rung 3 re-route (the
+router, validated by `lift∘route ≅ netlist`) → **WP-D** placement (CP-SAT) →
+**WP-E** synthesize. The diagonal extractor needs **none** of the breadth work
+(stacker WP-F, painter WP-G, full-blueprint sim WP-H) — its machines (rotators,
+swappers, belts) are already lifted and simulated.
 
 ---
 
@@ -362,36 +380,49 @@ widens the spec space but blocks nothing on the diagonal extractor.
 - **Goal:** I4. Given a netlist + the machines' existing cells, regenerate belts
   realizing every edge; lifting the result reproduces the netlist. The hardest
   near-term WP — TDD it bottom-up, each step a fresh red.
-- **Tests first** (`tests/test_router.py`, rewritten; flavours 4 + 5):
-  1. `test_route_straight` — one src cell → one dst in a line ⇒ Forward belts
+- **Tests** (`tests/test_route.py`; flavours 4 + 5):
+  1. ✓ `test_route_straight` — one src cell → one dst in a line ⇒ Forward belts
      (correct R); `lift` yields the single edge.
-  2. `test_route_one_turn` — offset on both axes ⇒ Forward + `Left`/`…Mirrored`;
+  2. ✓ `test_route_one_turn` — offset on both axes ⇒ Forward + `Left`/`…Mirrored`;
      `lift` ⇒ the edge.
-  3. `test_route_fanout` / `test_route_fanin` — 1→2 emits a `Splitter`; 2→1 emits
-     a `Merger`; `lift` ⇒ all edges.
+  3. ✓ `test_route_fanout` / `test_route_fanin` — 1→2 emits a `Splitter`; 2→1
+     emits a `Merger`; `lift` ⇒ all edges.
   4. `test_route_avoids_obstacle` — a blocked cell forces a detour; still routes.
   5. `test_reroute_rotator_quarter` — strip belts from the lifted quarter (keep
      the 8 rotators + 8 ports at their cells), re-route the 4→8→4 netlist, then
-     `isomorphic(lift(result), original)` **and** `validate(result)`.
+     `isomorphic(lift(result), original)` **and** `validate(result)`. **(xfail)**
   6. `test_reroute_roundtrip` parametrized over closed fixtures (quarter
      cw/ccw/180, half-destroyer, `cutter_12_to_24`, `swap_diagonal`):
-     `isomorphic(lift(route(strip(bp))), lift(bp))`.
-- **Implementation:**
-  - `nets(nl) -> list[Net]` — group `port_edges` into nets (source port → set of
-    sink ports) with throughput.
-  - `router.route(placement, nets, platform) -> list[Entity]` — A* per net on the
-    3-D grid (cells × layers, lifts as vias), emitting turn-typed
-    `Forward`/`Left`(+mir) belts and `Splitter`/`Merger` junctions for fan-out/in;
-    obstacles = occupied cells; lean on `networkx` for the A* graph.
+     `isomorphic(lift(route(strip(bp))), lift(bp))`. **(xfail)**
+- **Current state:** Tests 1–3 pass. Tests 5–6 fail because independent L-shaped
+  paths cross, creating impossible 2-in/2-out cells (no belt type for that I/O).
+- **Implementation approach (revised after VLSI/PCB routing research):**
+  - **Sequential A\* with obstacle marking** — route nets one at a time; after
+    each net, mark its cells as obstacles before routing the next. This prevents
+    crossings by construction. Based on Python-PCB's approach
+    ([vygr/Python-PCB](https://github.com/vygr/Python-PCB)).
+  - **Net ordering** — route longer/larger nets first (more routing options);
+    shorter nets fit around them.
+  - **networkx A\*** — use `networkx.astar_path()` on a grid graph. Heuristic =
+    Manhattan distance. Edge weights can penalize turns to prefer straight runs.
+  - **Grid graph** — build `nx.grid_2d_graph(width, height)`, remove obstacle
+    nodes (machines, already-routed cells). A\* finds path; convert path cells to
+    belt entities with correct type/rotation via `_belt_for_inout`.
+  - **Fan-out/fan-in** — for 1→N nets, A\* to the centroid, then branch; or use
+    Steiner-tree heuristics. Start simple: route to each destination sequentially,
+    letting the first path become an obstacle that forces branches.
   - Emit exactly the types+rotations `lift.routing_inout` decodes — shared table,
     so the round-trip is exact by construction.
 - **Done when:** tests 1–6 green over the listed fixtures.
 - **Defer:** throughput-aware **parallel-lane** routing (a net wider than one
   belt's rate) — start at one belt per edge; add a `test_reroute_full_belt`
   (48 lanes) once the simple round-trip is green.
-- **Note:** WP-C **supersedes the deprecated `router.py` + `tests/test_router.py`**
-  (38 tests for an unused A* prototype, not part of the regression contract);
-  replace them when this lands.
+- **References:**
+  - [NetworkX astar_path](https://networkx.org/documentation/stable/reference/algorithms/generated/networkx.algorithms.shortest_paths.astar.astar_path.html)
+  - [Python-PCB router](https://github.com/vygr/Python-PCB) — sequential routing
+    with collision layers
+  - [VLSI Channel Routing](http://vlsicad.eecs.umich.edu/KLMH/downloads/book/chapter6/chap6-111206.pdf) —
+    constraint graphs, Left Edge Algorithm
 
 #### WP-D — Placement (CP-SAT) *(Rung 3→4; critical path)*
 - **Goal:** choose machine cells + rotations for a netlist on a platform, instead
