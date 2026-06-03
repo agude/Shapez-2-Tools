@@ -857,11 +857,21 @@ def reroute_with_junctions(stripped: Blueprint, netlist: lift.Netlist, layer: in
             # branch from the splitter.
             common_in = next(iter(unique_dst_ins))
 
-            # Pick the destination aligned with source on the perpendicular axis
+            # For 2-way fans: pick destination closest to source on the
+            # perpendicular axis (keeps trunk along the flow axis).
+            # For 3+ fans: pick the median so branches spread to both sides.
             if common_in in (N, S):
-                straight_dst = min(dsts, key=lambda d: abs(d[0] - src[0]))
+                if len(dsts) <= 2:
+                    straight_dst = min(dsts, key=lambda d: abs(d[0] - src[0]))
+                else:
+                    sorted_dsts = sorted(dsts, key=lambda d: d[0])
+                    straight_dst = sorted_dsts[len(sorted_dsts) // 2]
             else:
-                straight_dst = min(dsts, key=lambda d: abs(d[1] - src[1]))
+                if len(dsts) <= 2:
+                    straight_dst = min(dsts, key=lambda d: abs(d[1] - src[1]))
+                else:
+                    sorted_dsts = sorted(dsts, key=lambda d: d[1])
+                    straight_dst = sorted_dsts[len(sorted_dsts) // 2]
 
             # Splitter one cell from straight_dst in its approach direction
             splitter_pos = (
@@ -990,12 +1000,21 @@ def reroute_with_junctions(stripped: Blueprint, netlist: lift.Netlist, layer: in
             # One source feeds straight into the merger; others turn sideways.
             common_out = next(iter(unique_src_outs))
 
-            # Pick source aligned with dst on the perpendicular axis (shortest
-            # trunk to dst after merging)
+            # For 2-way fans: pick source closest to dst on the perpendicular
+            # axis (keeps trunk along the flow axis).
+            # For 3+ fans: pick the median so branches spread to both sides.
             if common_out in (N, S):
-                straight_src = min(active_srcs, key=lambda s: abs(s[0] - dst[0]))
+                if len(active_srcs) <= 2:
+                    straight_src = min(active_srcs, key=lambda s: abs(s[0] - dst[0]))
+                else:
+                    sorted_srcs = sorted(active_srcs, key=lambda s: s[0])
+                    straight_src = sorted_srcs[len(sorted_srcs) // 2]
             else:
-                straight_src = min(active_srcs, key=lambda s: abs(s[1] - dst[1]))
+                if len(active_srcs) <= 2:
+                    straight_src = min(active_srcs, key=lambda s: abs(s[1] - dst[1]))
+                else:
+                    sorted_srcs = sorted(active_srcs, key=lambda s: s[1])
+                    straight_src = sorted_srcs[len(sorted_srcs) // 2]
 
             # Merger one cell from straight source in its output direction
             merger_pos = (

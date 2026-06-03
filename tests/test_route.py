@@ -7,6 +7,8 @@ new router that round-trips through lift.
 
 from pathlib import Path
 
+import pytest
+
 from shapez2_tools import lift
 from shapez2_tools.blueprint import Blueprint
 
@@ -401,4 +403,44 @@ class TestAStarReroute:
         # Check structural equivalence
         assert lift.isomorphic(original, rerouted)
 
+    # Fixtures with only single-cell machines (rotators, cutters-as-half-destroyers)
+    SINGLE_CELL_FIXTURES = [
+        "quarter_rotate_180.spz2bp",
+        "quarter_rotate_cw.spz2bp",
+        "quarter_rotate_ccw.spz2bp",
+        "full_belt_rotate_180.spz2bp",
+        "full_belt_rotate_cw.spz2bp",
+        "full_belt_rotate_ccw.spz2bp",
+        "quarter_destroy_west_half.spz2bp",
+    ]
 
+    # Fixtures with multi-cell machines (cutter 2-cell, swapper 2-cell)
+    MULTI_CELL_FIXTURES = [
+        "cutter_12_to_24.spz2bp",
+        "swap_diagonal.spz2bp",
+    ]
+
+    @pytest.mark.parametrize("name", SINGLE_CELL_FIXTURES)
+    def test_reroute_roundtrip(self, name):
+        """Strip and re-route single-cell fixture → isomorphic lift."""
+        from shapez2_tools import route
+
+        bp = Blueprint.from_file(REF / name)
+        original = lift.trace_layer(bp, 0)
+        stripped = route.strip_belts(bp, layer=0)
+        rerouted_bp = route.reroute_with_junctions(stripped, original, layer=0)
+        rerouted = lift.trace_layer(rerouted_bp, 0)
+        assert lift.isomorphic(original, rerouted)
+
+    @pytest.mark.xfail(strict=True, reason="WP-C: multi-cell machine routing")
+    @pytest.mark.parametrize("name", MULTI_CELL_FIXTURES)
+    def test_reroute_roundtrip_multi_cell(self, name):
+        """Strip and re-route multi-cell fixture → isomorphic lift."""
+        from shapez2_tools import route
+
+        bp = Blueprint.from_file(REF / name)
+        original = lift.trace_layer(bp, 0)
+        stripped = route.strip_belts(bp, layer=0)
+        rerouted_bp = route.reroute_with_junctions(stripped, original, layer=0)
+        rerouted = lift.trace_layer(rerouted_bp, 0)
+        assert lift.isomorphic(original, rerouted)
