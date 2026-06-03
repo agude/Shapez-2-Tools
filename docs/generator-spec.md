@@ -92,11 +92,13 @@ real blueprint.
 
 **Next steps — see §7 for the full test-first work plan.** Critical path to the
 north star (synthesis): ~~WP-A~~ ✓ → ~~WP-B~~ ✓ → ~~WP-C~~ ✓ (single-cell) →
-**WP-D** placement (CP-SAT) → **WP-E** synthesize. Multi-cell machine routing
-(WP-C breadth) can be done in parallel but is not on the critical path for the
-rotator family. The diagonal extractor needs **none** of the breadth work
-(stacker WP-F, painter WP-G, full-blueprint sim WP-H) — its machines (rotators,
-swappers, belts) are already lifted and simulated.
+**WP-C multi-cell** → **WP-D** placement (CP-SAT) → **WP-E** synthesize. WP-D
+can start now using the rotator family (single-cell), but the diagonal extractor
+(the north-star demo) uses **swappers** (2-cell footprint), so it needs the
+multi-cell routing gap closed before end-to-end synthesis works. The diagonal
+extractor needs **none** of the machine-type breadth work (stacker WP-F, painter
+WP-G, full-blueprint sim WP-H) — its machines (rotators, swappers, belts) are
+already lifted and simulated.
 
 ---
 
