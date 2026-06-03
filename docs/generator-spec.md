@@ -1,6 +1,6 @@
 # Blueprint Synthesis — Plan
 
-**Status:** Draft, updated 2026-05-31.
+**Status:** Draft, updated 2026-06-03.
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -14,9 +14,9 @@ regression floor. The hard target is intra-platform **place-and-route**.
 
 ---
 
-## 0. Status & handoff (2026-05-31)
+## 0. Status & handoff (2026-06-03)
 
-**Built and green** (95 tests pass, 11 xfail, `just test`, ruff clean):
+**Built and green** (106 tests pass, 2 xfail, `just test`, ruff clean):
 - `blueprint.py` — faithful `.spz2bp` codec.
 - `generator.py` — tile-replication generator: builds the rotator family
   (180/cw/ccw × 1×1/1×4) from one lifted tile. `Entity`, lift/stamp/build,
@@ -37,28 +37,33 @@ regression floor. The hard target is intra-platform **place-and-route**.
   (north-only + south-only in → the two diagonals out).
 - `validate.py` — physical validator (WP-B done). Checks overlap, dangling legs,
   off-grid placement. Corpus sweep passes on all closed fixtures.
-- `route.py` — routing primitives (WP-C partial). `route_edge`, `route_fanout`,
-  `route_fanin` work for isolated cases. A* routing with obstacle avoidance works
-  for simple netlists (11 xfail tests remain for complex patterns).
+- `route.py` — junction-aware A* router (WP-C done for single-cell machines).
+  `reroute_with_junctions` strips belts from a blueprint and re-routes via
+  sequential A* with obstacle marking. Round-trips through lift for all
+  single-cell fixtures (rotator family × 6, half-destroyer). Handles 1→2, 1→3,
+  2→1, 3→1 fan patterns with correct junction placement near machine clusters.
+  **Multi-cell machine routing (cutter, swapper) is the remaining gap** (2
+  xfail).
 - CLI: `gen`, `diff`, `show`, `lift`. `data/reference/` holds oracle fixtures.
 
 **WP-A and WP-B: DONE.** Netlist isomorphism via networkx graph comparison; physical
 validator with corpus sweep. Both green.
 
-**WP-C (routing): PARTIAL.** Working primitives:
-- `route_edge(src, dst, ...)` — single edge with L-shaped path
-- `route_fanout(src, dsts, ...)` — 1→N with T-splitter junction
-- `route_fanin(srcs, dst, ...)` — N→1 with T-merger junction
-- `route_astar(src, dst, obstacles, ...)` — A* pathfinding with obstacle avoidance
-- `route_edges_sequential(edges, ...)` — routes edges one at a time, marking each
-  as obstacle for subsequent paths (prevents crossings)
-
-A* sequential routing works for simple netlists (test_reroute_crossing_edges passes).
-The full `reroute_with_junctions` fails on complex patterns like the rotator quarter
-because simplistic "place merger adjacent to sink" doesn't account for geometric
-constraints — sources may not align to approach mergers from different directions.
-**Next:** smarter junction placement that considers source geometry, or route
-fan-in edges to a shared merge point before the sink.
+**WP-C (routing): DONE for single-cell machines.** The router places junctions
+near machine clusters (not near the far endpoint), so that adjacent same-direction
+ports can approach a T-merger/splitter from distinct directions. Key design rules:
+- **Fan-in (N→1):** merger one cell from the "straight" source; turned sources
+  approach from perpendicular via A*.
+- **Fan-out (1→N):** splitter one cell from the "straight" destination; trunk
+  routes from source via A*.
+- **2-way fans:** pick the endpoint closest to the far side on the perpendicular
+  axis (keeps trunk along the flow axis, avoids trunk/branch conflicts).
+- **3+ way fans:** pick the median endpoint so branches spread to both sides
+  (needed for `Splitter1To3` / `Merger3To1`).
+- Verified: parametrized round-trip over 7 single-cell fixtures (strip → reroute →
+  lift ≅ original). The 2 multi-cell fixtures (cutter_12_to_24, swap_diagonal)
+  remain xfail — the router doesn't yet account for multi-cell footprints when
+  computing port directions and obstacle regions for 2-cell machines.
 
 **Cutter + swapper: SOLVED (the cutter was the blocker).** Machines now expand to
 footprints (`_machine_footprint`); each is one entity + a second cell to the
@@ -86,9 +91,10 @@ interpreter correctly refuses). Next: identify which source ports are which feed
 real blueprint.
 
 **Next steps — see §7 for the full test-first work plan.** Critical path to the
-north star (synthesis): ~~WP-A~~ ✓ → ~~WP-B~~ ✓ → **WP-C** Rung 3 re-route (the
-router, validated by `lift∘route ≅ netlist`) → **WP-D** placement (CP-SAT) →
-**WP-E** synthesize. The diagonal extractor needs **none** of the breadth work
+north star (synthesis): ~~WP-A~~ ✓ → ~~WP-B~~ ✓ → ~~WP-C~~ ✓ (single-cell) →
+**WP-D** placement (CP-SAT) → **WP-E** synthesize. Multi-cell machine routing
+(WP-C breadth) can be done in parallel but is not on the critical path for the
+rotator family. The diagonal extractor needs **none** of the breadth work
 (stacker WP-F, painter WP-G, full-blueprint sim WP-H) — its machines (rotators,
 swappers, belts) are already lifted and simulated.
 
@@ -383,51 +389,43 @@ widens the spec space but blocks nothing on the diagonal extractor.
 
 #### WP-C — Rung 3: re-route at fixed placement *(the router core; critical path)*
 - **Goal:** I4. Given a netlist + the machines' existing cells, regenerate belts
-  realizing every edge; lifting the result reproduces the netlist. The hardest
-  near-term WP — TDD it bottom-up, each step a fresh red.
+  realizing every edge; lifting the result reproduces the netlist.
+- **Status: DONE for single-cell machines.** Round-trip verified on 7 fixtures
+  (rotator family × 6, half-destroyer). 2 multi-cell fixtures xfail (cutter,
+  swapper).
 - **Tests** (`tests/test_route.py`; flavours 4 + 5):
-  1. ✓ `test_route_straight` — one src cell → one dst in a line ⇒ Forward belts
-     (correct R); `lift` yields the single edge.
-  2. ✓ `test_route_one_turn` — offset on both axes ⇒ Forward + `Left`/`…Mirrored`;
-     `lift` ⇒ the edge.
-  3. ✓ `test_route_fanout` / `test_route_fanin` — 1→2 emits a `Splitter`; 2→1
-     emits a `Merger`; `lift` ⇒ all edges.
-  4. `test_route_avoids_obstacle` — a blocked cell forces a detour; still routes.
-  5. `test_reroute_rotator_quarter` — strip belts from the lifted quarter (keep
-     the 8 rotators + 8 ports at their cells), re-route the 4→8→4 netlist, then
-     `isomorphic(lift(result), original)` **and** `validate(result)`. **(xfail)**
-  6. `test_reroute_roundtrip` parametrized over closed fixtures (quarter
-     cw/ccw/180, half-destroyer, `cutter_12_to_24`, `swap_diagonal`):
-     `isomorphic(lift(route(strip(bp))), lift(bp))`. **(xfail)**
-- **Current state:** Tests 1–3 pass. Tests 5–6 fail because independent L-shaped
-  paths cross, creating impossible 2-in/2-out cells (no belt type for that I/O).
-- **Implementation approach (revised after VLSI/PCB routing research):**
-  - **Sequential A\* with obstacle marking** — route nets one at a time; after
-    each net, mark its cells as obstacles before routing the next. This prevents
-    crossings by construction. Based on Python-PCB's approach
-    ([vygr/Python-PCB](https://github.com/vygr/Python-PCB)).
-  - **Net ordering** — route longer/larger nets first (more routing options);
-    shorter nets fit around them.
-  - **networkx A\*** — use `networkx.astar_path()` on a grid graph. Heuristic =
-    Manhattan distance. Edge weights can penalize turns to prefer straight runs.
-  - **Grid graph** — build `nx.grid_2d_graph(width, height)`, remove obstacle
-    nodes (machines, already-routed cells). A\* finds path; convert path cells to
-    belt entities with correct type/rotation via `_belt_for_inout`.
-  - **Fan-out/fan-in** — for 1→N nets, A\* to the centroid, then branch; or use
-    Steiner-tree heuristics. Start simple: route to each destination sequentially,
-    letting the first path become an obstacle that forces branches.
-  - Emit exactly the types+rotations `lift.routing_inout` decodes — shared table,
-    so the round-trip is exact by construction.
-- **Done when:** tests 1–6 green over the listed fixtures.
-- **Defer:** throughput-aware **parallel-lane** routing (a net wider than one
-  belt's rate) — start at one belt per edge; add a `test_reroute_full_belt`
-  (48 lanes) once the simple round-trip is green.
-- **References:**
-  - [NetworkX astar_path](https://networkx.org/documentation/stable/reference/algorithms/generated/networkx.algorithms.shortest_paths.astar.astar_path.html)
-  - [Python-PCB router](https://github.com/vygr/Python-PCB) — sequential routing
-    with collision layers
-  - [VLSI Channel Routing](http://vlsicad.eecs.umich.edu/KLMH/downloads/book/chapter6/chap6-111206.pdf) —
-    constraint graphs, Left Edge Algorithm
+  1. ✓ `test_route_straight` — one src → one dst in a line ⇒ Forward belts.
+  2. ✓ `test_route_one_turn` — offset on both axes ⇒ Forward + Left turn.
+  3. ✓ `test_route_fanout` / `test_route_fanin` — 1→2 / 2→1 with junctions.
+  4. ✓ `test_route_avoids_obstacle` — A* detours around blocked cell.
+  5. ✓ `test_fanin_same_direction_merger_near_sources` — merger placed near
+     machine cluster, not near sink.
+  6. ✓ `test_fanout_same_direction_splitter_near_sinks` — splitter placed near
+     machine cluster, not near source.
+  7. ✓ `test_fanin_merger_placement_allows_distinct_directions` — merger has
+     inputs from distinct directions (position assertion).
+  8. ✓ `test_reroute_with_junctions_rotator_quarter` — full strip→reroute→lift
+     round-trip on the rotator quarter.
+  9. ✓ `test_reroute_roundtrip` — parametrized over 7 single-cell fixtures.
+  10. ✗ `test_reroute_roundtrip_multi_cell` — parametrized over 2 multi-cell
+      fixtures (cutter_12_to_24, swap_diagonal). **xfail.**
+- **Implementation:**
+  - `reroute_with_junctions(stripped, netlist)` — the main entry point. Strips
+    belts, analyzes fan patterns, places junctions near machine clusters, routes
+    via sequential A* with obstacle marking.
+  - **Junction placement near machine clusters:** when all sources (fan-in) or
+    destinations (fan-out) face the same direction, the junction is placed next to
+    the cluster — one endpoint feeds straight in, others turn perpendicular. For
+    2-way fans, the "straight" endpoint is the one closest to the far side on the
+    perpendicular axis. For 3+ fans, it's the median (so branches spread to both
+    sides for `Splitter1To3` / `Merger3To1`).
+  - Sequential A* with obstacle marking prevents crossings by construction.
+  - Emits exactly the types+rotations `lift.routing_inout` decodes — shared table,
+    round-trip exact by construction.
+- **Remaining gap (multi-cell machines):** cutters and swappers occupy 2 cells.
+  The router doesn't yet compute port directions per footprint cell or treat the
+  second cell as an obstacle. Fixing this unblocks the cutter and swapper fixtures.
+- **Defer:** throughput-aware **parallel-lane** routing — one belt per edge for now.
 
 #### WP-D — Placement (CP-SAT) *(Rung 3→4; critical path)*
 - **Goal:** choose machine cells + rotations for a netlist on a platform, instead
