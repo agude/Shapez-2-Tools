@@ -16,7 +16,7 @@ regression floor. The hard target is intra-platform **place-and-route**.
 
 ## 0. Status & handoff (2026-06-03)
 
-**Built and green** (106 tests pass, 2 xfail, `just test`, ruff clean):
+**Built and green** (109 tests pass, 2 xfail, `just test`, ruff clean):
 - `blueprint.py` — faithful `.spz2bp` codec.
 - `generator.py` — tile-replication generator: builds the rotator family
   (180/cw/ccw × 1×1/1×4) from one lifted tile. `Entity`, lift/stamp/build,
@@ -42,28 +42,54 @@ regression floor. The hard target is intra-platform **place-and-route**.
   sequential A* with obstacle marking. Round-trips through lift for all
   single-cell fixtures (rotator family × 6, half-destroyer). Handles 1→2, 1→3,
   2→1, 3→1 fan patterns with correct junction placement near machine clusters.
-  **Multi-cell machine routing (cutter, swapper) is the remaining gap** (2
-  xfail).
+  Now routes at **cell granularity** off `netlist.port_edges` (was anchor-level),
+  so a multi-cell machine's several ports route as distinct ports — a cutter's
+  two outputs are two 1→1 routes, not a bogus 1→2 splitter (`_node_cell_ports`).
+  **≥4-way fans** chain (one junction cell holds ≤3 legs): fan-out uses a
+  deterministic splitter comb (`_route_split_chain`, dsts spread along the flow
+  axis); fan-in uses a collision-free merger staircase (`_route_merge_chain`,
+  perpendicular-spread sources folded nearest-trunk-first). Both are covered by
+  spacious synthetic tests (`TestMultiCellRouting`). **Multi-cell corpus
+  round-trip (cutter, swapper) is the remaining gap** (2 xfail), and the blocker
+  is now precisely understood: the corpus packs mergers in **2D in tight space**
+  (a sink can sit ~2 cells from its four sources), where a linear staircase has
+  no room and bails, and greedy sequential A* congests. Closing it needs
+  **space-aware routing that co-decides merger placement** — i.e. WP-C routing
+  blended with WP-D placement, not a deterministic comb. Cutter lifts back to
+  ~38/66 edges; the missing ones are the tight 4-way fan-ins/outs.
 - CLI: `gen`, `diff`, `show`, `lift`. `data/reference/` holds oracle fixtures.
 
 **WP-A and WP-B: DONE.** Netlist isomorphism via networkx graph comparison; physical
 validator with corpus sweep. Both green.
 
-**WP-C (routing): DONE for single-cell machines.** The router places junctions
-near machine clusters (not near the far endpoint), so that adjacent same-direction
-ports can approach a T-merger/splitter from distinct directions. Key design rules:
+**WP-C (routing): DONE for single-cell machines + isolated wide fans; corpus
+multi-cell round-trip still xfail.** The router now works at **cell granularity**
+off `netlist.port_edges`, so a multi-cell machine's ports route independently
+(`_node_cell_ports`). Junction placement rules (≤3-way fans, single junction
+cell):
 - **Fan-in (N→1):** merger one cell from the "straight" source; turned sources
   approach from perpendicular via A*.
 - **Fan-out (1→N):** splitter one cell from the "straight" destination; trunk
   routes from source via A*.
 - **2-way fans:** pick the endpoint closest to the far side on the perpendicular
   axis (keeps trunk along the flow axis, avoids trunk/branch conflicts).
-- **3+ way fans:** pick the median endpoint so branches spread to both sides
-  (needed for `Splitter1To3` / `Merger3To1`).
-- Verified: parametrized round-trip over 7 single-cell fixtures (strip → reroute →
-  lift ≅ original). The 2 multi-cell fixtures (cutter_12_to_24, swap_diagonal)
-  remain xfail — the router doesn't yet account for multi-cell footprints when
-  computing port directions and obstacle regions for 2-cell machines.
+- **3-way fans:** pick the median endpoint so branches spread to both sides
+  (`Splitter1To3` / `Merger3To1`).
+- **≥4-way fans** chain (a junction cell holds ≤3 legs): fan-out = a splitter
+  comb (`_route_split_chain`, dsts spread along the flow axis); fan-in = a
+  collision-free merger staircase (`_route_merge_chain`, perpendicular-spread
+  sources folded nearest-trunk-first). Covered by `TestMultiCellRouting`.
+
+Verified: parametrized round-trip over 7 single-cell fixtures (strip → reroute →
+lift ≅ original) + the wide-fan unit tests. **The 2 multi-cell fixtures
+(cutter_12_to_24, swap_diagonal) remain xfail.** The blocker, now precise: the
+multi-cell *port* problem is solved (cutter outputs route as distinct ports), but
+the corpus packs mergers in **2D in tight space** — a sink can sit ~2 cells from
+its four sources, where a linear staircase has no room (it bails) and greedy
+sequential A* congests. The chains handle *spacious* wide fans (the synthetic
+tests); the *tight* corpus fans need **space-aware routing that co-decides merger
+placement** (WP-C routing blended with WP-D placement). Cutter currently lifts
+back to ~38/66 edges.
 
 **Cutter + swapper: SOLVED (the cutter was the blocker).** Machines now expand to
 footprints (`_machine_footprint`); each is one entity + a second cell to the
@@ -91,14 +117,17 @@ interpreter correctly refuses). Next: identify which source ports are which feed
 real blueprint.
 
 **Next steps — see §7 for the full test-first work plan.** Critical path to the
-north star (synthesis): ~~WP-A~~ ✓ → ~~WP-B~~ ✓ → ~~WP-C~~ ✓ (single-cell) →
-**WP-C multi-cell** → **WP-D** placement (CP-SAT) → **WP-E** synthesize. WP-D
-can start now using the rotator family (single-cell), but the diagonal extractor
-(the north-star demo) uses **swappers** (2-cell footprint), so it needs the
-multi-cell routing gap closed before end-to-end synthesis works. The diagonal
-extractor needs **none** of the machine-type breadth work (stacker WP-F, painter
-WP-G, full-blueprint sim WP-H) — its machines (rotators, swappers, belts) are
-already lifted and simulated.
+north star (synthesis): ~~WP-A~~ ✓ → ~~WP-B~~ ✓ → ~~WP-C~~ ✓ (single-cell +
+cell-level multi-cell ports + spacious wide fans) → **WP-C tight fans / WP-D
+placement** → **WP-E** synthesize. The remaining WP-C gap (tight 2D merger
+packing) is no longer a standalone router fix: it wants the **placer** to leave
+routing room, so it merges into WP-D. WP-D can start now on the rotator family
+(single-cell). The diagonal extractor (the north-star demo) uses **swappers**
+(2-cell footprint) whose *ports* now route correctly, but its dense fan-ins are
+exactly the tight-packing case, so end-to-end synthesis needs space-aware
+place-and-route. The diagonal extractor needs **none** of the machine-type
+breadth work (stacker WP-F, painter WP-G, full-blueprint sim WP-H) — its machines
+(rotators, swappers, belts) are already lifted and simulated.
 
 ---
 
@@ -392,9 +421,10 @@ widens the spec space but blocks nothing on the diagonal extractor.
 #### WP-C — Rung 3: re-route at fixed placement *(the router core; critical path)*
 - **Goal:** I4. Given a netlist + the machines' existing cells, regenerate belts
   realizing every edge; lifting the result reproduces the netlist.
-- **Status: DONE for single-cell machines.** Round-trip verified on 7 fixtures
-  (rotator family × 6, half-destroyer). 2 multi-cell fixtures xfail (cutter,
-  swapper).
+- **Status: DONE for single-cell machines, cell-level multi-cell ports, and
+  *spacious* wide fans. Corpus multi-cell round-trip still xfail (tight 2D fan
+  packing).** Round-trip verified on 7 single-cell fixtures (rotator family × 6,
+  half-destroyer). 2 multi-cell fixtures xfail (cutter, swapper).
 - **Tests** (`tests/test_route.py`; flavours 4 + 5):
   1. ✓ `test_route_straight` — one src → one dst in a line ⇒ Forward belts.
   2. ✓ `test_route_one_turn` — offset on both axes ⇒ Forward + Left turn.
@@ -409,29 +439,50 @@ widens the spec space but blocks nothing on the diagonal extractor.
   8. ✓ `test_reroute_with_junctions_rotator_quarter` — full strip→reroute→lift
      round-trip on the rotator quarter.
   9. ✓ `test_reroute_roundtrip` — parametrized over 7 single-cell fixtures.
-  10. ✗ `test_reroute_roundtrip_multi_cell` — parametrized over 2 multi-cell
-      fixtures (cutter_12_to_24, swap_diagonal). **xfail.**
+  10. ✓ `TestMultiCellRouting::test_cutter_outputs_route_as_distinct_ports` — a
+      cutter's two outputs route as distinct ports (no bogus splitter).
+  11. ✓ `TestMultiCellRouting::test_reroute_fanin_four_way` /
+      `test_reroute_fanout_four_way` — ≥4-way fans on *spacious* synthetic
+      layouts ⇒ all edges recovered (chained junctions).
+  12. ✗ `test_reroute_roundtrip_multi_cell` — parametrized over 2 multi-cell
+      fixtures (cutter_12_to_24, swap_diagonal). **xfail (tight 2D packing).**
 - **Implementation:**
   - `reroute_with_junctions(stripped, netlist)` — the main entry point. Strips
-    belts, analyzes fan patterns, places junctions near machine clusters, routes
+    belts, analyzes fan patterns at **cell granularity** off `netlist.port_edges`
+    (each multi-cell port routed independently via `_node_cell_ports`), routes
     via sequential A* with obstacle marking.
-  - **Junction placement near machine clusters:** when all sources (fan-in) or
-    destinations (fan-out) face the same direction, the junction is placed next to
-    the cluster — one endpoint feeds straight in, others turn perpendicular. For
-    2-way fans, the "straight" endpoint is the one closest to the far side on the
-    perpendicular axis. For 3+ fans, it's the median (so branches spread to both
-    sides for `Splitter1To3` / `Merger3To1`).
+  - **Junction placement near machine clusters (≤3-way):** when all sources
+    (fan-in) or destinations (fan-out) face the same direction, the junction is
+    placed next to the cluster — one endpoint feeds straight in, others turn
+    perpendicular. 2-way picks the endpoint closest to the far side on the
+    perpendicular axis; 3-way the median (so branches spread for `Splitter1To3` /
+    `Merger3To1`).
+  - **≥4-way chains:** a junction cell holds ≤3 legs, so wide fans chain.
+    `_route_split_chain` is a deterministic splitter comb (dsts spread along the
+    flow axis, one trunk cell each); `_route_merge_chain` is a collision-free
+    merger staircase (perpendicular-spread sources folded nearest-trunk-first so
+    a farther source's drop only crosses already-vacated rows). Both build
+    explicit bounded paths (`_explicit_path` / `_path_belts`) — no A* wandering,
+    no unbounded loops.
   - Sequential A* with obstacle marking prevents crossings by construction.
   - Emits exactly the types+rotations `lift.routing_inout` decodes — shared table,
     round-trip exact by construction.
-- **Remaining gap (multi-cell machines):** cutters and swappers occupy 2 cells.
-  The router doesn't yet compute port directions per footprint cell or treat the
-  second cell as an obstacle. Fixing this unblocks the cutter and swapper fixtures.
+- **Remaining gap (tight 2D fan packing):** the multi-cell *port* problem is
+  solved, but the corpus packs mergers in 2D where a linear chain has no room —
+  a sink can sit ~2 cells from its four sources. The merge staircase bails when
+  it won't fit (unmatched legs, no crash); greedy A* congests. Closing this is
+  not a standalone router fix — it needs the **placer to reserve routing room**,
+  so it folds into WP-D (space-aware place-and-route). Cutter lifts back to
+  ~38/66 edges; the misses are the tight 4-way fans.
 - **Defer:** throughput-aware **parallel-lane** routing — one belt per edge for now.
 
 #### WP-D — Placement (CP-SAT) *(Rung 3→4; critical path)*
 - **Goal:** choose machine cells + rotations for a netlist on a platform, instead
-  of reusing the oracle's placement.
+  of reusing the oracle's placement. **Now also absorbs the last WP-C gap**: the
+  router can't realize the corpus's *tight* fan-ins on the oracle's own packing
+  (no room for a merger chain), so the placer must reserve routing room — port
+  adjacency feasibility must account for the junction cells a fan needs, not just
+  the machines.
 - **Tests first:** `test_place_two_rotators` (feasible: no overlap, legal cells,
   ports orientable to be routable); `test_place_then_route_rotator_quarter`
   (place → WP-C route ⇒ `isomorphic` + `validate`); `test_placement_compact`
@@ -500,10 +551,11 @@ widens the spec space but blocks nothing on the diagonal extractor.
 
 ### 7.3 Sequencing & dependencies
 - **Critical path:** A → B → C → D → E, each gated by the prior's invariant.
-- A and B are cheap and unblock everything — do them first (≈ a session each).
-- C (the router) is the hard, high-value core — budget the most TDD iterations
-  there; keep parallel-lane throughput deferred until the simple round-trip is
-  green.
+- A and B are cheap and unblock everything — done.
+- C (the router) is the hard, high-value core. Single-cell round-trip, cell-level
+  multi-cell ports, and spacious wide-fan chaining are green; the **last C gap
+  (tight 2D fan packing) is now coupled to D** — the placer must leave routing
+  room, so finish it inside WP-D rather than as a standalone router pass.
 - F / G / H run in parallel whenever a stacker / painter / confidence need
   arises; none block the diagonal-extractor north star.
 - New deps (§6): A/H add `networkx`; D adds `OR-Tools`. Nothing else.

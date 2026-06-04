@@ -63,6 +63,28 @@ def _neg(d: tuple[int, int]) -> tuple[int, int]:
     return (-d[0], -d[1])
 
 
+def _path_belts(
+    cells: list[tuple[int, int]],
+    first_in_dir: tuple[int, int],
+    last_out_dir: tuple[int, int],
+    layer: int,
+) -> list[Entity]:
+    """Turn an explicit cell sequence into belt entities.
+
+    Each cell's input is where the previous cell sits and output is toward the
+    next; the ends use the given boundary directions. Unlike A*, the caller
+    dictates the exact path, so junction-chain branches climb out on their own
+    lane instead of taking the shortest route through a neighbour's lane.
+    """
+    ents: list[Entity] = []
+    for i, (x, y) in enumerate(cells):
+        in_d = first_in_dir if i == 0 else (cells[i - 1][0] - x, cells[i - 1][1] - y)
+        out_d = last_out_dir if i == len(cells) - 1 else (cells[i + 1][0] - x, cells[i + 1][1] - y)
+        bt, r = _belt_for_inout(in_d, out_d)
+        ents.append(Entity(x=x, y=y, type=bt, rotation=r, layer=layer))
+    return ents
+
+
 def route_fanout(
     src_pos: tuple[int, int],
     dst_positions: list[tuple[int, int]],
@@ -782,12 +804,258 @@ def reroute_astar(stripped: Blueprint, netlist: lift.Netlist, layer: int = 0) ->
     return _rebuild_blueprint(stripped, all_entities)
 
 
+def _straight_tap(
+    junction: tuple[int, int],
+    side: tuple[int, int],
+    dst: tuple[int, int],
+    last_out: tuple[int, int],
+    layer: int,
+    obstacles: set[tuple[int, int]],
+) -> list[Entity]:
+    """Belts running straight from a junction, perpendicular to the trunk, to dst.
+
+    The junction sits on the trunk at ``dst``'s flow coordinate, so the tap only
+    moves along ``side`` (the perpendicular axis) until it reaches ``dst``. The
+    final belt feeds ``dst`` with output ``last_out``. The loop steps strictly
+    toward ``dst`` and is length-capped, so it always terminates.
+    """
+    cells: list[tuple[int, int]] = []
+    cur = (junction[0] + side[0], junction[1] + side[1])
+    while cur != dst and len(cells) < 500:
+        cells.append(cur)
+        cur = (cur[0] + side[0], cur[1] + side[1])
+    seg = _path_belts(cells, _neg(side), last_out, layer)
+    for e in seg:
+        obstacles.add((e.x, e.y))
+    return seg
+
+
+def _explicit_path(
+    start: tuple[int, int],
+    end: tuple[int, int],
+    flow_first: tuple[int, int],
+    first_in: tuple[int, int],
+    last_out: tuple[int, int],
+    layer: int,
+) -> list[Entity]:
+    """Bounded L-path from ``start`` to ``end``, moving along ``flow_first`` first.
+
+    Steps strictly toward ``end`` (move along the ``flow_first`` axis until that
+    coordinate matches, then the other axis), so the loop always terminates.
+    ``first_in``/``last_out`` set the boundary belt directions.
+    """
+    fi = 0 if flow_first in (E, W) else 1
+    cells: list[tuple[int, int]] = [start]
+    cur = start
+    guard = 0
+    while cur != end and guard < 2000:
+        # Move along the flow axis (fi) until it matches, then the other axis.
+        move_axis = fi if cur[fi] != end[fi] else 1 - fi
+        if move_axis == 0:
+            step = (1 if end[0] > cur[0] else -1, 0)
+        else:
+            step = (0, 1 if end[1] > cur[1] else -1)
+        cur = (cur[0] + step[0], cur[1] + step[1])
+        cells.append(cur)
+        guard += 1
+    return _path_belts(cells, first_in, last_out, layer)
+
+
+def _route_merge_chain(
+    srcs: list[tuple[int, int]],
+    dst: tuple[int, int],
+    common_out: tuple[int, int],
+    dst_in_dir: tuple[int, int],
+    obstacles: set[tuple[int, int]],
+    bounds: tuple[int, int, int, int],
+    layer: int,
+) -> list[Entity]:
+    """Merge ≥4 sources into one dst via a collision-free merger staircase.
+
+    A single junction cell holds ≤3 legs, so wide fan-ins chain. Sources are
+    perpendicular-spread (the corpus pattern: a column of machines feeding one
+    sink), so a trunk runs along ``common_out`` on the sink's row and each source
+    folds in via its own ``Merger2To1``. The mergers sit at successive columns
+    east of every source. Sources are folded **nearest-the-trunk first**: a
+    farther source's perpendicular drop then passes only through rows the nearer
+    sources have already vacated (they merged in further west), so no two lanes
+    cross.
+
+    Assumes sources occupy distinct perpendicular rows — true for the corpus
+    fans. Anything else yields unmatched legs, not a silent wrong result.
+    """
+    horiz = common_out in (E, W)
+    back = _neg(common_out)
+    d = common_out
+    di = 0 if horiz else 1  # flow axis
+    pi = 1 - di  # perpendicular axis
+    sign = 1 if d in (E, N) else -1
+    trunk_perp = dst[pi]
+
+    def cell(flow: int, perp: int) -> tuple[int, int]:
+        return (flow, perp) if horiz else (perp, flow)
+
+    entities: list[Entity] = []
+
+    # Fold nearest-to-trunk first; the source on the trunk row (if any) seeds it.
+    ordered = sorted(srcs, key=lambda s: abs(s[pi] - trunk_perp))
+    # The trunk seeds at the most-downstream source (largest depth along d) and
+    # mergers march one step further downstream each.
+    head_flow = max(srcs, key=lambda s: sign * s[di])[di]
+    seed = ordered[0]
+
+    # The staircase needs one column per non-seed merger downstream of the head,
+    # ending before dst. If the placement is too tight (the corpus packs mergers
+    # in 2D in space a linear staircase lacks), bail: leave the fan unrouted
+    # rather than overlapping dst. This shows up as unmatched legs, not a crash.
+    last_merger_flow = head_flow + (len(ordered) - 1) * sign
+    if sign * last_merger_flow >= sign * dst[di]:
+        return []
+
+    # Route the seed onto the trunk row at the head column, flowing downstream.
+    head = cell(head_flow, trunk_perp)
+    seg = _explicit_path(seed, head, d, back, d, layer)
+    # Drop the seed's own cell (it is the machine/port, not a belt) and the head
+    # cell (placed as a merger below if more sources, else trunk forward).
+    seg = [e for e in seg if (e.x, e.y) not in (seed, head)]
+    for e in seg:
+        obstacles.add((e.x, e.y))
+    entities.extend(seg)
+
+    trunk_flow = head_flow
+    for s in ordered[1:]:
+        trunk_flow += sign
+        merger = cell(trunk_flow, trunk_perp)
+        if horiz:
+            side = N if s[pi] > trunk_perp else S
+        else:
+            side = E if s[pi] > trunk_perp else W
+        mtype, mr = _belt_for_cell(frozenset({back, side}), frozenset({d}))
+        entities.append(Entity(x=merger[0], y=merger[1], type=mtype, rotation=mr, layer=layer))
+        obstacles.add(merger)
+        # Source folds in: run downstream to the merger column, then drop to the
+        # merger's perpendicular input cell.
+        feeder = (merger[0] + side[0], merger[1] + side[1])
+        seg = _explicit_path(s, feeder, d, back, _neg(side), layer)
+        seg = [e for e in seg if (e.x, e.y) != s]
+        for e in seg:
+            obstacles.add((e.x, e.y))
+        entities.extend(seg)
+
+    # Fill the trunk between head and the first merger with forward belts, and
+    # run the accumulated trunk into dst.
+    head_cell = cell(head_flow, trunk_perp)
+    if trunk_flow != head_flow and head_cell != seed:
+        # Forward belt seeding the trunk at the head column (unless the seed
+        # source already occupies it and feeds the trunk directly).
+        bt, r = _belt_for_inout(back, d)
+        entities.append(Entity(x=head_cell[0], y=head_cell[1], type=bt, rotation=r, layer=layer))
+        obstacles.add(head_cell)
+    last_merger = cell(trunk_flow, trunk_perp)
+    seg = _explicit_path(last_merger, dst, d, back, _neg(dst_in_dir), layer)
+    seg = [e for e in seg if (e.x, e.y) not in (last_merger, dst)]
+    for e in seg:
+        obstacles.add((e.x, e.y))
+    entities.extend(seg)
+    return entities
+
+
+def _route_split_chain(
+    src: tuple[int, int],
+    dsts: list[tuple[int, int]],
+    src_out_dir: tuple[int, int],
+    common_in: tuple[int, int],
+    obstacles: set[tuple[int, int]],
+    bounds: tuple[int, int, int, int],
+    layer: int,
+) -> list[Entity]:
+    """Split one source to ≥4 same-direction dsts via a comb of 1→2 splitters.
+
+    A straight trunk leaves ``src`` along ``src_out_dir`` at ``src``'s
+    perpendicular coordinate. Each destination is tapped off perpendicular at the
+    trunk cell aligned with that destination's flow coordinate: a ``Splitter1To2``
+    (trunk continues forward, branch turns to the side) for every destination but
+    the farthest, which terminates the trunk with a turn belt. Destinations spread
+    *along* the flow axis (the corpus pattern: many cutters in a column fed by one
+    port) each get their own trunk cell, so no two taps share a lane.
+
+    Assumes destinations sit off the trunk line (a perpendicular offset) and at
+    distinct flow coordinates — true for the corpus fans. Anything else yields
+    unmatched legs rather than a wrong-but-silent result.
+    """
+    horiz = src_out_dir in (E, W)
+    back = _neg(src_out_dir)
+    di = 0 if horiz else 1  # flow axis index
+    pi = 1 - di  # perpendicular axis index
+    sign = 1 if src_out_dir in (E, N) else -1
+    trunk_perp = src[pi]
+
+    def trunk_cell(flow: int) -> tuple[int, int]:
+        return (flow, trunk_perp) if horiz else (trunk_perp, flow)
+
+    ordered = sorted(dsts, key=lambda t: sign * t[di])
+    far = ordered[-1]
+    by_flow = {t[di]: t for t in dsts}
+
+    entities: list[Entity] = []
+    flow = src[di] + sign
+    while sign * flow <= sign * far[di]:
+        jc = trunk_cell(flow)
+        t = by_flow.get(flow)
+        if t is not None:
+            perp_off = t[pi] - trunk_perp
+            side = (N if perp_off > 0 else S) if horiz else (E if perp_off > 0 else W)
+            if t is far:
+                # Terminal: trunk turns into the last branch (1-in / 1-out).
+                bt, r = _belt_for_inout(back, side)
+            else:
+                bt, r = _belt_for_cell(frozenset({back}), frozenset({src_out_dir, side}))
+            entities.append(Entity(x=jc[0], y=jc[1], type=bt, rotation=r, layer=layer))
+            obstacles.add(jc)
+            entities.extend(_straight_tap(jc, side, t, _neg(common_in), layer, obstacles))
+        else:
+            bt, r = _belt_for_inout(back, src_out_dir)  # forward trunk belt
+            entities.append(Entity(x=jc[0], y=jc[1], type=bt, rotation=r, layer=layer))
+            obstacles.add(jc)
+        flow += sign
+
+    return entities
+
+
+def _node_cell_ports(
+    node: lift.Node,
+) -> dict[tuple[int, int], tuple[frozenset, frozenset]]:
+    """Per-cell (ins, outs) for a node, in absolute coordinates.
+
+    Machines expand to their footprint (``_machine_footprint``); ports and any
+    single-cell node occupy just their anchor. This is the cell-level analogue
+    of ``lift._inout`` — it exposes *every* physical port of a multi-cell
+    machine (e.g. a cutter's two output cells), not just the anchor's.
+    """
+    if node.kind == "machine":
+        return {
+            (node.x + dx, node.y + dy): (ins, outs)
+            for (dx, dy), (ins, outs) in lift._machine_footprint(
+                node.type, node.rotation
+            ).items()
+        }
+    ins, outs = lift._inout(node.type, node.rotation)
+    return {(node.x, node.y): (ins, outs)}
+
+
 def reroute_with_junctions(stripped: Blueprint, netlist: lift.Netlist, layer: int = 0) -> Blueprint:
     """Re-route a netlist handling fan-in and fan-out with junctions.
 
-    Analyzes the netlist for fan patterns:
-    - Fan-out (1→N): source with multiple outgoing edges → splitter junction
-    - Fan-in (N→1): destination with multiple incoming edges → merger junction
+    Operates at **cell granularity** off ``netlist.port_edges``, so each
+    physical port of a multi-cell machine is routed independently. A cutter's
+    two outputs leave from two distinct cells (both eastward at R=0); routing by
+    anchor would mistake them for a 1→2 fan-out and insert a bogus splitter.
+    Working per cell, those become two ordinary 1→1 routes, while genuine fans
+    (a port feeding several machines) still get a splitter/merger.
+
+    Analyzes the port-edge graph for fan patterns:
+    - Fan-out (1→N): one output cell feeding multiple input cells → splitter
+    - Fan-in (N→1): multiple output cells feeding one input cell → merger
 
     Routes using A* with obstacle avoidance, placing appropriate junction belts
     where flows split or merge.
@@ -813,20 +1081,28 @@ def reroute_with_junctions(stripped: Blueprint, netlist: lift.Netlist, layer: in
         for dx, dy in footprint:
             obstacles.add((e.x + dx, e.y + dy))
 
-    # Analyze netlist for fan patterns
+    # Build per-cell port directions across every node's footprint. Each cell
+    # has at most one input side and one output side for the calibrated
+    # machines/ports, so a single direction per cell is exact.
+    cell_out_dir: dict[tuple[int, int], tuple[int, int]] = {}
+    cell_in_dir: dict[tuple[int, int], tuple[int, int]] = {}
+    for node in netlist.nodes.values():
+        for cell, (ins, outs) in _node_cell_ports(node).items():
+            if outs:
+                cell_out_dir[cell] = next(iter(outs))
+            if ins:
+                cell_in_dir[cell] = next(iter(ins))
+
+    # Analyze the port-edge graph (cell → cell) for fan patterns. ``port_edges``
+    # carries cell-level granularity (the lift always fills it); hand-built
+    # netlists may set only ``edges``, which equal port_edges for single-cell
+    # nodes (anchor == cell), so fall back to them.
+    cell_edges = sorted(netlist.port_edges if netlist.port_edges else netlist.edges)
     outgoing: dict[tuple[int, int], list[tuple[int, int]]] = defaultdict(list)
     incoming: dict[tuple[int, int], list[tuple[int, int]]] = defaultdict(list)
-    for src, dst in netlist.edges:
+    for src, dst in cell_edges:
         outgoing[src].append(dst)
         incoming[dst].append(src)
-
-    # Build node info (position -> (type, rotation, in_dir, out_dir))
-    node_info: dict[tuple[int, int], tuple[str, int, tuple[int, int], tuple[int, int]]] = {}
-    for anchor, node in netlist.nodes.items():
-        ins, outs = lift._inout(node.type, node.rotation)
-        in_dir = next(iter(ins)) if ins else W
-        out_dir = next(iter(outs)) if outs else E
-        node_info[anchor] = (node.type, node.rotation, in_dir, out_dir)
 
     routed_entities: list[Entity] = []
 
@@ -842,14 +1118,21 @@ def reroute_with_junctions(stripped: Blueprint, netlist: lift.Netlist, layer: in
         if len(dsts) <= 1:
             continue
         fanout_processed.add(src)
-        _, _, _, src_out_dir = node_info[src]
+        src_out_dir = cell_out_dir[src]
 
         # Check if all destinations accept from the same direction
         dst_in_dirs_map: dict[tuple[int, int], tuple[int, int]] = {}
         for dst in dsts:
-            _, _, in_dir, _ = node_info[dst]
-            dst_in_dirs_map[dst] = in_dir
+            dst_in_dirs_map[dst] = cell_in_dir[dst]
         unique_dst_ins = set(dst_in_dirs_map.values())
+
+        if len(unique_dst_ins) == 1 and len(dsts) >= 4:
+            # Too many branches for one splitter cell (≤3 legs): chain splitters.
+            common_in = next(iter(unique_dst_ins))
+            routed_entities.extend(
+                _route_split_chain(src, dsts, src_out_dir, common_in, obstacles, bounds, layer)
+            )
+            continue
 
         if len(unique_dst_ins) == 1:
             # Same-direction destinations: place splitter near the destination
@@ -960,7 +1243,7 @@ def reroute_with_junctions(stripped: Blueprint, netlist: lift.Netlist, layer: in
             obstacles.add(split_pos)
 
             for dst in dsts:
-                _, _, dst_in_dir, _ = node_info[dst]
+                dst_in_dir = cell_in_dir[dst]
                 dx = dst[0] - split_pos[0]
                 dy = dst[1] - split_pos[1]
                 if abs(dx) >= abs(dy):
@@ -982,7 +1265,7 @@ def reroute_with_junctions(stripped: Blueprint, netlist: lift.Netlist, layer: in
         if len(srcs) <= 1:
             continue
         fanin_processed.add(dst)
-        _, _, dst_in_dir, _ = node_info[dst]
+        dst_in_dir = cell_in_dir[dst]
 
         # Get output directions for all sources (excluding fanout-processed)
         active_srcs = [s for s in srcs if s not in fanout_processed]
@@ -991,9 +1274,18 @@ def reroute_with_junctions(stripped: Blueprint, netlist: lift.Netlist, layer: in
 
         src_out_dirs_map: dict[tuple[int, int], tuple[int, int]] = {}
         for src in active_srcs:
-            _, _, _, out_dir = node_info[src]
-            src_out_dirs_map[src] = out_dir
+            src_out_dirs_map[src] = cell_out_dir[src]
         unique_src_outs = set(src_out_dirs_map.values())
+
+        if len(unique_src_outs) == 1 and len(active_srcs) >= 4:
+            # Too many inputs for one merger cell (≤3 legs): chain mergers.
+            common_out = next(iter(unique_src_outs))
+            routed_entities.extend(
+                _route_merge_chain(
+                    active_srcs, dst, common_out, dst_in_dir, obstacles, bounds, layer
+                )
+            )
+            continue
 
         if len(unique_src_outs) == 1:
             # Same-direction sources: place merger near the source cluster.
@@ -1113,12 +1405,12 @@ def reroute_with_junctions(stripped: Blueprint, netlist: lift.Netlist, layer: in
                     obstacles.add((e.x, e.y))
                 routed_entities.extend(path_entities)
 
-    # Route simple 1→1 edges (not part of fanout/fanin groups)
-    for src, dst in netlist.edges:
+    # Route simple 1→1 port-edges (not part of fanout/fanin groups)
+    for src, dst in cell_edges:
         if src in fanout_processed or dst in fanin_processed:
             continue
-        _, _, _, src_out_dir = node_info[src]
-        _, _, dst_in_dir, _ = node_info[dst]
+        src_out_dir = cell_out_dir[src]
+        dst_in_dir = cell_in_dir[dst]
 
         path_entities = route_astar(
             src, dst, src_out_dir, dst_in_dir, obstacles=obstacles, layer=layer, bounds=bounds
