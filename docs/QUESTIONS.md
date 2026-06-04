@@ -49,6 +49,21 @@ The interpreter maps `RotatorOneQuad` → clockwise, `RotatorOneQuadCCW` →
 counter-clockwise. Tests pass, but confirm that matches in-game (the building
 icons should settle it).
 
+## 7. Launcher/catcher routing model  *(future — after WP-D)*
+Belt launchers and catchers act as same-layer vias: a launcher sends items over
+other belts to a catcher, allowing routes to cross without conflicting. Multiple
+launched belts can even share a lane (2–3 flights over the same ground cell).
+Questions for when we add them:
+- What are the exact entity types and how do they encode the flight
+  path (launcher rotation → catcher position, or is there a pairing field)?
+- What is the maximum flight distance? Is it fixed or variable?
+- Can a launcher/catcher pair cross a machine cell, or only belt cells?
+- How many flight lanes can stack over one ground cell (2? 3?)?
+The routing model will need per-cell **lane tracking** (ground vs flight lanes)
+instead of a simple occupied set, and A* would try launcher hops when ground
+routing fails or detours excessively. Not a priority until belt routing on
+the ground layer is solid (WP-C/D done).
+
 ---
 
 ## Resolved (for the record)

@@ -1196,14 +1196,17 @@ def reroute_with_junctions(stripped: Blueprint, netlist: lift.Netlist, layer: in
             )
             obstacles.add(splitter_pos)
 
-            # Trunk: source → splitter
-            path_entities = route_astar(
-                src, splitter_pos, src_out_dir, trunk_approach,
-                obstacles=obstacles, layer=layer, bounds=bounds,
-            )
-            for e in path_entities:
-                obstacles.add((e.x, e.y))
-            routed_entities.extend(path_entities)
+            # Trunk: source → splitter (skip if adjacent — splitter
+            # connects directly to the source with no intermediate belt).
+            trunk_start = (src[0] + src_out_dir[0], src[1] + src_out_dir[1])
+            if trunk_start != splitter_pos:
+                path_entities = route_astar(
+                    src, splitter_pos, src_out_dir, trunk_approach,
+                    obstacles=obstacles, layer=layer, bounds=bounds,
+                )
+                for e in path_entities:
+                    obstacles.add((e.x, e.y))
+                routed_entities.extend(path_entities)
 
             # Branches: splitter → each turned destination
             for dst, branch_dir in turned_branches.items():
@@ -1353,14 +1356,16 @@ def reroute_with_junctions(stripped: Blueprint, netlist: lift.Netlist, layer: in
                     obstacles.add((e.x, e.y))
                 routed_entities.extend(path_entities)
 
-            # Route merger to destination
-            path_entities = route_astar(
-                merger_pos, dst, common_out, dst_in_dir,
-                obstacles=obstacles, layer=layer, bounds=bounds,
-            )
-            for e in path_entities:
-                obstacles.add((e.x, e.y))
-            routed_entities.extend(path_entities)
+            # Route merger to destination (skip if adjacent).
+            merger_end = (merger_pos[0] + common_out[0], merger_pos[1] + common_out[1])
+            if merger_end != dst:
+                path_entities = route_astar(
+                    merger_pos, dst, common_out, dst_in_dir,
+                    obstacles=obstacles, layer=layer, bounds=bounds,
+                )
+                for e in path_entities:
+                    obstacles.add((e.x, e.y))
+                routed_entities.extend(path_entities)
 
         else:
             # Different-direction sources: place merger near destination
