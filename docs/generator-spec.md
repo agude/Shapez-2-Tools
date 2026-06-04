@@ -1,6 +1,6 @@
 # Blueprint Synthesis — Plan
 
-**Status:** Draft, updated 2026-06-03.
+**Status:** Draft, updated 2026-06-04.
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -14,9 +14,9 @@ regression floor. The hard target is intra-platform **place-and-route**.
 
 ---
 
-## 0. Status & handoff (2026-06-03)
+## 0. Status & handoff (2026-06-04)
 
-**Built and green** (109 tests pass, 2 xfail, `just test`, ruff clean):
+**Built and green** (111 tests pass, 3 xfail, `just test`, ruff clean):
 - `blueprint.py` — faithful `.spz2bp` codec.
 - `generator.py` — tile-replication generator: builds the rotator family
   (180/cw/ccw × 1×1/1×4) from one lifted tile. `Entity`, lift/stamp/build,
@@ -56,7 +56,22 @@ regression floor. The hard target is intra-platform **place-and-route**.
   no room and bails, and greedy sequential A* congests. Closing it needs
   **space-aware routing that co-decides merger placement** — i.e. WP-C routing
   blended with WP-D placement, not a deterministic comb. Cutter lifts back to
-  ~38/66 edges; the missing ones are the tight 4-way fan-ins/outs.
+  ~38/66 edges; the missing ones are the tight 4-way fan-ins/outs. Adjacent-skip
+  fix: when a splitter/merger is adjacent to its source/sink, the trunk/tail A*
+  is skipped (the junction connects directly; the start cell would coincide with
+  the already-placed obstacle).
+- `place.py` — CP-SAT placement (WP-D started). OR-Tools CP-SAT solver assigns
+  `(x, y, rotation)` to machines given an abstract netlist (graph structure only,
+  no coordinates) and a platform. Constraints: no overlap, interior bounds,
+  rotation facing toward connected nodes, fan-out groups at same y / adjacent x /
+  ordered by source x, sink port ordering matched to source flow. Produces
+  oracle-like layouts for the rotator quarter (12/16 edges route successfully on
+  the solver's placement). The 4 missing edges are **A\* routing congestion**
+  (inner fan-out routes claim cells outer fan-outs need), not a placement defect.
+  `abstract_netlist(nl)` strips coordinates from a lifted netlist for the solver.
+  **The placer is scaffolding** — machine placement is often a human design
+  decision; the product is the router. The placer validates the full pipeline
+  (abstract → place → route → verify) and will improve as the router matures.
 - CLI: `gen`, `diff`, `show`, `lift`. `data/reference/` holds oracle fixtures.
 
 **WP-A and WP-B: DONE.** Netlist isomorphism via networkx graph comparison; physical
@@ -118,14 +133,18 @@ real blueprint.
 
 **Next steps — see §7 for the full test-first work plan.** Critical path to the
 north star (synthesis): ~~WP-A~~ ✓ → ~~WP-B~~ ✓ → ~~WP-C~~ ✓ (single-cell +
-cell-level multi-cell ports + spacious wide fans) → **WP-C tight fans / WP-D
-placement** → **WP-E** synthesize. The remaining WP-C gap (tight 2D merger
-packing) is no longer a standalone router fix: it wants the **placer** to leave
-routing room, so it merges into WP-D. WP-D can start now on the rotator family
-(single-cell). The diagonal extractor (the north-star demo) uses **swappers**
-(2-cell footprint) whose *ports* now route correctly, but its dense fan-ins are
-exactly the tight-packing case, so end-to-end synthesis needs space-aware
-place-and-route. The diagonal extractor needs **none** of the machine-type
+cell-level multi-cell ports + spacious wide fans) → **WP-D placement** (started)
+→ **WP-E** synthesize. WP-D scaffolding is in place: the CP-SAT placer produces
+oracle-like layouts for the rotator quarter and the full abstract→place→route→lift
+pipeline runs end-to-end. **The remaining gap is A\* routing congestion** — inner
+fan-out routes claim cells outer fan-outs need (4/16 edges miss on the rotator
+quarter's solver placement). Fix: process fan-outs outside-in (widest-reaching
+first), which requires care not to break fixtures with different fan topology
+(half-destroyer regressed on a naive attempt). The tight 2D merger packing from
+WP-C (cutter/swapper xfails) also merges here — the placer must reserve routing
+channels for dense fans. **Machine placement is often a human design decision;
+the product is the router.** The placer validates the pipeline and will improve
+as the router matures. The diagonal extractor needs **none** of the machine-type
 breadth work (stacker WP-F, painter WP-G, full-blueprint sim WP-H) — its machines
 (rotators, swappers, belts) are already lifted and simulated.
 
@@ -482,14 +501,29 @@ widens the spec space but blocks nothing on the diagonal extractor.
   router can't realize the corpus's *tight* fan-ins on the oracle's own packing
   (no room for a merger chain), so the placer must reserve routing room — port
   adjacency feasibility must account for the junction cells a fan needs, not just
-  the machines.
-- **Tests first:** `test_place_two_rotators` (feasible: no overlap, legal cells,
-  ports orientable to be routable); `test_place_then_route_rotator_quarter`
-  (place → WP-C route ⇒ `isomorphic` + `validate`); `test_placement_compact`
-  (soft, I7: bounding box / belt count within `k×` the oracle).
+  the machines. **Note:** machine placement is often a human design decision — the
+  user places machines; the tool routes belts. The placer validates the full
+  pipeline and will become smarter as the router matures.
+- **Status: STARTED.** CP-SAT placer in `place.py`. `abstract_netlist` strips
+  coordinates; `place()` assigns `(x, y, r)` via OR-Tools. Constraints: no
+  overlap, interior bounds, rotation facing toward connected nodes (element
+  constraint on direction dot-product), fan-out groups at same y / adjacent x /
+  ordered by source x, sink ports ordered to match source flow. Produces
+  oracle-like layouts for the rotator quarter — 12/16 edges route on the solver's
+  placement. **Remaining gap:** A\* routing congestion (4/16 edges) where inner
+  fan-out routes claim cells outer fan-outs need; fix is outside-in routing order
+  (naively reordering regressed the half-destroyer; needs fan-topology-aware
+  ordering). The tight 2D merger packing (cutter/swapper xfails) also needs the
+  placer to reserve routing channels for dense fans.
+- **Tests:**
+  - ✓ `test_place_single_rotator` — feasible placement, no overlap, interior.
+  - ✓ `test_place_two_rotators_no_overlap` — AllDifferent stress.
+  - ✗ `test_place_then_route_rotator_quarter` — xfail (12/16 edges; A\*
+    congestion on outer fan-outs).
+  - TODO: `test_placement_compact` (bounding box / belt count within `k×` oracle).
 - **Implementation:** OR-Tools CP-SAT — vars = `(cell, rotation)` per machine;
-  constraints = no overlap, on-grid, port-adjacency feasibility; objective =
-  bounding box / wire-length proxy.
+  constraints = no overlap, on-grid, rotation facing, fan-group structure,
+  source/sink ordering; objective = minimize total Manhattan wire length.
 - **Done when:** place+route reproduces the quarter and full belt structurally;
   compactness tracked.
 
