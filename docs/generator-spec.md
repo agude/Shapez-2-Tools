@@ -77,10 +77,9 @@ regression floor. The hard target is intra-platform **place-and-route**.
   between adjacent fan-out groups), **y-band ≤ 2** (all machines within 2 cells
   of each other on y, prevents split layouts with very long trunks). Routes
   **14/16** edges on the solver's placement (up from 12/16). The 2 remaining
-  misses are fan-in edges from the rightmost group; the solver still places
-  machines near sinks instead of near sources (the objective weights all edges
-  equally). **Next fix: weight fan-out edges higher** in the objective so the
-  solver biases toward short fan-out trunks (oracle-like placement).
+  misses are fan-in trunks from the rightmost group to its sink: the trunk must
+  cross left through cells already claimed by adjacent groups' fan-in routing
+  (sequential A* congestion — see WP-D status for analysis).
   `abstract_netlist(nl)` strips coordinates from a lifted netlist for the solver.
   **The placer is scaffolding** — machine placement is often a human design
   decision; the product is the router. The placer validates the full pipeline
@@ -153,19 +152,24 @@ progress) → **WP-E** synthesize. WP-D pipeline runs end-to-end
 bypassed obstacle check), placer constraints (port-row margin 2, inter-group
 x-gap 2, y-band ≤ 2), and conditional outside-in fan-out ordering (applied when
 max Manhattan ≤ 5; skipped for long trunks to avoid half-destroyer regression).
-**The remaining gap is placement bias**: the solver places machines near sinks
-(minimizing total wire length) instead of near sources (where fan-out trunks are
-short). Fix: **weight fan-out edges (src→machine) higher** in the objective (e.g.
-3×) so the solver prefers oracle-like layouts with short fan-out trunks. Once the
-solver produces source-adjacent placements, the conditional outside-in ordering
-activates and the remaining 2 fan-in edges should route. The tight 2D merger
-packing from WP-C (cutter/swapper xfails) also merges here — the placer must
-reserve routing channels for dense fans. **Machine placement is often a human
-design decision; the product is the router.** The placer validates the pipeline
-and will improve as the router matures. The diagonal extractor needs **none** of
-the machine-type breadth work (stacker WP-F, painter WP-G, full-blueprint sim
-WP-H) — its machines (rotators, swappers, belts) are already lifted and
-simulated.
+**The remaining gap is fan-in routing order**, not placement bias (the earlier
+hypothesis about weighting fan-out edges was tested and disproven — see WP-D
+status for details). The 2 missing edges are fan-in trunks from the rightmost
+machine group; their paths cross left through cells already claimed by adjacent
+groups' fan-in routing (sequential A* congestion). The oracle layout at the same
+positions routes 16/16 — it has different edges that don't cross. **Fix paths:**
+(a) routing-order-aware fan-in processing — sort by max source→sink distance so
+long-range trunks claim cells first (tested: gains the 2 rightmost edges but
+breaks 8 oracle round-trips because the oracle's long-range trunks also cross);
+(b) rip-up-and-reroute — on A* failure, evict conflicting routes and retry;
+(c) iterative place→route→adjust — re-place after routing failures.  The tight
+2D merger packing from WP-C (cutter/swapper xfails) also merges here — the
+placer must reserve routing channels for dense fans. **Machine placement is often
+a human design decision; the product is the router.** The placer validates the
+pipeline and will improve as the router matures. The diagonal extractor needs
+**none** of the machine-type breadth work (stacker WP-F, painter WP-G,
+full-blueprint sim WP-H) — its machines (rotators, swappers, belts) are already
+lifted and simulated.
 
 ---
 
@@ -536,31 +540,47 @@ widens the spec space but blocks nothing on the diagonal extractor.
   (prevents the solver splitting machines across the platform — without it, the
   solver put some machines near sinks, creating 13-cell trunks A\* can't navigate).
   Routes **14/16** edges on the solver's placement (up from 12/16). The 2
-  remaining misses are fan-in edges from the rightmost machine group to its sink.
-  **Remaining gap: placement bias.** The solver minimizes total Manhattan wire
-  length, treating fan-out and fan-in edges equally. It still places machines near
-  sinks (y ≈ 4–6) instead of near sources (y ≈ 13–15 like the oracle), because
-  shorter fan-in routes offset longer fan-out routes in the objective. But the
-  router handles fan-in routes (straight belts) easily, while fan-out routes (with
-  splitters) are fragile. **Fix: weight fan-out (src→machine) edges ≈ 3× in the
-  objective** so the solver biases toward short fan-out trunks. Once the solver
-  produces source-adjacent placements, the conditional outside-in ordering in the
-  router activates and the remaining fan-in edges should route.  Router-side fixes
-  also landed: `route_astar` `start == end` obstacle check (was placing belts on
-  occupied cells), conditional outside-in fan-out ordering via `_perp_reach` (when
-  max Manhattan ≤ 5, widest-perpendicular fans route first; skipped for long
-  trunks to avoid the half-destroyer regression — outer trunks on far machines
-  would cross inner territory).
+  remaining misses are fan-in trunks from the rightmost machine group to its
+  sink (sequential A* congestion — the trunk must cross left through cells
+  already claimed by the adjacent group's fan-in routing).
+  **The blocker is fan-in routing order, not placement bias.** Deep exploration
+  disproved the earlier "weight fan-out edges 3×" hypothesis:
+  - **3× weight tested:** moves all machines to y=15 (source-adjacent), but the
+    2-cell inter-group x-gap forces 4 groups across the full 14-cell x-span,
+    scoring **13/16** (worse than baseline 14/16). Different constraint
+    combinations (conditional x-gap, column-spread, on-column margin,
+    AllDifferent x) ranged from 8–15/16 but none consistently beat 14.
+  - **Oracle edge structure revealed:** the oracle's fan-out groups ARE same-y
+    / adjacent-x pairs (matching the constraints), but the groups use 1-cell
+    natural gaps and alternate between y=14 and y=15. Crucially,
+    `src(8)→machines(6,15),(7,15)` — both machines are OFF-column, to the LEFT.
+    The center pairs `src(9)→(8,14),(9,14)` sit at different sources' x-values.
+    The 2-cell inter-group gap makes the oracle layout **infeasible**.
+  - **Fan-in ordering tested:** sorting fan-in groups by max source→sink
+    Manhattan (descending) routes the rightmost group first (gains 2 edges →
+    15/16), but breaks **8 oracle round-trip tests** because the oracle's
+    long-range fan-in trunks also cross inner territory when routed first.
+    Different layouts need different routing orders — no single static order
+    works for all.
+  **Fix paths (see §7 for details):** (a) rip-up-and-reroute — on A* failure,
+  evict conflicting routes and retry with a different order; (b) iterative
+  place→route→adjust — re-place after routing failures; (c) layout-adaptive
+  fan-in ordering — an ordering heuristic that considers both distance and
+  congestion risk. Router-side fixes already landed: `route_astar`
+  `start == end` obstacle check, conditional outside-in fan-out ordering via
+  `_perp_reach`.
 - **Tests:**
   - ✓ `test_place_single_rotator` — feasible placement, no overlap, interior.
   - ✓ `test_place_two_rotators_no_overlap` — AllDifferent stress.
-  - ✗ `test_place_then_route_rotator_quarter` — xfail (14/16 edges; fan-out
-    objective weight needed for source-adjacent placement).
+  - ✗ `test_place_then_route_rotator_quarter` — xfail (14/16 edges; fan-in
+    routing order is the blocker, not placement bias).
   - TODO: `test_placement_compact` (bounding box / belt count within `k×` oracle).
 - **Implementation:** OR-Tools CP-SAT — vars = `(cell, rotation)` per machine;
   constraints = no overlap, on-grid, rotation facing, fan-group structure,
   source/sink ordering, port-row margin 2, inter-group gap 2, y-band ≤ 2;
-  objective = minimize total Manhattan wire length (**TODO: fan-out edge weight**).
+  objective = minimize total Manhattan wire length (uniform weights — the 3×
+  fan-out weight was tested and is counterproductive with the current
+  constraints).
 - **Done when:** place+route reproduces the quarter and full belt structurally;
   compactness tracked.
 

@@ -66,7 +66,7 @@ class TestPlaceThenRoute:
 
     @pytest.mark.xfail(
         strict=False,
-        reason="WP-D: placement + routing integration — first attempt",
+        reason="WP-D: 14/16 edges — fan-in routing order congestion",
     )
     def test_place_then_route_rotator_quarter(self):
         """Lift the rotator quarter, strip coords, place, route, re-lift."""
