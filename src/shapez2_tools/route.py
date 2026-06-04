@@ -471,7 +471,8 @@ def route_astar(
     end = (dst_pos[0] + dst_in_dir[0], dst_pos[1] + dst_in_dir[1])
 
     if start == end:
-        # Adjacent: just one belt
+        if start in obstacles:
+            return []
         in_d = _neg(src_out_dir)
         out_d = _neg(dst_in_dir)
         belt_type, r = _belt_for_inout(in_d, out_d)
@@ -1043,6 +1044,23 @@ def _node_cell_ports(
     return {(node.x, node.y): (ins, outs)}
 
 
+def _perp_reach(
+    anchor: tuple[int, int],
+    peers: list[tuple[int, int]],
+    dir_map: dict[tuple[int, int], tuple[int, int]],
+) -> int:
+    """Max perpendicular distance from *anchor* to any *peer*.
+
+    The perpendicular axis is orthogonal to anchor's direction in *dir_map*.
+    Fan-outs with larger perpendicular reach should route first (outside-in)
+    so their paths aren't blocked by inner fans' infrastructure.
+    """
+    d = dir_map.get(anchor, (0, -1))
+    if d[0] == 0:
+        return max(abs(p[0] - anchor[0]) for p in peers)
+    return max(abs(p[1] - anchor[1]) for p in peers)
+
+
 def reroute_with_junctions(stripped: Blueprint, netlist: lift.Netlist, layer: int = 0) -> Blueprint:
     """Re-route a netlist handling fan-in and fan-out with junctions.
 
@@ -1112,11 +1130,26 @@ def reroute_with_junctions(stripped: Blueprint, netlist: lift.Netlist, layer: in
     margin = 5
     bounds = (min(all_x) - margin, min(all_y) - margin, max(all_x) + margin, max(all_y) + margin)
 
-    # Process fan-out groups (1→N)
+    # Process fan-out groups (1→N).  When machines are close to sources
+    # (short trunks), route widest-reaching fans first so inner fans'
+    # branch infrastructure doesn't block outer fans' trunks.  When
+    # machines are far (long trunks), outer-first ordering is harmful
+    # because the trunk itself crosses inner territory; keep dict order.
+    fanout_groups = [
+        (src, dsts) for src, dsts in outgoing.items() if len(dsts) > 1
+    ]
+    if fanout_groups:
+        max_manhattan = max(
+            max(abs(s[0] - d[0]) + abs(s[1] - d[1]) for d in ds)
+            for s, ds in fanout_groups
+        )
+        if max_manhattan <= 5:
+            fanout_groups.sort(
+                key=lambda g: _perp_reach(g[0], g[1], cell_out_dir), reverse=True,
+            )
+
     fanout_processed: set[tuple[int, int]] = set()
-    for src, dsts in outgoing.items():
-        if len(dsts) <= 1:
-            continue
+    for src, dsts in fanout_groups:
         fanout_processed.add(src)
         src_out_dir = cell_out_dir[src]
 

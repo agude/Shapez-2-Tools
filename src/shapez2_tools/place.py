@@ -155,9 +155,12 @@ def place(abstract: dict, platform: str) -> lift.Netlist:
     m_y: dict[str, cp_model.IntVar] = {}
     m_r: dict[str, cp_model.IntVar] = {}
 
-    # Keep machines away from port rows so belts have room.
-    machine_y_min = min(input_y, output_y) + 1
-    machine_y_max = max(input_y, output_y) - 1
+    # Keep machines away from port rows so fan-out splitters and belt
+    # trunks have room.  A margin of 1 lets the solver place machines
+    # adjacent to the source row; the router then puts a splitter ON
+    # the source row, whose trunk end cell collides with a source port.
+    machine_y_min = min(input_y, output_y) + 2
+    machine_y_max = max(input_y, output_y) - 2
     # Clamp to interior.
     machine_y_min = max(machine_y_min, y_min)
     machine_y_max = min(machine_y_max, y_max)
@@ -261,6 +264,17 @@ def place(abstract: dict, platform: str) -> lift.Netlist:
             model.add_abs_equality(abs_dx, m_x[a] - m_x[b])
             model.add(abs_dx == 1)
 
+    # Machine y-band: keep all machines within 2 cells of each other on
+    # the y-axis.  Without this the solver can split machines across the
+    # platform (some near sources, some near sinks), producing layouts
+    # with very long trunks that the sequential A* router can't handle.
+    if len(machines) >= 2:
+        all_mids = [m["id"] for m in machines]
+        for i in range(1, len(all_mids)):
+            dy = model.new_int_var(0, grid_h, f"mband_{i}")
+            model.add_abs_equality(dy, m_y[all_mids[0]] - m_y[all_mids[i]])
+            model.add(dy <= 2)
+
     # Cross-group ordering: fan-out groups ordered by their source's
     # x-position so routes don't cross. A source at lower x should feed
     # machines at lower x than a source at higher x.
@@ -281,11 +295,12 @@ def place(abstract: dict, platform: str) -> lift.Netlist:
     for i in range(len(sorted_src_ids) - 1):
         left_group = fanout_by_src[sorted_src_ids[i]]
         right_group = fanout_by_src[sorted_src_ids[i + 1]]
-        # Max x of left group < min x of right group.
+        # At least 2-cell gap between groups so fan-out splitters and
+        # branch belts don't collide with adjacent groups' trunks.
         for a in left_group:
             for b in right_group:
                 if a in m_x and b in m_x:
-                    model.add(m_x[a] < m_x[b])
+                    model.add(m_x[a] + 2 <= m_x[b])
 
     # Minimum spacing between connected nodes: at least 2 Manhattan distance
     # (room for one belt cell between machine and its source/sink).
