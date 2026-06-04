@@ -112,6 +112,99 @@ def cmd_lift(args: argparse.Namespace) -> None:
         print(f"interpret: n/a ({exc})")
 
 
+def cmd_viz(args: argparse.Namespace) -> None:
+    """Render a blueprint layer as an interactive HTML/SVG page."""
+    from shapez2_tools import viz
+
+    bp = Blueprint.from_file(args.file)
+    title = args.file.stem.replace("_", " ").title()
+    html = viz.render_html(bp, layer=args.layer, title=title)
+
+    out = args.output or args.file.with_suffix(".html")
+    out.write_text(html)
+    print(f"Wrote {out}")
+
+    if args.open:
+        import subprocess
+
+        subprocess.Popen(
+            ["xdg-open", str(out)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+
+def cmd_place(args: argparse.Namespace) -> None:
+    """Re-place and re-route a blueprint via CP-SAT, then visualize."""
+    from shapez2_tools import lift, viz
+    from shapez2_tools.generator import Entity
+    from shapez2_tools.place import abstract_netlist, place
+    from shapez2_tools.route import entities_to_blueprint, reroute_with_junctions
+
+    bp = Blueprint.from_file(args.file)
+    original = lift.trace_layer(bp, args.layer)
+
+    platform = args.platform or bp.entries[0].get("T", "Foundation_1x1")
+    print(f"platform: {platform}")
+    print(f"original: {len(original.nodes)} nodes, {len(original.edges)} edges")
+
+    abstract = abstract_netlist(original)
+    placed = place(abstract, platform)
+    print(f"placed: {len(placed.nodes)} nodes")
+
+    entities = [
+        Entity(
+            type=node.type,
+            x=node.x,
+            y=node.y,
+            rotation=node.rotation,
+            layer=args.layer,
+        )
+        for node in placed.nodes.values()
+    ]
+    stripped_bp = entities_to_blueprint(entities, platform=platform)
+    routed_bp = reroute_with_junctions(stripped_bp, placed, layer=args.layer)
+
+    routed_nl = lift.trace_layer(routed_bp, args.layer)
+    original_edge_set = set(original.edges)
+    routed_edge_set = set(routed_nl.edges)
+    n_original = len(original_edge_set)
+    n_routed = len(routed_edge_set)
+    print(f"routed: {n_routed}/{n_original} edges")
+
+    # Identify failed edges (in placed netlist but not realized after routing).
+    # Map original abstract edges to placed coordinates for overlay.
+    failed: list[tuple[tuple[int, int], tuple[int, int]]] = []
+    for src, dst in placed.edges:
+        found = False
+        for rs, rd in routed_nl.edges:
+            if rs == src and rd == dst:
+                found = True
+                break
+        if not found:
+            failed.append((src, dst))
+
+    if failed:
+        print(f"failed edges: {len(failed)}")
+
+    if args.output:
+        routed_bp.to_file(args.output)
+        print(f"Wrote blueprint: {args.output}")
+
+    title = f"{args.file.stem} — placed ({n_routed}/{n_original} edges)"
+    html = viz.render_html(routed_bp, layer=args.layer, failed_edges=failed, title=title)
+    viz_out = args.viz_output or args.file.with_name(args.file.stem + "_placed.html")
+    viz_out.write_text(html)
+    print(f"Wrote viz: {viz_out}")
+
+    if not args.no_open:
+        import subprocess
+
+        subprocess.Popen(
+            ["xdg-open", str(viz_out)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+
+
 def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -175,6 +268,26 @@ def main() -> None:
     lift_cmd.add_argument("file", type=Path, help="Blueprint file")
     lift_cmd.add_argument("--layer", type=int, default=0, help="Floor 0/1/2")
     lift_cmd.set_defaults(func=cmd_lift)
+
+    # viz command
+    viz_cmd = subparsers.add_parser("viz", help="Render a blueprint as HTML/SVG")
+    viz_cmd.add_argument("file", type=Path, help="Blueprint file")
+    viz_cmd.add_argument("-o", "--output", type=Path, help="Output HTML file")
+    viz_cmd.add_argument("--layer", type=int, default=0, help="Floor 0/1/2")
+    viz_cmd.add_argument("--open", action="store_true", help="Open in browser")
+    viz_cmd.set_defaults(func=cmd_viz)
+
+    # place command
+    place_cmd = subparsers.add_parser(
+        "place", help="Re-place and re-route a blueprint via CP-SAT"
+    )
+    place_cmd.add_argument("file", type=Path, help="Source blueprint file")
+    place_cmd.add_argument("-o", "--output", type=Path, help="Output blueprint file")
+    place_cmd.add_argument("--viz-output", type=Path, help="Output HTML viz file")
+    place_cmd.add_argument("--platform", type=str, help="Platform type (auto-detected)")
+    place_cmd.add_argument("--layer", type=int, default=0, help="Floor 0/1/2")
+    place_cmd.add_argument("--no-open", action="store_true", help="Don't open in browser")
+    place_cmd.set_defaults(func=cmd_place)
 
     args = parser.parse_args()
     args.func(args)
