@@ -16,11 +16,16 @@ regression floor. The hard target is intra-platform **place-and-route**.
 
 ## 0. Status & handoff (2026-06-04)
 
-**Built and green** (111 tests pass, 3 xfail, `just test`, ruff clean):
+**Built and green** (123 tests pass, 3 xfail, `just test`, ruff clean):
 - `blueprint.py` — faithful `.spz2bp` codec.
 - `generator.py` — tile-replication generator: builds the rotator family
   (180/cw/ccw × 1×1/1×4) from one lifted tile. `Entity`, lift/stamp/build,
-  functional `diff`, per-floor text `render`.
+  functional `diff`, per-floor text `render`. 1×4 platforms get font-rendered
+  silk-screen labels (direction text as trash-block pixel art, one character
+  per gap between belt units, centered) plus a name-tag `Label` entity.
+- `font.py` — pre-extracted 10×14 mono bitmap font (95 printable ASCII glyphs,
+  stored as row bitmasks; no Pillow runtime dependency). `silkscreen()` renders
+  text as `Trash` entities at a given origin and scale.
 - `data/platforms.json` — seam-aware platform geometry (interior = 20·units − 4).
 - `lift.py` — recovers a machine-level netlist from a placed blueprint. Belt
   direction is calibrated for **all** routing variants (belts + every
@@ -84,7 +89,8 @@ regression floor. The hard target is intra-platform **place-and-route**.
   **The placer is scaffolding** — machine placement is often a human design
   decision; the product is the router. The placer validates the full pipeline
   (abstract → place → route → verify) and will improve as the router matures.
-- CLI: `gen`, `diff`, `show`, `lift`. `data/reference/` holds oracle fixtures.
+- CLI: `gen`, `diff`, `show`, `lift`. `data/reference/` holds oracle fixtures
+  and `*_font.spz2bp` copies with font-based silk screening for comparison.
 
 **WP-A and WP-B: DONE.** Netlist isomorphism via networkx graph comparison; physical
 validator with corpus sweep. Both green.
