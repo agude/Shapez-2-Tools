@@ -27,6 +27,8 @@ _COLORS = {
     "machine_other": "#778888",
     "port_in": "#44aa55",
     "port_out": "#bbaa33",
+    "launcher": "#2277aa",
+    "catcher": "#aa7722",
     "failed": "#dd3333",
     "label": "#667788",
     "port_arrow_in": "#55dd66",
@@ -36,12 +38,19 @@ _COLORS = {
 W, E, N, S = (-1, 0), (1, 0), (0, 1), (0, -1)
 
 
-def _entity_fill(e: Entity) -> str | None:
+def _entity_fill(
+    e: Entity,
+    grid_bounds: tuple[int, int, int, int] | None = None,
+) -> str | None:
     """Fill color for non-belt entities; None for belts."""
     t = e.type
     if "PortReceiver" in t:
+        if grid_bounds and not _is_edge_port(e, grid_bounds):
+            return _COLORS["launcher"]
         return _COLORS["port_in"]
     if "PortSender" in t:
+        if grid_bounds and not _is_edge_port(e, grid_bounds):
+            return _COLORS["catcher"]
         return _COLORS["port_out"]
     k = lift.kind(t)
     if k == "machine":
@@ -86,6 +95,33 @@ def _is_junction(t: str) -> bool:
     return "Splitter" in t or "Merger" in t
 
 
+def _grid_bounds(bp: Blueprint) -> tuple[int, int, int, int] | None:
+    """Bounding box of the interior grid (non-port entities).
+
+    Platform I/O ports sit outside the grid on all four sides.
+    Any port entity outside these bounds is a platform-edge port;
+    any inside is an internal launcher/catcher.
+    """
+    xs: list[int] = []
+    ys: list[int] = []
+    for e in all_entities(bp):
+        if "PortReceiver" in e.type or "PortSender" in e.type:
+            continue
+        xs.append(e.x)
+        ys.append(e.y)
+    if not xs:
+        return None
+    return min(xs), max(xs), min(ys), max(ys)
+
+
+def _is_edge_port(
+    e: Entity, bounds: tuple[int, int, int, int]
+) -> bool:
+    """True if this port entity sits outside the interior grid."""
+    min_x, max_x, min_y, max_y = bounds
+    return e.x < min_x or e.x > max_x or e.y < min_y or e.y > max_y
+
+
 def render_html(
     bp: Blueprint,
     layer: int = 0,
@@ -93,6 +129,7 @@ def render_html(
     title: str = "",
 ) -> str:
     """Render one floor of a blueprint as a self-contained HTML page."""
+    bounds = _grid_bounds(bp)
     entities = all_entities(bp)
     layer_ents = [e for e in entities if e.layer == layer]
     if not layer_ents:
@@ -171,7 +208,7 @@ def render_html(
     belt_lines: list[str] = []
 
     for e in layer_ents:
-        fill = _entity_fill(e)
+        fill = _entity_fill(e, bounds)
         tip = f"{_short_type(e.type)} ({e.x},{e.y}) R={e.rotation}"
 
         if fill is not None:
@@ -263,6 +300,8 @@ def render_html(
     legend_items = [
         ("Input port", _COLORS["port_in"]),
         ("Output port", _COLORS["port_out"]),
+        ("Launcher", _COLORS["launcher"]),
+        ("Catcher", _COLORS["catcher"]),
         ("Rotator", _COLORS["machine_rotator"]),
         ("Cutter", _COLORS["machine_cutter"]),
         ("Swapper", _COLORS["machine_swapper"]),

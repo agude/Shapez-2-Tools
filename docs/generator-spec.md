@@ -198,6 +198,12 @@ throughput=2). CLI: `just run synth rotate_180 -o out.spz2bp`.
 - **Machine placement is often a human design decision; the product is the
   router.** The placer validates the pipeline and will improve as the router
   matures.
+- **Platform calibration blueprints needed (ACTION: user provides).** Export
+  one blueprint per platform type: fill the interior with trash and populate
+  all I/O port slots. This gives ground-truth grid bounds, port positions
+  (all four sides), and coordinate-system validation — fixing Q5 and the
+  Foundation_1x2 geometry discrepancy. Until these arrive, multi-unit
+  platform support is blocked on uncalibrated data in `platforms.json`.
 - Machine-type breadth work (stacker WP-F, painter WP-G, full-blueprint sim
   WP-H) blocks nothing on the diagonal extractor — its machines (rotators,
   swappers, belts) are already lifted and simulated.
