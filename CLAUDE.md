@@ -66,6 +66,8 @@ just run gen rotate cw --platform 1x1 -o out.spz2bp   # generate a rotator
 just run diff a.spz2bp b.spz2bp             # compare functional entities
 just run show file.spz2bp --layer 0         # per-floor ASCII map
 just run lift file.spz2bp                   # lift to a netlist + interpret
+just run viz file.spz2bp --open             # HTML/SVG visualization (browser)
+just run place file.spz2bp -o out.spz2bp    # re-place + re-route via CP-SAT
 ```
 
 ## Blueprint Format

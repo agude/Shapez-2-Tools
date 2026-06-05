@@ -1,7 +1,5 @@
 """WP-D: placement tests (CP-SAT)."""
 
-import pytest
-
 from shapez2_tools import lift
 from shapez2_tools.blueprint import Blueprint
 from tests.conftest import REF
@@ -64,10 +62,6 @@ class TestPlaceFeasibility:
 class TestPlaceThenRoute:
     """End-to-end: place → route → lift ≅ original netlist."""
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason="WP-D: 14/16 edges — fan-in routing order congestion",
-    )
     def test_place_then_route_rotator_quarter(self):
         """Lift the rotator quarter, strip coords, place, route, re-lift."""
         from shapez2_tools.place import abstract_netlist, place

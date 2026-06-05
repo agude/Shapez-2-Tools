@@ -16,7 +16,7 @@ regression floor. The hard target is intra-platform **place-and-route**.
 
 ## 0. Status & handoff (2026-06-04)
 
-**Built and green** (123 tests pass, 3 xfail, `just test`, ruff clean):
+**Built and green** (124 tests pass, 2 xfail, `just test`, ruff clean):
 - `blueprint.py` — faithful `.spz2bp` codec.
 - `generator.py` — tile-replication generator: builds the rotator family
   (180/cw/ccw × 1×1/1×4) from one lifted tile. `Entity`, lift/stamp/build,
@@ -72,25 +72,29 @@ regression floor. The hard target is intra-platform **place-and-route**.
   **`route_astar` overlap fix**: the `start == end` shortcut now checks the
   obstacle set before placing a belt, preventing entity overlaps that previously
   corrupted the lift.
-- `place.py` — CP-SAT placement (WP-D in progress). OR-Tools CP-SAT solver
+- `place.py` — CP-SAT placement (WP-D done for rotator quarter). OR-Tools CP-SAT solver
   assigns `(x, y, rotation)` to machines given an abstract netlist (graph
   structure only, no coordinates) and a platform. Constraints: no overlap,
   interior bounds, rotation facing toward connected nodes, fan-out groups at
   same y / adjacent x / ordered by source x, sink port ordering matched to
   source flow, **2-cell port-row margin** (prevents splitters landing on the
   source row), **2-cell inter-group x-gap** (prevents trunk/branch collisions
-  between adjacent fan-out groups), **y-band ≤ 2** (all machines within 2 cells
-  of each other on y, prevents split layouts with very long trunks). Routes
-  **14/16** edges on the solver's placement (up from 12/16). The 2 remaining
-  misses are fan-in trunks from the rightmost group to its sink: the trunk must
-  cross left through cells already claimed by adjacent groups' fan-in routing
-  (sequential A* congestion — see WP-D status for analysis).
+  between adjacent fan-out groups), **y-stagger** (edge groups in x-order placed
+  one row closer to sources than inner neighbours — gives fan-out trunks
+  vertical breathing room; the y-component of wire length is invariant so this
+  is a pure tiebreaker, ≤ 1 row apart). Routes **16/16** edges on the solver's
+  placement — the rotator quarter pipeline runs end-to-end (abstract → place →
+  route → lift ≅ original).
   `abstract_netlist(nl)` strips coordinates from a lifted netlist for the solver.
   **The placer is scaffolding** — machine placement is often a human design
   decision; the product is the router. The placer validates the full pipeline
   (abstract → place → route → verify) and will improve as the router matures.
-- CLI: `gen`, `diff`, `show`, `lift`. `data/reference/` holds oracle fixtures
-  and `*_font.spz2bp` copies with font-based silk screening for comparison.
+- CLI: `gen`, `diff`, `show`, `lift`, `viz`, `place`. `viz` renders a blueprint
+  as HTML/SVG (belts as directional lines, machines/ports as filled rectangles,
+  failed edges as dashed red overlays; `--open` launches a browser). `place`
+  runs the full abstract→place→route pipeline on a blueprint and writes the
+  result. `data/reference/` holds oracle fixtures and `*_font.spz2bp` copies
+  with font-based silk screening for comparison.
 
 **WP-A and WP-B: DONE.** Netlist isomorphism via networkx graph comparison; physical
 validator with corpus sweep. Both green.
@@ -151,31 +155,24 @@ real blueprint.
 
 **Next steps — see §7 for the full test-first work plan.** Critical path to the
 north star (synthesis): ~~WP-A~~ ✓ → ~~WP-B~~ ✓ → ~~WP-C~~ ✓ (single-cell +
-cell-level multi-cell ports + spacious wide fans) → **WP-D placement** (in
-progress) → **WP-E** synthesize. WP-D pipeline runs end-to-end
-(abstract→place→route→lift) and routes **14/16** edges on the solver's placement
-(up from 12/16). Three fixes landed: `route_astar` overlap bug (start==end
-bypassed obstacle check), placer constraints (port-row margin 2, inter-group
-x-gap 2, y-band ≤ 2), and conditional outside-in fan-out ordering (applied when
-max Manhattan ≤ 5; skipped for long trunks to avoid half-destroyer regression).
-**The remaining gap is fan-in routing order**, not placement bias (the earlier
-hypothesis about weighting fan-out edges was tested and disproven — see WP-D
-status for details). The 2 missing edges are fan-in trunks from the rightmost
-machine group; their paths cross left through cells already claimed by adjacent
-groups' fan-in routing (sequential A* congestion). The oracle layout at the same
-positions routes 16/16 — it has different edges that don't cross. **Fix paths:**
-(a) routing-order-aware fan-in processing — sort by max source→sink distance so
-long-range trunks claim cells first (tested: gains the 2 rightmost edges but
-breaks 8 oracle round-trips because the oracle's long-range trunks also cross);
-(b) rip-up-and-reroute — on A* failure, evict conflicting routes and retry;
-(c) iterative place→route→adjust — re-place after routing failures.  The tight
-2D merger packing from WP-C (cutter/swapper xfails) also merges here — the
-placer must reserve routing channels for dense fans. **Machine placement is often
-a human design decision; the product is the router.** The placer validates the
-pipeline and will improve as the router matures. The diagonal extractor needs
-**none** of the machine-type breadth work (stacker WP-F, painter WP-G,
-full-blueprint sim WP-H) — its machines (rotators, swappers, belts) are already
-lifted and simulated.
+cell-level multi-cell ports + spacious wide fans) → ~~**WP-D placement**~~ ✓
+(rotator quarter 16/16) → **WP-E** synthesize. WP-D pipeline runs end-to-end
+(abstract→place→route→lift ≅ original) on the rotator quarter. Four fixes
+landed: `route_astar` overlap bug (start==end bypassed obstacle check), placer
+constraints (port-row margin 2, inter-group x-gap 2), conditional outside-in
+fan-out ordering (applied when max Manhattan ≤ 5; skipped for long trunks to
+avoid half-destroyer regression), and **y-stagger** (edge fan-out groups placed
+one row closer to sources than inner neighbours, with ≤ 1 row separation — the
+y-component of wire length is invariant so this is a pure tiebreaker that
+produces the oracle's staggered two-row pattern). Fan-in retry logic
+(`_route_fanin_pass`) tries default and distance-sorted orderings, keeping the
+better result. The tight 2D merger packing from WP-C (cutter/swapper xfails)
+remains: the placer must reserve routing channels for dense fans. **Machine
+placement is often a human design decision; the product is the router.** The
+placer validates the pipeline and will improve as the router matures. The
+diagonal extractor needs **none** of the machine-type breadth work (stacker
+WP-F, painter WP-G, full-blueprint sim WP-H) — its machines (rotators,
+swappers, belts) are already lifted and simulated.
 
 ---
 
@@ -533,60 +530,40 @@ widens the spec space but blocks nothing on the diagonal extractor.
   the machines. **Note:** machine placement is often a human design decision — the
   user places machines; the tool routes belts. The placer validates the full
   pipeline and will become smarter as the router matures.
-- **Status: IN PROGRESS.** CP-SAT placer in `place.py`. `abstract_netlist` strips
-  coordinates; `place()` assigns `(x, y, r)` via OR-Tools. Constraints: no
-  overlap, interior bounds, rotation facing toward connected nodes (element
-  constraint on direction dot-product), fan-out groups at same y / adjacent x /
-  ordered by source x, sink ports ordered to match source flow, **2-cell
-  port-row margin** (prevents splitters on the source row — the old 1-cell margin
-  let the solver place machines adjacent to sources, so the router put a splitter
-  ON the source row and the trunk's end cell collided with a source port),
-  **2-cell inter-group x-gap** (the old 1-cell gap let an inner fan-out's branch
-  belt overlap an outer fan-out's trunk belt at the same cell), **y-band ≤ 2**
-  (prevents the solver splitting machines across the platform — without it, the
-  solver put some machines near sinks, creating 13-cell trunks A\* can't navigate).
-  Routes **14/16** edges on the solver's placement (up from 12/16). The 2
-  remaining misses are fan-in trunks from the rightmost machine group to its
-  sink (sequential A* congestion — the trunk must cross left through cells
-  already claimed by the adjacent group's fan-in routing).
-  **The blocker is fan-in routing order, not placement bias.** Deep exploration
-  disproved the earlier "weight fan-out edges 3×" hypothesis:
-  - **3× weight tested:** moves all machines to y=15 (source-adjacent), but the
-    2-cell inter-group x-gap forces 4 groups across the full 14-cell x-span,
-    scoring **13/16** (worse than baseline 14/16). Different constraint
-    combinations (conditional x-gap, column-spread, on-column margin,
-    AllDifferent x) ranged from 8–15/16 but none consistently beat 14.
-  - **Oracle edge structure revealed:** the oracle's fan-out groups ARE same-y
-    / adjacent-x pairs (matching the constraints), but the groups use 1-cell
-    natural gaps and alternate between y=14 and y=15. Crucially,
-    `src(8)→machines(6,15),(7,15)` — both machines are OFF-column, to the LEFT.
-    The center pairs `src(9)→(8,14),(9,14)` sit at different sources' x-values.
-    The 2-cell inter-group gap makes the oracle layout **infeasible**.
-  - **Fan-in ordering tested:** sorting fan-in groups by max source→sink
-    Manhattan (descending) routes the rightmost group first (gains 2 edges →
-    15/16), but breaks **8 oracle round-trip tests** because the oracle's
-    long-range fan-in trunks also cross inner territory when routed first.
-    Different layouts need different routing orders — no single static order
-    works for all.
-  **Fix paths (see §7 for details):** (a) rip-up-and-reroute — on A* failure,
-  evict conflicting routes and retry with a different order; (b) iterative
-  place→route→adjust — re-place after routing failures; (c) layout-adaptive
-  fan-in ordering — an ordering heuristic that considers both distance and
-  congestion risk. Router-side fixes already landed: `route_astar`
-  `start == end` obstacle check, conditional outside-in fan-out ordering via
-  `_perp_reach`.
+- **Status: DONE (rotator quarter 16/16).** CP-SAT placer in `place.py`.
+  `abstract_netlist` strips coordinates; `place()` assigns `(x, y, r)` via
+  OR-Tools. Constraints: no overlap, interior bounds, rotation facing toward
+  connected nodes (element constraint on direction dot-product), fan-out groups
+  at same y / adjacent x / ordered by source x, sink ports ordered to match
+  source flow, **2-cell port-row margin** (prevents splitters on the source row),
+  **2-cell inter-group x-gap**, **y-stagger** (edge groups in x-order placed one
+  row closer to sources than inner neighbours, ≤ 1 row apart — the y-component
+  of wire length is invariant so this is a pure tiebreaker that produces the
+  oracle's staggered two-row pattern; without it the solver places all machines
+  flat on one row and fan-out trunks collide at shared cells). Routes **16/16**
+  edges — the full abstract→place→route→lift pipeline is isomorphic to the
+  original netlist.
+  **Key insight:** the y-component of wire length is invariant: for every edge,
+  `|src_y - machine_y| + |machine_y - sink_y| = const` regardless of machine y.
+  The solver was indifferent among y-assignments and happened to find the flat
+  layout first. Edge groups' horizontal trunks (from off-column sources) collide
+  with inner groups' vertical trunks at the shared y-level. The oracle staggers
+  groups across two y-levels so trunks use different y-levels and don't cross.
+  The y-stagger constraint (`group_ys[0] > group_ys[1]`, `group_ys[-1] >
+  group_ys[-2]`) deterministically produces this pattern.
+  Router-side fixes also landed: `route_astar` `start == end` obstacle check,
+  conditional outside-in fan-out ordering via `_perp_reach`, fan-in retry logic
+  (`_route_fanin_pass` tries default and distance-sorted orderings).
 - **Tests:**
   - ✓ `test_place_single_rotator` — feasible placement, no overlap, interior.
   - ✓ `test_place_two_rotators_no_overlap` — AllDifferent stress.
-  - ✗ `test_place_then_route_rotator_quarter` — xfail (14/16 edges; fan-in
-    routing order is the blocker, not placement bias).
+  - ✓ `test_place_then_route_rotator_quarter` — 16/16 edges, isomorphic.
   - TODO: `test_placement_compact` (bounding box / belt count within `k×` oracle).
 - **Implementation:** OR-Tools CP-SAT — vars = `(cell, rotation)` per machine;
   constraints = no overlap, on-grid, rotation facing, fan-group structure,
-  source/sink ordering, port-row margin 2, inter-group gap 2, y-band ≤ 2;
-  objective = minimize total Manhattan wire length (uniform weights — the 3×
-  fan-out weight was tested and is counterproductive with the current
-  constraints).
+  source/sink ordering, port-row margin 2, inter-group gap 2, y-stagger
+  (edge groups > inner neighbours, ≤ 1 apart); objective = minimize total
+  Manhattan wire length.
 - **Done when:** place+route reproduces the quarter and full belt structurally;
   compactness tracked.
 

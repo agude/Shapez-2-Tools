@@ -1044,6 +1044,160 @@ def _node_cell_ports(
     return {(node.x, node.y): (ins, outs)}
 
 
+def _route_fanin_pass(
+    fanin_groups: list[tuple[tuple[int, int], list[tuple[int, int]]]],
+    cell_in_dir: dict[tuple[int, int], tuple[int, int]],
+    cell_out_dir: dict[tuple[int, int], tuple[int, int]],
+    obstacles: set[tuple[int, int]],
+    bounds: tuple[int, int, int, int],
+    layer: int,
+) -> tuple[list[Entity], set[tuple[int, int]], int]:
+    """Process fan-in groups, returning (entities, fanin_processed, n_failures).
+
+    Operates on a **copy** of *obstacles* internally so the caller can compare
+    passes without cross-contamination.  The *obstacles* argument is **not**
+    mutated; the caller must merge the returned entities' cells into its own
+    obstacle set after choosing which pass to keep.
+    """
+    obs = set(obstacles)
+    entities: list[Entity] = []
+    fanin_processed: set[tuple[int, int]] = set()
+    failures = 0
+
+    for dst, active_srcs in fanin_groups:
+        fanin_processed.add(dst)
+        dst_in_dir = cell_in_dir[dst]
+
+        src_out_dirs_map: dict[tuple[int, int], tuple[int, int]] = {}
+        for src in active_srcs:
+            src_out_dirs_map[src] = cell_out_dir[src]
+        unique_src_outs = set(src_out_dirs_map.values())
+
+        if len(unique_src_outs) == 1 and len(active_srcs) >= 4:
+            common_out = next(iter(unique_src_outs))
+            seg = _route_merge_chain(
+                active_srcs, dst, common_out, dst_in_dir, obs, bounds, layer
+            )
+            if not seg:
+                failures += 1
+            entities.extend(seg)
+            continue
+
+        if len(unique_src_outs) == 1:
+            common_out = next(iter(unique_src_outs))
+
+            if common_out in (N, S):
+                if len(active_srcs) <= 2:
+                    straight_src = min(active_srcs, key=lambda s: abs(s[0] - dst[0]))
+                else:
+                    sorted_srcs = sorted(active_srcs, key=lambda s: s[0])
+                    straight_src = sorted_srcs[len(sorted_srcs) // 2]
+            else:
+                if len(active_srcs) <= 2:
+                    straight_src = min(active_srcs, key=lambda s: abs(s[1] - dst[1]))
+                else:
+                    sorted_srcs = sorted(active_srcs, key=lambda s: s[1])
+                    straight_src = sorted_srcs[len(sorted_srcs) // 2]
+
+            merger_pos = (
+                straight_src[0] + common_out[0],
+                straight_src[1] + common_out[1],
+            )
+
+            merge_ins: set[tuple[int, int]] = {_neg(common_out)}
+
+            turned_approaches: dict[tuple[int, int], tuple[int, int]] = {}
+            for src in active_srcs:
+                if src == straight_src:
+                    continue
+                if common_out in (N, S):
+                    approach = W if src[0] < merger_pos[0] else E
+                else:
+                    approach = S if src[1] < merger_pos[1] else N
+                merge_ins.add(approach)
+                turned_approaches[src] = approach
+
+            merger_type, merger_r = _belt_for_cell(
+                frozenset(merge_ins), frozenset({common_out})
+            )
+            entities.append(
+                Entity(
+                    x=merger_pos[0], y=merger_pos[1],
+                    type=merger_type, rotation=merger_r, layer=layer,
+                )
+            )
+            obs.add(merger_pos)
+
+            for src, approach_dir in turned_approaches.items():
+                path_entities = route_astar(
+                    src, merger_pos, common_out, approach_dir,
+                    obstacles=obs, layer=layer, bounds=bounds,
+                )
+                if not path_entities:
+                    failures += 1
+                for e in path_entities:
+                    obs.add((e.x, e.y))
+                entities.extend(path_entities)
+
+            merger_end = (merger_pos[0] + common_out[0], merger_pos[1] + common_out[1])
+            if merger_end != dst:
+                path_entities = route_astar(
+                    merger_pos, dst, common_out, dst_in_dir,
+                    obstacles=obs, layer=layer, bounds=bounds,
+                )
+                if not path_entities:
+                    failures += 1
+                for e in path_entities:
+                    obs.add((e.x, e.y))
+                entities.extend(path_entities)
+
+        else:
+            merge_pos = (dst[0] + dst_in_dir[0], dst[1] + dst_in_dir[1])
+
+            merge_ins_mixed: set[tuple[int, int]] = set()
+            for src in active_srcs:
+                dx = src[0] - merge_pos[0]
+                dy = src[1] - merge_pos[1]
+                if abs(dx) >= abs(dy):
+                    in_d = E if dx > 0 else W
+                else:
+                    in_d = N if dy > 0 else S
+                merge_ins_mixed.add(in_d)
+
+            merge_out = _neg(dst_in_dir)
+            merger_type, merger_r = _belt_for_cell(
+                frozenset(merge_ins_mixed), frozenset({merge_out})
+            )
+            entities.append(
+                Entity(
+                    x=merge_pos[0], y=merge_pos[1],
+                    type=merger_type, rotation=merger_r, layer=layer,
+                )
+            )
+            obs.add(merge_pos)
+
+            for src in active_srcs:
+                src_out_dir = src_out_dirs_map[src]
+                dx = merge_pos[0] - src[0]
+                dy = merge_pos[1] - src[1]
+                if abs(dx) >= abs(dy):
+                    approach_dir = W if dx < 0 else E
+                else:
+                    approach_dir = S if dy < 0 else N
+
+                path_entities = route_astar(
+                    src, merge_pos, src_out_dir, approach_dir,
+                    obstacles=obs, layer=layer, bounds=bounds,
+                )
+                if not path_entities:
+                    failures += 1
+                for e in path_entities:
+                    obs.add((e.x, e.y))
+                entities.extend(path_entities)
+
+    return entities, fanin_processed, failures
+
+
 def _perp_reach(
     anchor: tuple[int, int],
     peers: list[tuple[int, int]],
@@ -1295,153 +1449,39 @@ def reroute_with_junctions(stripped: Blueprint, netlist: lift.Netlist, layer: in
                     obstacles.add((e.x, e.y))
                 routed_entities.extend(path_entities)
 
-    # Process fan-in groups (N→1)
-    fanin_processed: set[tuple[int, int]] = set()
+    # Process fan-in groups (N→1) with retry on failure.
+    # Collect groups: each is (dst, active_sources).
+    fanin_groups_list: list[tuple[tuple[int, int], list[tuple[int, int]]]] = []
     for dst, srcs in incoming.items():
         if len(srcs) <= 1:
             continue
-        fanin_processed.add(dst)
-        dst_in_dir = cell_in_dir[dst]
-
-        # Get output directions for all sources (excluding fanout-processed)
         active_srcs = [s for s in srcs if s not in fanout_processed]
-        if not active_srcs:
-            continue
+        if active_srcs:
+            fanin_groups_list.append((dst, active_srcs))
 
-        src_out_dirs_map: dict[tuple[int, int], tuple[int, int]] = {}
-        for src in active_srcs:
-            src_out_dirs_map[src] = cell_out_dir[src]
-        unique_src_outs = set(src_out_dirs_map.values())
+    fi_ents, fanin_processed, fi_fails = _route_fanin_pass(
+        fanin_groups_list, cell_in_dir, cell_out_dir, obstacles, bounds, layer
+    )
 
-        if len(unique_src_outs) == 1 and len(active_srcs) >= 4:
-            # Too many inputs for one merger cell (≤3 legs): chain mergers.
-            common_out = next(iter(unique_src_outs))
-            routed_entities.extend(
-                _route_merge_chain(
-                    active_srcs, dst, common_out, dst_in_dir, obstacles, bounds, layer
-                )
-            )
-            continue
+    if fi_fails > 0:
+        # Retry with distance-sorted order (longest-range groups first).
+        sorted_groups = sorted(
+            fanin_groups_list,
+            key=lambda g: max(
+                abs(s[0] - g[0][0]) + abs(s[1] - g[0][1]) for s in g[1]
+            ),
+            reverse=True,
+        )
+        fi_ents2, fi_proc2, fi_fails2 = _route_fanin_pass(
+            sorted_groups, cell_in_dir, cell_out_dir, obstacles, bounds, layer
+        )
+        if fi_fails2 < fi_fails:
+            fi_ents = fi_ents2
+            fanin_processed = fi_proc2
 
-        if len(unique_src_outs) == 1:
-            # Same-direction sources: place merger near the source cluster.
-            # One source feeds straight into the merger; others turn sideways.
-            common_out = next(iter(unique_src_outs))
-
-            # For 2-way fans: pick source closest to dst on the perpendicular
-            # axis (keeps trunk along the flow axis).
-            # For 3+ fans: pick the median so branches spread to both sides.
-            if common_out in (N, S):
-                if len(active_srcs) <= 2:
-                    straight_src = min(active_srcs, key=lambda s: abs(s[0] - dst[0]))
-                else:
-                    sorted_srcs = sorted(active_srcs, key=lambda s: s[0])
-                    straight_src = sorted_srcs[len(sorted_srcs) // 2]
-            else:
-                if len(active_srcs) <= 2:
-                    straight_src = min(active_srcs, key=lambda s: abs(s[1] - dst[1]))
-                else:
-                    sorted_srcs = sorted(active_srcs, key=lambda s: s[1])
-                    straight_src = sorted_srcs[len(sorted_srcs) // 2]
-
-            # Merger one cell from straight source in its output direction
-            merger_pos = (
-                straight_src[0] + common_out[0],
-                straight_src[1] + common_out[1],
-            )
-
-            # Straight source enters from opposite of output direction
-            merge_ins: set[tuple[int, int]] = {_neg(common_out)}
-
-            # Turned sources approach from perpendicular (the side they're on)
-            turned_approaches: dict[tuple[int, int], tuple[int, int]] = {}
-            for src in active_srcs:
-                if src == straight_src:
-                    continue
-                # Direction the merger accepts this source from: the side of the
-                # merger that the source is on
-                if common_out in (N, S):
-                    approach = W if src[0] < merger_pos[0] else E
-                else:
-                    approach = S if src[1] < merger_pos[1] else N
-                merge_ins.add(approach)
-                turned_approaches[src] = approach
-
-            # Merger outputs in the common direction (toward dst)
-            merger_type, merger_r = _belt_for_cell(
-                frozenset(merge_ins), frozenset({common_out})
-            )
-            routed_entities.append(
-                Entity(
-                    x=merger_pos[0], y=merger_pos[1],
-                    type=merger_type, rotation=merger_r, layer=layer,
-                )
-            )
-            obstacles.add(merger_pos)
-
-            # Route each turned source to the merger
-            for src, approach_dir in turned_approaches.items():
-                path_entities = route_astar(
-                    src, merger_pos, common_out, approach_dir,
-                    obstacles=obstacles, layer=layer, bounds=bounds,
-                )
-                for e in path_entities:
-                    obstacles.add((e.x, e.y))
-                routed_entities.extend(path_entities)
-
-            # Route merger to destination (skip if adjacent).
-            merger_end = (merger_pos[0] + common_out[0], merger_pos[1] + common_out[1])
-            if merger_end != dst:
-                path_entities = route_astar(
-                    merger_pos, dst, common_out, dst_in_dir,
-                    obstacles=obstacles, layer=layer, bounds=bounds,
-                )
-                for e in path_entities:
-                    obstacles.add((e.x, e.y))
-                routed_entities.extend(path_entities)
-
-        else:
-            # Different-direction sources: place merger near destination
-            merge_pos = (dst[0] + dst_in_dir[0], dst[1] + dst_in_dir[1])
-
-            merge_ins_mixed: set[tuple[int, int]] = set()
-            for src in active_srcs:
-                dx = src[0] - merge_pos[0]
-                dy = src[1] - merge_pos[1]
-                if abs(dx) >= abs(dy):
-                    in_d = E if dx > 0 else W
-                else:
-                    in_d = N if dy > 0 else S
-                merge_ins_mixed.add(in_d)
-
-            merge_out = _neg(dst_in_dir)
-            merger_type, merger_r = _belt_for_cell(
-                frozenset(merge_ins_mixed), frozenset({merge_out})
-            )
-            routed_entities.append(
-                Entity(
-                    x=merge_pos[0], y=merge_pos[1],
-                    type=merger_type, rotation=merger_r, layer=layer,
-                )
-            )
-            obstacles.add(merge_pos)
-
-            for src in active_srcs:
-                src_out_dir = src_out_dirs_map[src]
-                dx = merge_pos[0] - src[0]
-                dy = merge_pos[1] - src[1]
-                if abs(dx) >= abs(dy):
-                    approach_dir = W if dx < 0 else E
-                else:
-                    approach_dir = S if dy < 0 else N
-
-                path_entities = route_astar(
-                    src, merge_pos, src_out_dir, approach_dir,
-                    obstacles=obstacles, layer=layer, bounds=bounds,
-                )
-                for e in path_entities:
-                    obstacles.add((e.x, e.y))
-                routed_entities.extend(path_entities)
+    routed_entities.extend(fi_ents)
+    for e in fi_ents:
+        obstacles.add((e.x, e.y))
 
     # Route simple 1→1 port-edges (not part of fanout/fanin groups)
     for src, dst in cell_edges:
