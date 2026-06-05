@@ -250,3 +250,96 @@ class TestSeriesChain:
 
         expected = Shape.parse("SuWuRuCu")
         assert all(s == expected for s in outputs.values())
+
+
+class TestMultiCellPlacement:
+    """Multi-cell machines (swappers, cutters) in the placer."""
+
+    def _swapper_abstract(self) -> dict:
+        """Build an abstract netlist for 2 swappers on Foundation_1x1.
+
+        Topology: 4 sources, 2 swappers (each 2-in/2-out), 4 sinks.
+        Pair 0: src0,src1 → swap0 → sink0,sink1
+        Pair 1: src2,src3 → swap1 → sink2,sink3
+        """
+        nodes = [
+            {"id": "src0", "type": "BeltPortReceiverInternalVariant", "kind": "src"},
+            {"id": "src1", "type": "BeltPortReceiverInternalVariant", "kind": "src"},
+            {"id": "src2", "type": "BeltPortReceiverInternalVariant", "kind": "src"},
+            {"id": "src3", "type": "BeltPortReceiverInternalVariant", "kind": "src"},
+            {"id": "swap0", "type": "SwapperDefaultInternalVariant", "kind": "machine"},
+            {"id": "swap1", "type": "SwapperDefaultInternalVariant", "kind": "machine"},
+            {"id": "sink0", "type": "BeltPortSenderInternalVariant", "kind": "sink"},
+            {"id": "sink1", "type": "BeltPortSenderInternalVariant", "kind": "sink"},
+            {"id": "sink2", "type": "BeltPortSenderInternalVariant", "kind": "sink"},
+            {"id": "sink3", "type": "BeltPortSenderInternalVariant", "kind": "sink"},
+        ]
+        edges = [
+            ("src0", "swap0"), ("src1", "swap0"),
+            ("swap0", "sink0"), ("swap0", "sink1"),
+            ("src2", "swap1"), ("src3", "swap1"),
+            ("swap1", "sink2"), ("swap1", "sink3"),
+        ]
+        return {"nodes": nodes, "edges": edges}
+
+    def test_swapper_placement_solves(self):
+        """CP-SAT can place 2 swappers without overlap."""
+        from shapez2_tools.place import place
+
+        abstract = self._swapper_abstract()
+        nl = place(abstract, "Foundation_1x1")
+
+        machines = {p: n for p, n in nl.nodes.items() if n.kind == "machine"}
+        assert len(machines) == 2
+        assert all("Swapper" in n.type for n in machines.values())
+
+    def test_swapper_second_cells_no_overlap(self):
+        """Second cells don't overlap anchors or each other."""
+        from shapez2_tools.place import place
+
+        abstract = self._swapper_abstract()
+        nl = place(abstract, "Foundation_1x1")
+
+        all_cells: list[tuple[int, int]] = []
+        for pos, node in nl.nodes.items():
+            fp = lift._machine_footprint(node.type, node.rotation)
+            for dx, dy in fp:
+                all_cells.append((pos[0] + dx, pos[1] + dy))
+        assert len(all_cells) == len(set(all_cells)), f"overlap: {all_cells}"
+
+    def test_swapper_lowered_validates(self):
+        """Lowered swapper blueprint passes physical validation."""
+        from shapez2_tools.synth import _lower
+
+        abstract = self._swapper_abstract()
+        bp = _lower(abstract, "Foundation_1x1")
+        errors = lift.validate(bp)
+        assert errors == []
+
+    def test_swapper_lowered_interprets(self):
+        """Lowered swapper produces diagonal shapes."""
+        from shapez2_tools import interpret
+        from shapez2_tools.synth import _lower
+
+        abstract = self._swapper_abstract()
+        bp = _lower(abstract, "Foundation_1x1")
+        nl = lift.trace_layer(bp, 0)
+
+        srcs = sorted(
+            [(p, n) for p, n in nl.nodes.items() if n.kind == "src"],
+            key=lambda pn: pn[0][0],
+        )
+        sinks = sorted(
+            [(p, n) for p, n in nl.nodes.items() if n.kind == "sink"],
+            key=lambda pn: pn[0][0],
+        )
+
+        north = Shape.parse("Ru----Ru")  # NE + NW
+        south = Shape.parse("--RuRu--")  # SE + SW
+        inputs = {}
+        for i, (pos, _) in enumerate(srcs):
+            inputs[pos] = north if i % 2 == 0 else south
+
+        outputs = interpret.interpret(nl, inputs)
+        out_shapes = {str(outputs[p]) for p, _ in sinks}
+        assert "Ru--Ru--" in out_shapes or "--Ru--Ru" in out_shapes

@@ -4,11 +4,16 @@ Given an abstract netlist (node types/kinds + edges, no coordinates) and a
 platform, assigns (x, y, rotation) to each node using constraint programming.
 Sources and sinks are fixed at platform-edge positions; machines are placed
 in the interior with no-overlap and wire-length minimization.
+
+Multi-cell machines (cutters, swappers) occupy a second cell whose position
+depends on rotation. The solver tracks both cells for overlap avoidance and
+bounds, and ``_build_netlist`` assigns port-level edges by proximity.
 """
 
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from pathlib import Path
 
 from ortools.sat.python import cp_model
@@ -22,6 +27,17 @@ def _load_platform(name: str) -> dict:
     with open(_DATA / "platforms.json") as f:
         platforms = json.load(f)
     return platforms[name]
+
+
+def _is_multi_cell(type_: str) -> bool:
+    return ("Cutter" in type_ and "Half" not in type_) or "Swapper" in type_
+
+
+def _second_cell_tables(type_: str) -> tuple[list[int], list[int]]:
+    """Offset (dx[R], dy[R]) for the second cell of a multi-cell machine."""
+    if "Mirrored" in type_:
+        return [0, -1, 0, 1], [1, 0, -1, 0]
+    return [0, 1, 0, -1], [-1, 0, 1, 0]
 
 
 def abstract_netlist(nl: lift.Netlist) -> dict:
@@ -102,33 +118,36 @@ def place(abstract: dict, platform: str) -> lift.Netlist:
     for sid, did in abstract["edges"]:
         edge_out.setdefault(sid, []).append(did)
 
-    def _trace_sink(src_id: str) -> str | None:
-        """Follow src → machines → sink, return the sink id."""
+    def _trace_all_sinks(src_id: str) -> list[str]:
+        """BFS from src through machines, return all reachable sink ids."""
         visited: set[str] = set()
         frontier = [src_id]
+        found: list[str] = []
         while frontier:
-            nid = frontier.pop()
+            nid = frontier.pop(0)
             if nid in visited:
                 continue
             visited.add(nid)
             n = node_by_id[nid]
             if n["kind"] == "sink":
-                return nid
+                found.append(nid)
+                continue
             for child in edge_out.get(nid, []):
                 frontier.append(child)
-        return None
+        return found
 
-    # Order sinks to match source x-ordering: leftmost source's sink gets
-    # the leftmost sink port, etc.
+    # Order sinks to match source x-ordering. For 1-in/1-out machines each
+    # source traces to exactly one sink. For multi-input machines (swapper)
+    # one source may reach multiple sinks; BFS visits them in edge order so
+    # the leftmost source's reachable sinks fill leftmost port slots first.
     ordered_sinks: list[str] = []
     src_by_x = sorted(sources, key=lambda s: src_positions[s["id"]][0])
     seen_sinks: set[str] = set()
     for src in src_by_x:
-        sink_id = _trace_sink(src["id"])
-        if sink_id and sink_id not in seen_sinks:
-            ordered_sinks.append(sink_id)
-            seen_sinks.add(sink_id)
-    # Add any sinks not reachable from a source (shouldn't happen normally).
+        for sink_id in _trace_all_sinks(src["id"]):
+            if sink_id not in seen_sinks:
+                ordered_sinks.append(sink_id)
+                seen_sinks.add(sink_id)
     for sink in sinks:
         if sink["id"] not in seen_sinks:
             ordered_sinks.append(sink["id"])
@@ -171,7 +190,7 @@ def place(abstract: dict, platform: str) -> lift.Netlist:
         m_y[mid] = model.new_int_var(machine_y_min, machine_y_max, f"y_{mid}")
         m_r[mid] = model.new_int_var(0, 3, f"r_{mid}")
 
-    # No overlap: all machine positions must be distinct.
+    # No overlap: all occupied cells must be distinct.
     # Encode as AllDifferent(x_i * H + y_i) where H > max y range.
     h = grid_h + 1
     flat_positions = []
@@ -180,7 +199,32 @@ def place(abstract: dict, platform: str) -> lift.Netlist:
         model.add(flat == m_x[mid] * h + m_y[mid])
         flat_positions.append(flat)
 
-    # Also exclude port positions from machine placement.
+    # Multi-cell machines: add second-cell position variables.
+    second_x: dict[str, cp_model.IntVar] = {}
+    second_y: dict[str, cp_model.IntVar] = {}
+    for m in machines:
+        mid = m["id"]
+        if not _is_multi_cell(m["type"]):
+            continue
+        dx_tab, dy_tab = _second_cell_tables(m["type"])
+
+        sdx = model.new_int_var(-1, 1, f"sdx_{mid}")
+        sdy = model.new_int_var(-1, 1, f"sdy_{mid}")
+        model.add_element(m_r[mid], dx_tab, sdx)
+        model.add_element(m_r[mid], dy_tab, sdy)
+
+        sx = model.new_int_var(x_min, x_max, f"sx_{mid}")
+        sy = model.new_int_var(y_min, y_max, f"sy_{mid}")
+        model.add(sx == m_x[mid] + sdx)
+        model.add(sy == m_y[mid] + sdy)
+        second_x[mid] = sx
+        second_y[mid] = sy
+
+        flat2 = model.new_int_var(0, grid_w * h + grid_h, f"flat2_{mid}")
+        model.add(flat2 == sx * h + sy)
+        flat_positions.append(flat2)
+
+    # Also exclude port positions from ALL occupied cells.
     for pos in list(src_positions.values()) + list(sink_positions.values()):
         fixed_flat = pos[0] * h + pos[1]
         for fp in flat_positions:
@@ -232,8 +276,6 @@ def place(abstract: dict, platform: str) -> lift.Netlist:
     # x-coordinates and the same y — the pattern the router's splitter/merger
     # heuristics expect. Between groups, x-ranges must not overlap so routes
     # don't cross through other groups' machines.
-    from collections import defaultdict
-
     fan_out_groups: defaultdict[str, list[str]] = defaultdict(list)
     fan_in_groups: defaultdict[str, list[str]] = defaultdict(list)
     for sid, did in abstract["edges"]:
@@ -313,6 +355,8 @@ def place(abstract: dict, platform: str) -> lift.Netlist:
         model.add(abs_dx + abs_dy >= 2)
 
     # Objective: minimize total wire length.
+    # For multi-cell machines, also add second-cell distances so the solver
+    # prefers placements where both cells are near connected nodes.
     total_wire = []
     for src_id, dst_id in abstract["edges"]:
         src_node = node_by_id[src_id]
@@ -329,6 +373,22 @@ def place(abstract: dict, platform: str) -> lift.Netlist:
         model.add_abs_equality(abs_dy, sy - dy)
         total_wire.append(abs_dx)
         total_wire.append(abs_dy)
+
+        if dst_id in second_x:
+            a2dx = model.new_int_var(0, grid_w, f"a2dx_in_{src_id}_{dst_id}")
+            a2dy = model.new_int_var(0, grid_h, f"a2dy_in_{src_id}_{dst_id}")
+            model.add_abs_equality(a2dx, sx - second_x[dst_id])
+            model.add_abs_equality(a2dy, sy - second_y[dst_id])
+            total_wire.append(a2dx)
+            total_wire.append(a2dy)
+
+        if src_id in second_x:
+            a2dx = model.new_int_var(0, grid_w, f"a2dx_out_{src_id}_{dst_id}")
+            a2dy = model.new_int_var(0, grid_h, f"a2dy_out_{src_id}_{dst_id}")
+            model.add_abs_equality(a2dx, second_x[src_id] - dx)
+            model.add_abs_equality(a2dy, second_y[src_id] - dy)
+            total_wire.append(a2dx)
+            total_wire.append(a2dy)
 
     # Y-stagger: the y-component of wire length is invariant
     # (|src_y - y| + |y - sink_y| = const), so the solver is indifferent
@@ -435,6 +495,29 @@ def _node_y(nid, node, src_pos, sink_pos, m_y, model):
     return m_y[nid]
 
 
+def _assign_ports(
+    neighbor_positions: list[tuple[int, int]],
+    port_cells: list[tuple[int, int]],
+) -> list[int]:
+    """Assign neighbors to port cells by nearest-neighbor (greedy).
+
+    Returns result[i] = index of the port cell assigned to neighbor i.
+    """
+    assigned: list[int | None] = [None] * len(neighbor_positions)
+    used: set[int] = set()
+    pairs = []
+    for i, np in enumerate(neighbor_positions):
+        for j, pc in enumerate(port_cells):
+            d = abs(np[0] - pc[0]) + abs(np[1] - pc[1])
+            pairs.append((d, i, j))
+    pairs.sort()
+    for _, i, j in pairs:
+        if assigned[i] is None and j not in used:
+            assigned[i] = j
+            used.add(j)
+    return assigned  # type: ignore[return-value]
+
+
 def _build_netlist(
     abstract: dict,
     src_positions: dict[str, tuple[int, int]],
@@ -473,9 +556,67 @@ def _build_netlist(
             kind="machine", rotation=r,
         )
 
-    edges = []
-    for src_id, dst_id in abstract["edges"]:
-        edges.append((pos_for_id[src_id], pos_for_id[dst_id]))
+    # Build port cells for multi-cell machines.
+    machine_in_cells: dict[str, list[tuple[int, int]]] = {}
+    machine_out_cells: dict[str, list[tuple[int, int]]] = {}
+    for nid, (x, y, r) in machine_positions.items():
+        n = node_by_id[nid]
+        fp = lift._machine_footprint(n["type"], r)
+        ins = [(x + dx, y + dy) for (dx, dy), (i, _o) in fp.items() if i]
+        outs = [(x + dx, y + dy) for (dx, dy), (_i, o) in fp.items() if o]
+        machine_in_cells[nid] = ins
+        machine_out_cells[nid] = outs
 
-    # port_edges = edges for single-cell nodes (anchor == cell).
-    return lift.Netlist(nodes=nodes, edges=edges, port_edges=list(edges))
+    # Group abstract edges by machine for port assignment.
+    edges_into: defaultdict[str, list[str]] = defaultdict(list)
+    edges_from: defaultdict[str, list[str]] = defaultdict(list)
+    for sid, did in abstract["edges"]:
+        if node_by_id[did]["kind"] == "machine":
+            edges_into[did].append(sid)
+        if node_by_id[sid]["kind"] == "machine":
+            edges_from[sid].append(did)
+
+    # Pre-compute port assignments for multi-cell machines.
+    in_port_map: dict[str, dict[str, int]] = {}
+    out_port_map: dict[str, dict[str, int]] = {}
+    for nid in machine_positions:
+        in_cells = machine_in_cells[nid]
+        if len(in_cells) > 1:
+            srcs = edges_into[nid]
+            src_pos = [pos_for_id[s] for s in srcs]
+            assignment = _assign_ports(src_pos, in_cells)
+            in_port_map[nid] = dict(zip(srcs, assignment))
+
+        out_cells = machine_out_cells[nid]
+        if len(out_cells) > 1:
+            dsts = edges_from[nid]
+            dst_pos = [pos_for_id[d] for d in dsts]
+            assignment = _assign_ports(dst_pos, out_cells)
+            out_port_map[nid] = dict(zip(dsts, assignment))
+
+    # Build edges (anchor-level) and port_edges (cell-level).
+    edges: list[tuple[tuple[int, int], tuple[int, int]]] = []
+    port_edges: list[tuple[tuple[int, int], tuple[int, int]]] = []
+
+    for src_id, dst_id in abstract["edges"]:
+        src_anchor = pos_for_id[src_id]
+        dst_anchor = pos_for_id[dst_id]
+        edges.append((src_anchor, dst_anchor))
+
+        # Source cell: anchor by default, or assigned output port.
+        src_cell = src_anchor
+        if src_id in out_port_map:
+            idx = out_port_map[src_id][dst_id]
+            src_cell = machine_out_cells[src_id][idx]
+
+        # Dest cell: anchor by default, or assigned input port.
+        dst_cell = dst_anchor
+        if dst_id in in_port_map:
+            idx = in_port_map[dst_id][src_id]
+            dst_cell = machine_in_cells[dst_id][idx]
+
+        port_edges.append((src_cell, dst_cell))
+
+    return lift.Netlist(
+        nodes=nodes, edges=edges, port_edges=port_edges
+    )

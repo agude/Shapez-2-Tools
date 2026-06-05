@@ -1,6 +1,6 @@
 # Blueprint Synthesis — Plan
 
-**Status:** Draft, updated 2026-06-04. **WP-E synthesis landed.**
+**Status:** Draft, updated 2026-06-05. **Multi-cell placement (swappers) landed.**
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -14,9 +14,9 @@ regression floor. The hard target is intra-platform **place-and-route**.
 
 ---
 
-## 0. Status & handoff (2026-06-04)
+## 0. Status & handoff (2026-06-05)
 
-**Built and green** (138 tests pass, 3 xfail, `just test`, ruff clean):
+**Built and green** (142 tests pass, 3 xfail, `just test`, ruff clean):
 - `blueprint.py` — faithful `.spz2bp` codec.
 - `generator.py` — tile-replication generator: builds the rotator family
   (180/cw/ccw × 1×1/1×4) from one lifted tile. `Entity`, lift/stamp/build,
@@ -72,19 +72,20 @@ regression floor. The hard target is intra-platform **place-and-route**.
   **`route_astar` overlap fix**: the `start == end` shortcut now checks the
   obstacle set before placing a belt, preventing entity overlaps that previously
   corrupted the lift.
-- `place.py` — CP-SAT placement (WP-D done for rotator quarter). OR-Tools CP-SAT solver
-  assigns `(x, y, rotation)` to machines given an abstract netlist (graph
-  structure only, no coordinates) and a platform. Constraints: no overlap,
-  interior bounds, rotation facing toward connected nodes, fan-out groups at
-  same y / adjacent x / ordered by source x, sink port ordering matched to
-  source flow, **2-cell port-row margin** (prevents splitters landing on the
-  source row), **2-cell inter-group x-gap** (prevents trunk/branch collisions
-  between adjacent fan-out groups), **y-stagger** (edge groups in x-order placed
-  one row closer to sources than inner neighbours — gives fan-out trunks
-  vertical breathing room; the y-component of wire length is invariant so this
-  is a pure tiebreaker, ≤ 1 row apart). Routes **16/16** edges on the solver's
-  placement — the rotator quarter pipeline runs end-to-end (abstract → place →
-  route → lift ≅ original).
+- `place.py` — CP-SAT placement (WP-D done for rotator quarter + multi-cell
+  machines). OR-Tools CP-SAT solver assigns `(x, y, rotation)` to machines given
+  an abstract netlist (graph structure only, no coordinates) and a platform.
+  Constraints: no overlap, interior bounds, rotation facing toward connected
+  nodes, fan-out groups at same y / adjacent x / ordered by source x, sink port
+  ordering matched to source flow, **2-cell port-row margin**, **2-cell
+  inter-group x-gap**, **y-stagger** (edge groups in x-order placed one row
+  closer to sources than inner neighbours, ≤ 1 row apart). **Multi-cell
+  machines** (swapper, cutter): second-cell position via `add_element` on
+  rotation-indexed offset tables; both cells in AllDifferent + bounds; second-cell
+  wire length in objective (keeps both cells near connected ports); proximity-based
+  port assignment in `_build_netlist` (`_assign_ports`); BFS-based sink ordering
+  (`_trace_all_sinks`) handles multi-input machines correctly. Routes **16/16**
+  rotator edges and **8/8** swapper edges (4 srcs → 2 swappers → 4 sinks).
   `abstract_netlist(nl)` strips coordinates from a lifted netlist for the solver.
   **The placer is scaffolding** — machine placement is often a human design
   decision; the product is the router. The placer validates the full pipeline
@@ -97,7 +98,9 @@ regression floor. The hard target is intra-platform **place-and-route**.
   blueprint). Verified: single-op rotate-180/cw/ccw on 1×1 quarter (isomorphic
   to oracles, 16/16 edges); half-destroy (validates + interprets at throughput=2);
   series chains (2×CW = 180°, 3×CCW = CW, both validate + interpret correctly).
-  **14 synth tests green, 1 xfail (138 total, 3 xfail).**
+  Multi-cell: 2-swapper abstract netlists lower to valid blueprints that interpret
+  correctly (placement + routing + port assignment verified end-to-end).
+  **18 synth tests green, 1 xfail (142 total, 3 xfail).**
 - CLI: `gen`, `diff`, `show`, `lift`, `viz`, `place`, `synth`. `synth` synthesizes
   a blueprint from a spec (e.g. `synth rotate_180` or `synth rotate_cw,rotate_cw`).
   `viz` renders a blueprint as HTML/SVG (belts as directional lines,
@@ -179,11 +182,12 @@ throughput=2). CLI: `just run synth rotate_180 -o out.spz2bp`.
 - The tight 2D merger packing from WP-C (cutter/swapper xfails) — the placer
   must reserve routing channels for dense fans. The 1→3 fan-out limitation for
   the half-destroyer is the same underlying issue.
-- The diagonal extractor (north-star demo) needs a **multi-op spec** — the
-  current `Spec` handles single-op platforms only. The diagonal extractor
-  requires rotators + swappers in a specific topology, not a uniform fan-out
-  pattern. Extending the spec language to express operation graphs is the next
-  step.
+- **The diagonal extractor** (north-star demo): multi-cell placement is now
+  solved. The remaining step is building the abstract netlist for the diagonal
+  trick topology (4 input pairs → 4 swappers → 4 diagonal output pairs) and
+  lowering it. The `_lower` function already handles arbitrary abstract
+  netlists including multi-cell machines; the gap is expressing the specific
+  input-pattern topology (north-only + south-only feeds per swapper pair).
 - **Machine placement is often a human design decision; the product is the
   router.** The placer validates the pipeline and will improve as the router
   matures.
@@ -547,19 +551,19 @@ widens the spec space but blocks nothing on the diagonal extractor.
   the machines. **Note:** machine placement is often a human design decision — the
   user places machines; the tool routes belts. The placer validates the full
   pipeline and will become smarter as the router matures.
-- **Status: DONE (rotator quarter 16/16).** CP-SAT placer in `place.py`.
-  `abstract_netlist` strips coordinates; `place()` assigns `(x, y, r)` via
-  OR-Tools. Constraints: no overlap, interior bounds, rotation facing toward
-  connected nodes (element constraint on direction dot-product), fan-out groups
-  at same y / adjacent x / ordered by source x, sink ports ordered to match
-  source flow, **2-cell port-row margin** (prevents splitters on the source row),
-  **2-cell inter-group x-gap**, **y-stagger** (edge groups in x-order placed one
-  row closer to sources than inner neighbours, ≤ 1 row apart — the y-component
-  of wire length is invariant so this is a pure tiebreaker that produces the
-  oracle's staggered two-row pattern; without it the solver places all machines
-  flat on one row and fan-out trunks collide at shared cells). Routes **16/16**
-  edges — the full abstract→place→route→lift pipeline is isomorphic to the
-  original netlist.
+- **Status: DONE (rotator quarter 16/16, swapper 8/8).** CP-SAT placer in
+  `place.py`. `abstract_netlist` strips coordinates; `place()` assigns
+  `(x, y, r)` via OR-Tools. Constraints: no overlap, interior bounds, rotation
+  facing toward connected nodes (element constraint on direction dot-product),
+  fan-out groups at same y / adjacent x / ordered by source x, sink ports
+  ordered to match source flow, **2-cell port-row margin**, **2-cell inter-group
+  x-gap**, **y-stagger** (edge groups placed one row closer to sources than inner
+  neighbours). **Multi-cell machines** (swapper, cutter): second-cell position
+  via `add_element` on rotation-indexed offset tables; both cells in
+  AllDifferent + bounds; second-cell wire length in objective (keeps both cells
+  near connected ports); proximity-based port assignment in `_build_netlist`
+  (`_assign_ports`); BFS-based sink ordering (`_trace_all_sinks`) handles
+  multi-input machines. Routes **16/16** rotator and **8/8** swapper edges.
   **Key insight:** the y-component of wire length is invariant: for every edge,
   `|src_y - machine_y| + |machine_y - sink_y| = const` regardless of machine y.
   The solver was indifferent among y-assignments and happened to find the flat
@@ -575,12 +579,17 @@ widens the spec space but blocks nothing on the diagonal extractor.
   - ✓ `test_place_single_rotator` — feasible placement, no overlap, interior.
   - ✓ `test_place_two_rotators_no_overlap` — AllDifferent stress.
   - ✓ `test_place_then_route_rotator_quarter` — 16/16 edges, isomorphic.
+  - ✓ `test_swapper_placement_solves` — CP-SAT places 2 swappers.
+  - ✓ `test_swapper_second_cells_no_overlap` — all footprint cells distinct.
+  - ✓ `test_swapper_lowered_validates` — lowered blueprint passes validation.
+  - ✓ `test_swapper_lowered_interprets` — diagonal shapes verified.
   - TODO: `test_placement_compact` (bounding box / belt count within `k×` oracle).
-- **Implementation:** OR-Tools CP-SAT — vars = `(cell, rotation)` per machine;
-  constraints = no overlap, on-grid, rotation facing, fan-group structure,
-  source/sink ordering, port-row margin 2, inter-group gap 2, y-stagger
-  (edge groups > inner neighbours, ≤ 1 apart); objective = minimize total
-  Manhattan wire length.
+- **Implementation:** OR-Tools CP-SAT — vars = `(cell, rotation)` per machine
+  + `(second_x, second_y)` per multi-cell machine (element constraints on R);
+  constraints = AllDifferent over all cells (anchor + second), on-grid, rotation
+  facing, fan-group structure, source/sink ordering, port-row margin 2,
+  inter-group gap 2, y-stagger; objective = minimize total Manhattan wire length
+  including second-cell distances.
 - **Done when:** place+route reproduces the quarter and full belt structurally;
   compactness tracked.
 
@@ -607,10 +616,14 @@ widens the spec space but blocks nothing on the diagonal extractor.
   - ✓ `test_series_cw_cw_equals_180` — 2×CW in series = 180° (validate + interpret).
   - ✓ `test_series_ccw_ccw_ccw_equals_cw` — 3×CCW = CW (validate + interpret).
   - ✗ `test_series_with_throughput` — xfail (16 machines on 1×1 too dense).
-- **Remaining:** the diagonal extractor requires a **multi-op graph spec** (not
-  expressible as a lane pipeline) and **multi-cell placement** (swapper = 2-cell
-  machine). The `_lower` function already accepts arbitrary abstract netlists,
-  so the spec compiler is the gap — not the pipeline.
+  - ✓ `test_swapper_placement_solves` — 2 swappers placed by CP-SAT.
+  - ✓ `test_swapper_second_cells_no_overlap` — all footprint cells distinct.
+  - ✓ `test_swapper_lowered_validates` — lowered swapper blueprint clean.
+  - ✓ `test_swapper_lowered_interprets` — diagonal shapes from north/south inputs.
+- **Remaining:** the diagonal extractor requires a hand-built abstract netlist
+  (not expressible as the uniform lane pipeline in `Spec`). Multi-cell placement
+  is solved; the gap is building and lowering the specific topology (4 pairs of
+  north/south sources → 4 swappers → 4 pairs of diagonal sinks).
 
 #### WP-F — Stacker cross-floor lift *(breadth track)*
 - **Goal:** lift inter-floor machines; complete the table for stacking specs.
