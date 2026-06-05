@@ -7,6 +7,9 @@ or a tuple of operations forming a **series chain**: each lane's source feeds
 ``throughput`` parallel paths, each path passing through every stage in order,
 and the last stage fans in to the lane's sink.
 
+``DiagonalSpec`` synthesizes the **diagonal trick** topology: paired
+north/south sources feed swappers that extract shape diagonals.
+
 Examples::
 
     Spec("rotate_180", "Foundation_1x1", throughput=2)
@@ -14,6 +17,9 @@ Examples::
 
     Spec(("rotate_cw", "rotate_cw"), "Foundation_1x1", throughput=1)
         # 4 lanes × 1 path × 2 series machines = rotate-180 via two CW.
+
+    DiagonalSpec(pairs=2, platform="Foundation_1x1")
+        # 2 swapper pairs: 4 sources, 2 swappers, 4 sinks.
 """
 
 from __future__ import annotations
@@ -35,6 +41,8 @@ OP_TYPES: dict[str, str] = {
     "rotate_ccw": "RotatorOneQuadCCWInternalVariant",
     "half_destroy": "CutterHalfInternalVariant",
 }
+
+SWAPPER_TYPE = "HalvesSwapperDefaultInternalVariant"
 
 SRC_TYPE = "BeltPortReceiverInternalVariant"
 SINK_TYPE = "BeltPortSenderInternalVariant"
@@ -82,8 +90,8 @@ def netlist_from_spec(spec: Spec) -> dict:
     for lane in range(spec.lanes):
         src_id = f"src{lane}"
         sink_id = f"sink{lane}"
-        nodes.append({"id": src_id, "type": SRC_TYPE, "kind": "src"})
-        nodes.append({"id": sink_id, "type": SINK_TYPE, "kind": "sink"})
+        nodes.append({"id": src_id, "type": SRC_TYPE, "kind": "platform_in"})
+        nodes.append({"id": sink_id, "type": SINK_TYPE, "kind": "platform_out"})
 
         for path in range(spec.throughput):
             prev_id = src_id
@@ -95,6 +103,73 @@ def netlist_from_spec(spec: Spec) -> dict:
             edges.append((prev_id, sink_id))
 
     return {"nodes": nodes, "edges": edges}
+
+
+@dataclass(frozen=True)
+class DiagonalSpec:
+    """Diagonal trick: paired north/south sources → swappers → diagonal outputs.
+
+    Each swapper pair has two sources (north-feed and south-feed) and two
+    sinks (upper-left diagonal and upper-right diagonal).  ``pairs`` must
+    not exceed half the platform's port count.
+    """
+
+    pairs: int
+    platform: str
+
+    @property
+    def ports_needed(self) -> int:
+        return self.pairs * 2
+
+    def validate(self) -> None:
+        with open(_DATA / "platforms.json") as f:
+            platforms = json.load(f)
+        ports = platforms[self.platform]["ports_per_layer"]
+        if self.ports_needed > ports:
+            raise ValueError(
+                f"{self.pairs} pairs need {self.ports_needed} ports, "
+                f"but {self.platform} has {ports}"
+            )
+
+
+def netlist_from_diagonal_spec(spec: DiagonalSpec) -> dict:
+    """Build an abstract netlist for the diagonal trick.
+
+    Topology per pair i:
+      src_{i}_n, src_{i}_s → swap_{i} → sink_{i}_a, sink_{i}_b
+
+    Sources are interleaved (n, s, n, s, …) so adjacent port slots
+    feed the same swapper — the placer groups them by proximity.
+    Sinks follow the same interleaving.
+    """
+    spec.validate()
+    nodes: list[dict] = []
+    edges: list[tuple[str, str]] = []
+
+    for i in range(spec.pairs):
+        src_n = f"src{i}_n"
+        src_s = f"src{i}_s"
+        swap = f"swap{i}"
+        sink_a = f"sink{i}_a"
+        sink_b = f"sink{i}_b"
+
+        nodes.append({"id": src_n, "type": SRC_TYPE, "kind": "platform_in"})
+        nodes.append({"id": src_s, "type": SRC_TYPE, "kind": "platform_in"})
+        nodes.append({"id": swap, "type": SWAPPER_TYPE, "kind": "machine"})
+        nodes.append({"id": sink_a, "type": SINK_TYPE, "kind": "platform_out"})
+        nodes.append({"id": sink_b, "type": SINK_TYPE, "kind": "platform_out"})
+
+        edges.append((src_n, swap))
+        edges.append((src_s, swap))
+        edges.append((swap, sink_a))
+        edges.append((swap, sink_b))
+
+    return {"nodes": nodes, "edges": edges}
+
+
+def synthesize_diagonal(spec: DiagonalSpec, layer: int = 0) -> Blueprint:
+    """Synthesize a diagonal-trick blueprint from a spec."""
+    return _lower(netlist_from_diagonal_spec(spec), spec.platform, layer)
 
 
 def _lower(abstract: dict, platform: str, layer: int = 0) -> Blueprint:

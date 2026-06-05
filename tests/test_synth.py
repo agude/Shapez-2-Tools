@@ -5,7 +5,14 @@ import pytest
 from shapez2_tools import lift
 from shapez2_tools.blueprint import Blueprint
 from shapez2_tools.shapes import Shape
-from shapez2_tools.synth import Spec, netlist_from_spec, synthesize
+from shapez2_tools.synth import (
+    DiagonalSpec,
+    Spec,
+    netlist_from_diagonal_spec,
+    netlist_from_spec,
+    synthesize,
+    synthesize_diagonal,
+)
 from tests.conftest import REF
 
 
@@ -21,8 +28,8 @@ class TestNetlistFromSpec:
         for n in abstract["nodes"]:
             by_kind.setdefault(n["kind"], []).append(n)
 
-        assert len(by_kind["src"]) == 4
-        assert len(by_kind["sink"]) == 4
+        assert len(by_kind["platform_in"]) == 4
+        assert len(by_kind["platform_out"]) == 4
         assert len(by_kind["machine"]) == 8
         assert len(abstract["edges"]) == 16
 
@@ -44,9 +51,9 @@ class TestNetlistFromSpec:
             in_edges.setdefault(d, []).append(s)
 
         for n in abstract["nodes"]:
-            if n["kind"] == "src":
+            if n["kind"] == "platform_in":
                 assert len(out_edges[n["id"]]) == 2
-            elif n["kind"] == "sink":
+            elif n["kind"] == "platform_out":
                 assert len(in_edges[n["id"]]) == 2
             elif n["kind"] == "machine":
                 assert len(out_edges[n["id"]]) == 1
@@ -65,8 +72,8 @@ class TestNetlistFromSpec:
         for n in abstract["nodes"]:
             by_kind.setdefault(n["kind"], []).append(n)
 
-        assert len(by_kind["src"]) == 4
-        assert len(by_kind["sink"]) == 4
+        assert len(by_kind["platform_in"]) == 4
+        assert len(by_kind["platform_out"]) == 4
         assert len(by_kind["machine"]) == 8
         # 4 lanes × (src→s0 + s0→s1 + s1→sink) = 12 edges
         assert len(abstract["edges"]) == 12
@@ -87,9 +94,9 @@ class TestNetlistFromSpec:
             in_edges.setdefault(d, []).append(s)
 
         for n in abstract["nodes"]:
-            if n["kind"] == "src":
+            if n["kind"] == "platform_in":
                 assert len(out_edges[n["id"]]) == 1
-            elif n["kind"] == "sink":
+            elif n["kind"] == "platform_out":
                 assert len(in_edges[n["id"]]) == 1
             elif n["kind"] == "machine":
                 assert len(out_edges[n["id"]]) == 1
@@ -108,8 +115,8 @@ class TestNetlistFromSpec:
         for n in abstract["nodes"]:
             by_kind.setdefault(n["kind"], []).append(n)
 
-        assert len(by_kind["src"]) == 4
-        assert len(by_kind["sink"]) == 4
+        assert len(by_kind["platform_in"]) == 4
+        assert len(by_kind["platform_out"]) == 4
         # 4 lanes × 2 paths × 2 stages = 16 machines
         assert len(by_kind["machine"]) == 16
         # 4 lanes × 2 paths × (src→s0 + s0→s1 + s1→sink) = 24 edges
@@ -144,7 +151,9 @@ class TestSynthesize:
         result = synthesize(spec)
         nl = lift.trace_layer(result, 0)
 
-        inputs = {p: Shape.parse("RuCuSuWu") for p, n in nl.nodes.items() if n.kind == "src"}
+        inputs = {
+            p: Shape.parse("RuCuSuWu") for p, n in nl.nodes.items() if n.kind == "platform_in"
+        }
         outputs = interpret.interpret(nl, inputs)
 
         expected = Shape.parse("SuWuRuCu")
@@ -182,7 +191,9 @@ class TestSynthesize:
         assert lift.validate(result) == []
 
         nl = lift.trace_layer(result, 0)
-        inputs = {p: Shape.parse("RuCuSuWu") for p, n in nl.nodes.items() if n.kind == "src"}
+        inputs = {
+            p: Shape.parse("RuCuSuWu") for p, n in nl.nodes.items() if n.kind == "platform_in"
+        }
         outputs = interpret.interpret(nl, inputs)
 
         expected = Shape.parse("RuCu----")
@@ -206,7 +217,9 @@ class TestSeriesChain:
         from shapez2_tools import interpret
 
         nl = lift.trace_layer(result, 0)
-        inputs = {p: Shape.parse("RuCuSuWu") for p, n in nl.nodes.items() if n.kind == "src"}
+        inputs = {
+            p: Shape.parse("RuCuSuWu") for p, n in nl.nodes.items() if n.kind == "platform_in"
+        }
         outputs = interpret.interpret(nl, inputs)
 
         expected = Shape.parse("SuWuRuCu")
@@ -225,7 +238,9 @@ class TestSeriesChain:
         assert lift.validate(result) == []
 
         nl = lift.trace_layer(result, 0)
-        inputs = {p: Shape.parse("RuCuSuWu") for p, n in nl.nodes.items() if n.kind == "src"}
+        inputs = {
+            p: Shape.parse("RuCuSuWu") for p, n in nl.nodes.items() if n.kind == "platform_in"
+        }
         outputs = interpret.interpret(nl, inputs)
 
         expected = Shape.parse("WuRuCuSu")
@@ -245,7 +260,9 @@ class TestSeriesChain:
         assert lift.validate(result) == []
 
         nl = lift.trace_layer(result, 0)
-        inputs = {p: Shape.parse("RuCuSuWu") for p, n in nl.nodes.items() if n.kind == "src"}
+        inputs = {
+            p: Shape.parse("RuCuSuWu") for p, n in nl.nodes.items() if n.kind == "platform_in"
+        }
         outputs = interpret.interpret(nl, inputs)
 
         expected = Shape.parse("SuWuRuCu")
@@ -263,22 +280,26 @@ class TestMultiCellPlacement:
         Pair 1: src2,src3 → swap1 → sink2,sink3
         """
         nodes = [
-            {"id": "src0", "type": "BeltPortReceiverInternalVariant", "kind": "src"},
-            {"id": "src1", "type": "BeltPortReceiverInternalVariant", "kind": "src"},
-            {"id": "src2", "type": "BeltPortReceiverInternalVariant", "kind": "src"},
-            {"id": "src3", "type": "BeltPortReceiverInternalVariant", "kind": "src"},
+            {"id": "src0", "type": "BeltPortReceiverInternalVariant", "kind": "platform_in"},
+            {"id": "src1", "type": "BeltPortReceiverInternalVariant", "kind": "platform_in"},
+            {"id": "src2", "type": "BeltPortReceiverInternalVariant", "kind": "platform_in"},
+            {"id": "src3", "type": "BeltPortReceiverInternalVariant", "kind": "platform_in"},
             {"id": "swap0", "type": "SwapperDefaultInternalVariant", "kind": "machine"},
             {"id": "swap1", "type": "SwapperDefaultInternalVariant", "kind": "machine"},
-            {"id": "sink0", "type": "BeltPortSenderInternalVariant", "kind": "sink"},
-            {"id": "sink1", "type": "BeltPortSenderInternalVariant", "kind": "sink"},
-            {"id": "sink2", "type": "BeltPortSenderInternalVariant", "kind": "sink"},
-            {"id": "sink3", "type": "BeltPortSenderInternalVariant", "kind": "sink"},
+            {"id": "sink0", "type": "BeltPortSenderInternalVariant", "kind": "platform_out"},
+            {"id": "sink1", "type": "BeltPortSenderInternalVariant", "kind": "platform_out"},
+            {"id": "sink2", "type": "BeltPortSenderInternalVariant", "kind": "platform_out"},
+            {"id": "sink3", "type": "BeltPortSenderInternalVariant", "kind": "platform_out"},
         ]
         edges = [
-            ("src0", "swap0"), ("src1", "swap0"),
-            ("swap0", "sink0"), ("swap0", "sink1"),
-            ("src2", "swap1"), ("src3", "swap1"),
-            ("swap1", "sink2"), ("swap1", "sink3"),
+            ("src0", "swap0"),
+            ("src1", "swap0"),
+            ("swap0", "sink0"),
+            ("swap0", "sink1"),
+            ("src2", "swap1"),
+            ("src3", "swap1"),
+            ("swap1", "sink2"),
+            ("swap1", "sink3"),
         ]
         return {"nodes": nodes, "edges": edges}
 
@@ -326,11 +347,11 @@ class TestMultiCellPlacement:
         nl = lift.trace_layer(bp, 0)
 
         srcs = sorted(
-            [(p, n) for p, n in nl.nodes.items() if n.kind == "src"],
+            [(p, n) for p, n in nl.nodes.items() if n.kind == "platform_in"],
             key=lambda pn: pn[0][0],
         )
         sinks = sorted(
-            [(p, n) for p, n in nl.nodes.items() if n.kind == "sink"],
+            [(p, n) for p, n in nl.nodes.items() if n.kind == "platform_out"],
             key=lambda pn: pn[0][0],
         )
 
@@ -343,3 +364,98 @@ class TestMultiCellPlacement:
         outputs = interpret.interpret(nl, inputs)
         out_shapes = {str(outputs[p]) for p, _ in sinks}
         assert "Ru--Ru--" in out_shapes or "--Ru--Ru" in out_shapes
+
+
+class TestDiagonalNetlist:
+    """Unit tests for the diagonal-trick abstract netlist builder."""
+
+    def test_two_pair_topology(self):
+        """2 pairs: 4 sources, 2 swappers, 4 sinks, 8 edges."""
+        spec = DiagonalSpec(pairs=2, platform="Foundation_1x1")
+        abstract = netlist_from_diagonal_spec(spec)
+
+        by_kind: dict[str, list] = {}
+        for n in abstract["nodes"]:
+            by_kind.setdefault(n["kind"], []).append(n)
+
+        assert len(by_kind["platform_in"]) == 4
+        assert len(by_kind["platform_out"]) == 4
+        assert len(by_kind["machine"]) == 2
+        assert len(abstract["edges"]) == 8
+
+    def test_machine_type_is_swapper(self):
+        spec = DiagonalSpec(pairs=2, platform="Foundation_1x1")
+        abstract = netlist_from_diagonal_spec(spec)
+        machines = [n for n in abstract["nodes"] if n["kind"] == "machine"]
+        assert all("Swapper" in n["type"] for n in machines)
+
+    def test_each_swapper_has_two_in_two_out(self):
+        """Each swapper has exactly 2 inputs and 2 outputs."""
+        spec = DiagonalSpec(pairs=2, platform="Foundation_1x1")
+        abstract = netlist_from_diagonal_spec(spec)
+
+        in_edges: dict[str, list[str]] = {}
+        out_edges: dict[str, list[str]] = {}
+        for s, d in abstract["edges"]:
+            out_edges.setdefault(s, []).append(d)
+            in_edges.setdefault(d, []).append(s)
+
+        for n in abstract["nodes"]:
+            if n["kind"] == "machine":
+                assert len(in_edges[n["id"]]) == 2
+                assert len(out_edges[n["id"]]) == 2
+
+    def test_sources_interleaved_north_south(self):
+        """Source IDs alternate north/south per pair."""
+        spec = DiagonalSpec(pairs=2, platform="Foundation_1x1")
+        abstract = netlist_from_diagonal_spec(spec)
+        src_ids = [n["id"] for n in abstract["nodes"] if n["kind"] == "platform_in"]
+        assert src_ids == ["src0_n", "src0_s", "src1_n", "src1_s"]
+
+    def test_too_many_pairs_raises(self):
+        """Requesting more pairs than ports allows raises ValueError."""
+        spec = DiagonalSpec(pairs=3, platform="Foundation_1x1")
+        with pytest.raises(ValueError, match="6 ports"):
+            netlist_from_diagonal_spec(spec)
+
+
+class TestDiagonalSynthesize:
+    """End-to-end: synthesize diagonal trick → validate → interpret."""
+
+    def test_diagonal_validates(self):
+        """Synthesized diagonal-trick blueprint passes physical validation."""
+        spec = DiagonalSpec(pairs=2, platform="Foundation_1x1")
+        result = synthesize_diagonal(spec)
+        errors = lift.validate(result)
+        assert errors == []
+
+    def test_diagonal_edge_count(self):
+        """All 8 edges are realized (4 src→swap + 4 swap→sink)."""
+        spec = DiagonalSpec(pairs=2, platform="Foundation_1x1")
+        result = synthesize_diagonal(spec)
+        nl = lift.trace_layer(result, 0)
+        assert len(nl.edges) == 8
+
+    def test_diagonal_interprets(self):
+        """Feeding north/south halves produces the two diagonals."""
+        from shapez2_tools import interpret
+
+        spec = DiagonalSpec(pairs=2, platform="Foundation_1x1")
+        result = synthesize_diagonal(spec)
+        nl = lift.trace_layer(result, 0)
+
+        srcs = sorted(
+            [(p, n) for p, n in nl.nodes.items() if n.kind == "platform_in"],
+            key=lambda pn: pn[0][0],
+        )
+
+        north = Shape.parse("Ru----Ru")  # NE + NW
+        south = Shape.parse("--RuRu--")  # SE + SW
+        inputs = {}
+        for i, (pos, _) in enumerate(srcs):
+            inputs[pos] = north if i % 2 == 0 else south
+
+        outputs = interpret.interpret(nl, inputs)
+        out_shapes = {str(s) for s in outputs.values()}
+        assert "Ru--Ru--" in out_shapes  # upper-left diagonal
+        assert "--Ru--Ru" in out_shapes  # upper-right diagonal

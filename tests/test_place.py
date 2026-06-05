@@ -14,9 +14,9 @@ class TestPlaceFeasibility:
 
         abstract = {
             "nodes": [
-                {"id": "src0", "type": "BeltPortReceiverInternalVariant", "kind": "src"},
+                {"id": "src0", "type": "BeltPortReceiverInternalVariant", "kind": "platform_in"},
                 {"id": "rot0", "type": "RotatorHalfInternalVariant", "kind": "machine"},
-                {"id": "snk0", "type": "BeltPortSenderInternalVariant", "kind": "sink"},
+                {"id": "snk0", "type": "BeltPortSenderInternalVariant", "kind": "platform_out"},
             ],
             "edges": [("src0", "rot0"), ("rot0", "snk0")],
         }
@@ -40,10 +40,10 @@ class TestPlaceFeasibility:
 
         abstract = {
             "nodes": [
-                {"id": "src0", "type": "BeltPortReceiverInternalVariant", "kind": "src"},
+                {"id": "src0", "type": "BeltPortReceiverInternalVariant", "kind": "platform_in"},
                 {"id": "rot0", "type": "RotatorHalfInternalVariant", "kind": "machine"},
                 {"id": "rot1", "type": "RotatorHalfInternalVariant", "kind": "machine"},
-                {"id": "snk0", "type": "BeltPortSenderInternalVariant", "kind": "sink"},
+                {"id": "snk0", "type": "BeltPortSenderInternalVariant", "kind": "platform_out"},
             ],
             "edges": [("src0", "rot0"), ("rot0", "rot1"), ("rot1", "snk0")],
         }
@@ -52,9 +52,7 @@ class TestPlaceFeasibility:
         positions = list(result.nodes.keys())
         assert len(positions) == len(set(positions))
 
-        machine_positions = [
-            pos for pos, n in result.nodes.items() if n.kind == "machine"
-        ]
+        machine_positions = [pos for pos, n in result.nodes.items() if n.kind == "machine"]
         assert len(machine_positions) == 2
         assert machine_positions[0] != machine_positions[1]
 

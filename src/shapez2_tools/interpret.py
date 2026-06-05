@@ -44,9 +44,9 @@ def _machine_op(type_: str):
 def _node_cells(node) -> tuple[list[Cell], list[Cell]]:
     """(input cells, output cells) of a node, anchor-first."""
     a = (node.x, node.y)
-    if node.kind == "src":
+    if node.kind == "platform_in":
         return [], [a]
-    if node.kind == "sink":
+    if node.kind == "platform_out":
         return [a], []
     fp = _machine_footprint(node.type, node.rotation)
     ins = [(a[0] + dx, a[1] + dy) for (dx, dy), (i, _o) in fp.items() if i]
@@ -83,7 +83,7 @@ def interpret(nl: Netlist, inputs: dict[Cell, Shape]) -> dict[Cell, Shape]:
     while queue:
         p = queue.popleft()
         node = nl.nodes[p]
-        if node.kind == "src":
+        if node.kind == "platform_in":
             cell_shape[out_cells[p][0]] = inputs[p]
         else:
             feeds = []
@@ -92,7 +92,7 @@ def interpret(nl: Netlist, inputs: dict[Cell, Shape]) -> dict[Cell, Shape]:
                 if len(distinct) != 1:
                     raise ValueError(f"input cell {c} of {p} has {len(distinct)} shapes")
                 feeds.append(next(iter(distinct)))
-            if node.kind == "sink":
+            if node.kind == "platform_out":
                 out[p] = feeds[0]
             else:
                 arity, op = _machine_op(node.type)

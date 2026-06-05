@@ -79,11 +79,11 @@ def routing_inout(type_: str, r: int):
 
 
 def kind(type_: str) -> str:
-    """Classify a building: src / sink / belt (routing) / machine."""
+    """Classify a building: platform_in / platform_out / belt (routing) / machine."""
     if "PortReceiver" in type_:
-        return "src"
+        return "platform_in"
     if "PortSender" in type_:
-        return "sink"
+        return "platform_out"
     if routing_inout(type_, 0) is not None:
         return "belt"
     return "machine"
@@ -254,8 +254,9 @@ def edge_kinds(nl: Netlist) -> Counter:
 def to_graph(nl: Netlist) -> nx.MultiDiGraph:
     """Convert a Netlist to a networkx MultiDiGraph for isomorphism tests.
 
-    Node attributes: (kind, type) — kind distinguishes src/sink/machine; type
-    distinguishes machine variants (rotator cw vs ccw). Edges are unlabelled.
+    Node attributes: (kind, type) — kind distinguishes platform_in/platform_out/
+    machine; type distinguishes machine variants (rotator cw vs ccw). Edges are
+    unlabelled.
     Using a MultiDiGraph because parallel edges (multiple lanes) are possible.
     """
     g = nx.MultiDiGraph()

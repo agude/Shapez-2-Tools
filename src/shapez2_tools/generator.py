@@ -213,7 +213,7 @@ def _add_silkscreen(entities: list[Entity], direction: str, platform: str) -> li
     chars = list(label)
     # Distribute characters across gaps, centering each in its gap.
     # More gaps than chars: use the rightmost gaps (leftmost gap stays empty).
-    assigned = gaps[-len(chars):]
+    assigned = gaps[-len(chars) :]
     y_span = 16 - 2  # usable rows y=2..17
     origin_y = 2 + (y_span + CELL_HEIGHT) // 2 - 1  # center vertically
 

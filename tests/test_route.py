@@ -282,9 +282,15 @@ class TestAStarReroute:
         # Build the netlist we want to route: src_a→sink, src_b→sink
         nl = lift.Netlist(
             nodes={
-                (0, 10): lift.Node(x=0, y=10, layer=0, type=src_a.type, kind="src", rotation=3),
-                (1, 10): lift.Node(x=1, y=10, layer=0, type=src_b.type, kind="src", rotation=3),
-                (0, 0): lift.Node(x=0, y=0, layer=0, type=sink.type, kind="sink", rotation=3),
+                (0, 10): lift.Node(
+                    x=0, y=10, layer=0, type=src_a.type, kind="platform_in", rotation=3
+                ),
+                (1, 10): lift.Node(
+                    x=1, y=10, layer=0, type=src_b.type, kind="platform_in", rotation=3
+                ),
+                (0, 0): lift.Node(
+                    x=0, y=0, layer=0, type=sink.type, kind="platform_out", rotation=3
+                ),
             },
             edges=[((0, 10), (0, 0)), ((1, 10), (0, 0))],
         )
@@ -319,9 +325,15 @@ class TestAStarReroute:
 
         nl = lift.Netlist(
             nodes={
-                (0, 10): lift.Node(x=0, y=10, layer=0, type=src.type, kind="src", rotation=3),
-                (0, 0): lift.Node(x=0, y=0, layer=0, type=sink_a.type, kind="sink", rotation=3),
-                (1, 0): lift.Node(x=1, y=0, layer=0, type=sink_b.type, kind="sink", rotation=3),
+                (0, 10): lift.Node(
+                    x=0, y=10, layer=0, type=src.type, kind="platform_in", rotation=3
+                ),
+                (0, 0): lift.Node(
+                    x=0, y=0, layer=0, type=sink_a.type, kind="platform_out", rotation=3
+                ),
+                (1, 0): lift.Node(
+                    x=1, y=0, layer=0, type=sink_b.type, kind="platform_out", rotation=3
+                ),
             },
             edges=[((0, 10), (0, 0)), ((0, 10), (1, 0))],
         )
@@ -351,9 +363,15 @@ class TestAStarReroute:
 
         nl = lift.Netlist(
             nodes={
-                (0, 10): lift.Node(x=0, y=10, layer=0, type=src_a.type, kind="src", rotation=3),
-                (1, 10): lift.Node(x=1, y=10, layer=0, type=src_b.type, kind="src", rotation=3),
-                (0, 0): lift.Node(x=0, y=0, layer=0, type=sink.type, kind="sink", rotation=3),
+                (0, 10): lift.Node(
+                    x=0, y=10, layer=0, type=src_a.type, kind="platform_in", rotation=3
+                ),
+                (1, 10): lift.Node(
+                    x=1, y=10, layer=0, type=src_b.type, kind="platform_in", rotation=3
+                ),
+                (0, 0): lift.Node(
+                    x=0, y=0, layer=0, type=sink.type, kind="platform_out", rotation=3
+                ),
             },
             edges=[((0, 10), (0, 0)), ((1, 10), (0, 0))],
         )
@@ -479,8 +497,12 @@ class TestMultiCellRouting:
         nl = lift.Netlist(
             nodes={
                 (5, 5): lift.Node(x=5, y=5, layer=0, type=cutter.type, kind="machine", rotation=0),
-                (8, 5): lift.Node(x=8, y=5, layer=0, type=sink_a.type, kind="sink", rotation=0),
-                (8, 4): lift.Node(x=8, y=4, layer=0, type=sink_b.type, kind="sink", rotation=0),
+                (8, 5): lift.Node(
+                    x=8, y=5, layer=0, type=sink_a.type, kind="platform_out", rotation=0
+                ),
+                (8, 4): lift.Node(
+                    x=8, y=4, layer=0, type=sink_b.type, kind="platform_out", rotation=0
+                ),
             },
             edges=[((5, 5), (8, 5)), ((5, 5), (8, 4))],
             port_edges=[((5, 5), (8, 5)), ((5, 4), (8, 4))],
@@ -517,10 +539,14 @@ class TestMultiCellRouting:
         sink = Entity(type="BeltPortSenderInternalVariant", x=12, y=3, rotation=0, layer=0)
 
         nodes = {
-            (e.x, e.y): lift.Node(x=e.x, y=e.y, layer=0, type=e.type, kind="src", rotation=0)
+            (e.x, e.y): lift.Node(
+                x=e.x, y=e.y, layer=0, type=e.type, kind="platform_in", rotation=0
+            )
             for e in srcs
         }
-        nodes[(12, 3)] = lift.Node(x=12, y=3, layer=0, type=sink.type, kind="sink", rotation=0)
+        nodes[(12, 3)] = lift.Node(
+            x=12, y=3, layer=0, type=sink.type, kind="platform_out", rotation=0
+        )
         port_edges = [((e.x, e.y), (12, 3)) for e in srcs]
         nl = lift.Netlist(nodes=nodes, edges=list(port_edges), port_edges=port_edges)
 
@@ -551,10 +577,12 @@ class TestMultiCellRouting:
         ]
 
         nodes = {
-            (s.x, s.y): lift.Node(x=s.x, y=s.y, layer=0, type=s.type, kind="sink", rotation=1)
+            (s.x, s.y): lift.Node(
+                x=s.x, y=s.y, layer=0, type=s.type, kind="platform_out", rotation=1
+            )
             for s in sinks
         }
-        nodes[(2, 3)] = lift.Node(x=2, y=3, layer=0, type=src.type, kind="src", rotation=0)
+        nodes[(2, 3)] = lift.Node(x=2, y=3, layer=0, type=src.type, kind="platform_in", rotation=0)
         port_edges = [((2, 3), (s.x, s.y)) for s in sinks]
         nl = lift.Netlist(nodes=nodes, edges=list(port_edges), port_edges=port_edges)
 

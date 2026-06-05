@@ -146,10 +146,12 @@ def silkscreen(
             for px in range(CELL_WIDTH):
                 if row_bits & (1 << px):
                     for sx in range(scale):
-                        entities.append(Entity(
-                            x=char_x + px * scale + sx,
-                            y=tile_y,
-                            type=TRASH_TYPE,
-                            layer=layer,
-                        ))
+                        entities.append(
+                            Entity(
+                                x=char_x + px * scale + sx,
+                                y=tile_y,
+                                type=TRASH_TYPE,
+                                layer=layer,
+                            )
+                        )
     return entities

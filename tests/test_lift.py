@@ -19,8 +19,8 @@ class TestBeltModel:
         assert lift.kind("BeltDefaultForwardInternalVariant") == "belt"
         assert lift.kind("Splitter1To2LInternalVariant") == "belt"
         assert lift.kind("Merger2To1LInternalVariantMirrored") == "belt"
-        assert lift.kind("BeltPortReceiverInternalVariant") == "src"
-        assert lift.kind("BeltPortSenderInternalVariant") == "sink"
+        assert lift.kind("BeltPortReceiverInternalVariant") == "platform_in"
+        assert lift.kind("BeltPortSenderInternalVariant") == "platform_out"
         assert lift.kind("RotatorHalfInternalVariant") == "machine"
 
     def test_forward_belt_in_out_opposite(self):
@@ -35,20 +35,20 @@ class TestTrace:
     def test_recovers_rotator_quarter_netlist(self):
         nl = lift.trace_layer(Blueprint.from_file(QUARTER), 0)
         kinds = Counter(n.kind for n in nl.nodes.values())
-        assert kinds["src"] == 4 and kinds["sink"] == 4 and kinds["machine"] == 8
+        assert kinds["platform_in"] == 4 and kinds["platform_out"] == 4 and kinds["machine"] == 8
         ek = lift.edge_kinds(nl)
-        assert ek[("src", "machine")] == 8  # each input splits to two rotators
-        assert ek[("machine", "sink")] == 8  # each rotator merges to an output
+        assert ek[("platform_in", "machine")] == 8  # each input splits to two rotators
+        assert ek[("machine", "platform_out")] == 8  # each rotator merges to an output
 
     def test_full_belt_is_four_quarters(self):
         bp = Blueprint.from_file(FULL)
         assert lift.unmatched_legs(bp, 0) == 0
         nl = lift.trace_layer(bp, 0)
         kinds = Counter(n.kind for n in nl.nodes.values())
-        assert kinds["src"] == 16 and kinds["sink"] == 16 and kinds["machine"] == 32
+        assert kinds["platform_in"] == 16 and kinds["platform_out"] == 16 and kinds["machine"] == 32
         ek = lift.edge_kinds(nl)
-        assert ek[("src", "machine")] == 32
-        assert ek[("machine", "sink")] == 32
+        assert ek[("platform_in", "machine")] == 32
+        assert ek[("machine", "platform_out")] == 32
 
 
 class TestJunctions:
@@ -57,7 +57,7 @@ class TestJunctions:
         bp = Blueprint.from_file(DESTROY)
         assert lift.unmatched_legs(bp, 0) == 0
         kinds = Counter(n.kind for n in lift.trace_layer(bp, 0).nodes.values())
-        assert kinds == Counter({"machine": 12, "src": 4, "sink": 4})
+        assert kinds == Counter({"machine": 12, "platform_in": 4, "platform_out": 4})
 
 
 class TestCutter:

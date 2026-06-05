@@ -1,6 +1,6 @@
 # Blueprint Synthesis — Plan
 
-**Status:** Draft, updated 2026-06-05. **Multi-cell placement (swappers) landed.**
+**Status:** Draft, updated 2026-06-05. **Diagonal swapper synthesis landed (2 pairs on 1×1).**
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -16,7 +16,7 @@ regression floor. The hard target is intra-platform **place-and-route**.
 
 ## 0. Status & handoff (2026-06-05)
 
-**Built and green** (142 tests pass, 3 xfail, `just test`, ruff clean):
+**Built and green** (150 tests pass, 3 xfail, `just test`, ruff clean):
 - `blueprint.py` — faithful `.spz2bp` codec.
 - `generator.py` — tile-replication generator: builds the rotator family
   (180/cw/ccw × 1×1/1×4) from one lifted tile. `Entity`, lift/stamp/build,
@@ -100,7 +100,13 @@ regression floor. The hard target is intra-platform **place-and-route**.
   series chains (2×CW = 180°, 3×CCW = CW, both validate + interpret correctly).
   Multi-cell: 2-swapper abstract netlists lower to valid blueprints that interpret
   correctly (placement + routing + port assignment verified end-to-end).
-  **18 synth tests green, 1 xfail (142 total, 3 xfail).**
+  **Diagonal trick synthesis:** `DiagonalSpec(pairs, platform)` generates the
+  paired north/south → swapper → diagonal topology; `synthesize_diagonal()`
+  lowers it through the full pipeline. Verified on 1×1 with 2 pairs: 8/8 edges,
+  validates, and interprets to the correct diagonals (`Ru--Ru--` / `--Ru--Ru`).
+  CLI: `synth swap_diagonal [--pairs N]`. Scaling to 4 pairs needs a platform
+  with 8 ports (Foundation_2x2, port calibration Q5 still open).
+  **26 synth tests green, 1 xfail (150 total, 3 xfail).**
 - CLI: `gen`, `diff`, `show`, `lift`, `viz`, `place`, `synth`. `synth` synthesizes
   a blueprint from a spec (e.g. `synth rotate_180` or `synth rotate_cw,rotate_cw`).
   `viz` renders a blueprint as HTML/SVG (belts as directional lines,
@@ -182,12 +188,13 @@ throughput=2). CLI: `just run synth rotate_180 -o out.spz2bp`.
 - The tight 2D merger packing from WP-C (cutter/swapper xfails) — the placer
   must reserve routing channels for dense fans. The 1→3 fan-out limitation for
   the half-destroyer is the same underlying issue.
-- **The diagonal extractor** (north-star demo): multi-cell placement is now
-  solved. The remaining step is building the abstract netlist for the diagonal
-  trick topology (4 input pairs → 4 swappers → 4 diagonal output pairs) and
-  lowering it. The `_lower` function already handles arbitrary abstract
-  netlists including multi-cell machines; the gap is expressing the specific
-  input-pattern topology (north-only + south-only feeds per swapper pair).
+- **The diagonal extractor** (north-star demo): `DiagonalSpec` +
+  `synthesize_diagonal()` landed for 2 pairs on 1×1 (8/8 edges, validates,
+  interprets to correct diagonals). Scaling to 4 pairs (the full-belt target)
+  needs a platform with 8 ports — Foundation_2x2 is the candidate, but its
+  port positions/orientations aren't calibrated (Q5 open). Once Q5 is
+  answered, add port data to platforms.json and update the placer's port
+  assignment logic for multi-unit-width platforms.
 - **Machine placement is often a human design decision; the product is the
   router.** The placer validates the pipeline and will improve as the router
   matures.
@@ -595,11 +602,12 @@ widens the spec space but blocks nothing on the diagonal extractor.
 
 #### WP-E — Rung 4: synthesize from spec *(the product; critical path)*
 - **Goal:** I5. Spec → netlist → place (D) → route (C) → entities → file.
-- **Status: DONE for single-op and series-chain platforms.** `Spec(op, platform,
-  throughput)` where `op` is a string or tuple of strings (series chain).
-  `_lower(abstract, platform)` runs the generic pipeline on any abstract netlist.
-  14 tests green, 1 xfail (series+throughput=2 on 1×1 — 16 machines too dense).
-  CLI: `synth rotate_cw,rotate_cw --throughput 1`.
+- **Status: DONE for single-op, series-chain, and diagonal-trick platforms.**
+  `Spec(op, platform, throughput)` for uniform lane pipelines; `DiagonalSpec(pairs,
+  platform)` for the diagonal trick. `_lower(abstract, platform)` runs the generic
+  pipeline on any abstract netlist. 26 tests green, 1 xfail (series+throughput=2
+  on 1×1 — 16 machines too dense). CLI: `synth rotate_cw,rotate_cw --throughput 1`
+  or `synth swap_diagonal [--pairs N]`.
 - **Tests:**
   - ✓ `test_rotate_180_quarter_topology` — 4 src + 8 machines + 4 sinks, 16 edges.
   - ✓ `test_machine_type_matches_op` — CW spec → RotatorOneQuad machines.
@@ -620,10 +628,16 @@ widens the spec space but blocks nothing on the diagonal extractor.
   - ✓ `test_swapper_second_cells_no_overlap` — all footprint cells distinct.
   - ✓ `test_swapper_lowered_validates` — lowered swapper blueprint clean.
   - ✓ `test_swapper_lowered_interprets` — diagonal shapes from north/south inputs.
-- **Remaining:** the diagonal extractor requires a hand-built abstract netlist
-  (not expressible as the uniform lane pipeline in `Spec`). Multi-cell placement
-  is solved; the gap is building and lowering the specific topology (4 pairs of
-  north/south sources → 4 swappers → 4 pairs of diagonal sinks).
+  - ✓ `TestDiagonalNetlist::test_two_pair_topology` — 4 src, 2 swap, 4 sink, 8 edges.
+  - ✓ `TestDiagonalNetlist::test_machine_type_is_swapper` — correct entity type.
+  - ✓ `TestDiagonalNetlist::test_each_swapper_has_two_in_two_out` — 2-in/2-out.
+  - ✓ `TestDiagonalNetlist::test_sources_interleaved_north_south` — port ordering.
+  - ✓ `TestDiagonalNetlist::test_too_many_pairs_raises` — validation.
+  - ✓ `TestDiagonalSynthesize::test_diagonal_validates` — physical validation clean.
+  - ✓ `TestDiagonalSynthesize::test_diagonal_edge_count` — 8/8 edges realized.
+  - ✓ `TestDiagonalSynthesize::test_diagonal_interprets` — diagonals from N/S inputs.
+- **Remaining:** scaling to 4 pairs (the full-belt target) needs Foundation_2x2
+  port calibration (Q5 open).
 
 #### WP-F — Stacker cross-floor lift *(breadth track)*
 - **Goal:** lift inter-floor machines; complete the table for stacking specs.

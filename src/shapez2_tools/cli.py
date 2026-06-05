@@ -105,7 +105,9 @@ def cmd_lift(args: argparse.Namespace) -> None:
     if machines:
         print(f"machines: {dict(machines)}")
     try:
-        inputs = {p: Shape.parse("RuCuSuWu") for p, n in nl.nodes.items() if n.kind == "src"}
+        inputs = {
+            p: Shape.parse("RuCuSuWu") for p, n in nl.nodes.items() if n.kind == "platform_in"
+        }
         out = interpret.interpret(nl, inputs)
         print(f"interpret RuCuSuWu -> {dict(Counter(str(s) for s in out.values()))}")
     except Exception as exc:
@@ -137,31 +139,56 @@ def cmd_viz(args: argparse.Namespace) -> None:
 def cmd_synth(args: argparse.Namespace) -> None:
     """Synthesize a blueprint from a spec."""
     from shapez2_tools import lift, viz
-    from shapez2_tools.synth import Spec, synthesize
 
-    ops = tuple(args.op.split(",")) if "," in args.op else args.op
-    spec = Spec(op=ops, platform=args.platform, throughput=args.throughput)
-    stages = spec.stages
-    n_machines = spec.lanes * spec.throughput * len(stages)
-    print(f"spec: {'+'.join(stages)} on {spec.platform}, throughput={spec.throughput}")
-    print(f"lanes: {spec.lanes}, machines: {n_machines}")
+    if args.op == "swap_diagonal":
+        from shapez2_tools.synth import DiagonalSpec, synthesize_diagonal
 
-    result = synthesize(spec)
+        spec = DiagonalSpec(pairs=args.pairs, platform=args.platform)
+        print(f"spec: swap_diagonal on {spec.platform}, pairs={spec.pairs}")
+        print(f"machines: {spec.pairs} swappers, ports: {spec.ports_needed}")
 
-    nl = lift.trace_layer(result, 0)
-    n_edges = len(nl.edges)
-    expected = spec.lanes * spec.throughput * (len(stages) + 1)
-    print(f"routed: {n_edges}/{expected} edges")
+        result = synthesize_diagonal(spec)
 
-    if args.output:
-        result.to_file(args.output)
-        print(f"Wrote blueprint: {args.output}")
+        nl = lift.trace_layer(result, 0)
+        n_edges = len(nl.edges)
+        expected = spec.pairs * 4
+        print(f"routed: {n_edges}/{expected} edges")
 
-    title = f"synth {'+'.join(stages)} ({n_edges}/{expected} edges)"
-    html = viz.render_html(result, layer=0, title=title)
-    viz_out = args.viz_output or Path(f"synth_{'_'.join(stages)}.html")
-    viz_out.write_text(html)
-    print(f"Wrote viz: {viz_out}")
+        if args.output:
+            result.to_file(args.output)
+            print(f"Wrote blueprint: {args.output}")
+
+        title = f"synth swap_diagonal ({n_edges}/{expected} edges)"
+        html = viz.render_html(result, layer=0, title=title)
+        viz_out = args.viz_output or Path("synth_swap_diagonal.html")
+        viz_out.write_text(html)
+        print(f"Wrote viz: {viz_out}")
+    else:
+        from shapez2_tools.synth import Spec, synthesize
+
+        ops = tuple(args.op.split(",")) if "," in args.op else args.op
+        spec = Spec(op=ops, platform=args.platform, throughput=args.throughput)
+        stages = spec.stages
+        n_machines = spec.lanes * spec.throughput * len(stages)
+        print(f"spec: {'+'.join(stages)} on {spec.platform}, throughput={spec.throughput}")
+        print(f"lanes: {spec.lanes}, machines: {n_machines}")
+
+        result = synthesize(spec)
+
+        nl = lift.trace_layer(result, 0)
+        n_edges = len(nl.edges)
+        expected = spec.lanes * spec.throughput * (len(stages) + 1)
+        print(f"routed: {n_edges}/{expected} edges")
+
+        if args.output:
+            result.to_file(args.output)
+            print(f"Wrote blueprint: {args.output}")
+
+        title = f"synth {'+'.join(stages)} ({n_edges}/{expected} edges)"
+        html = viz.render_html(result, layer=0, title=title)
+        viz_out = args.viz_output or Path(f"synth_{'_'.join(stages)}.html")
+        viz_out.write_text(html)
+        print(f"Wrote viz: {viz_out}")
 
     if not args.no_open:
         import subprocess
@@ -317,19 +344,19 @@ def main() -> None:
     # synth command
     synth_cmd = subparsers.add_parser("synth", help="Synthesize a blueprint from a spec")
     synth_cmd.add_argument(
-        "op", help="Operation(s), comma-separated for series chain",
+        "op",
+        help="Operation(s): comma-separated for series chain, or 'swap_diagonal'",
     )
     synth_cmd.add_argument("--platform", default="Foundation_1x1")
     synth_cmd.add_argument("--throughput", type=int, default=2)
+    synth_cmd.add_argument("--pairs", type=int, default=2, help="Swapper pairs (swap_diagonal)")
     synth_cmd.add_argument("-o", "--output", type=Path, help="Output blueprint file")
     synth_cmd.add_argument("--viz-output", type=Path, help="Output HTML viz file")
     synth_cmd.add_argument("--no-open", action="store_true", help="Don't open in browser")
     synth_cmd.set_defaults(func=cmd_synth)
 
     # place command
-    place_cmd = subparsers.add_parser(
-        "place", help="Re-place and re-route a blueprint via CP-SAT"
-    )
+    place_cmd = subparsers.add_parser("place", help="Re-place and re-route a blueprint via CP-SAT")
     place_cmd.add_argument("file", type=Path, help="Source blueprint file")
     place_cmd.add_argument("-o", "--output", type=Path, help="Output blueprint file")
     place_cmd.add_argument("--viz-output", type=Path, help="Output HTML viz file")

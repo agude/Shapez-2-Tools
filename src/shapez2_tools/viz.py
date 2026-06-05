@@ -97,8 +97,7 @@ def render_html(
     layer_ents = [e for e in entities if e.layer == layer]
     if not layer_ents:
         return (
-            "<html><body style='color:#ccc;background:#111'>"
-            "No entities on this layer</body></html>"
+            "<html><body style='color:#ccc;background:#111'>No entities on this layer</body></html>"
         )
 
     # Bounding box (expand for machine footprints)
@@ -257,9 +256,7 @@ def render_html(
 
     svg = (
         f'<svg xmlns="http://www.w3.org/2000/svg" '
-        f'width="{svg_w}" height="{svg_h}">\n'
-        + "\n".join(parts)
-        + "\n</svg>"
+        f'width="{svg_w}" height="{svg_h}">\n' + "\n".join(parts) + "\n</svg>"
     )
 
     page_title = title or "Blueprint"

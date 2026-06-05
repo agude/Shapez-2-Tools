@@ -11,11 +11,11 @@ REF = Path(__file__).resolve().parent.parent / "data" / "reference"
 
 
 def _src(xy):
-    return Node(xy[0], xy[1], 0, "BeltPortReceiverInternalVariant", "src")
+    return Node(xy[0], xy[1], 0, "BeltPortReceiverInternalVariant", "platform_in")
 
 
 def _sink(xy):
-    return Node(xy[0], xy[1], 0, "BeltPortSenderInternalVariant", "sink")
+    return Node(xy[0], xy[1], 0, "BeltPortSenderInternalVariant", "platform_out")
 
 
 def _check_every_lane(name, op, layer=0):
@@ -23,7 +23,7 @@ def _check_every_lane(name, op, layer=0):
     sink emits ``op`` applied to it."""
     nl = lift.trace_layer(Blueprint.from_file(REF / name), layer)
     shape = Shape.parse("RuCuSuWu")
-    inputs = {p: shape for p, n in nl.nodes.items() if n.kind == "src"}
+    inputs = {p: shape for p, n in nl.nodes.items() if n.kind == "platform_in"}
     out = interpret.interpret(nl, inputs)
     assert out, "no sinks recovered"
     expected = op(shape)

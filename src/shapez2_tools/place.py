@@ -92,8 +92,8 @@ def place(abstract: dict, platform: str) -> lift.Netlist:
     node_by_id: dict[str, dict] = {n["id"]: n for n in abstract["nodes"]}
 
     # Separate sources, sinks, and machines.
-    sources = [n for n in abstract["nodes"] if n["kind"] == "src"]
-    sinks = [n for n in abstract["nodes"] if n["kind"] == "sink"]
+    sources = [n for n in abstract["nodes"] if n["kind"] == "platform_in"]
+    sinks = [n for n in abstract["nodes"] if n["kind"] == "platform_out"]
     machines = [n for n in abstract["nodes"] if n["kind"] == "machine"]
 
     # Assign port positions: sources at input_y, sinks at output_y.
@@ -129,7 +129,7 @@ def place(abstract: dict, platform: str) -> lift.Netlist:
                 continue
             visited.add(nid)
             n = node_by_id[nid]
-            if n["kind"] == "sink":
+            if n["kind"] == "platform_out":
                 found.append(nid)
                 continue
             for child in edge_out.get(nid, []):
@@ -162,9 +162,7 @@ def place(abstract: dict, platform: str) -> lift.Netlist:
             sink_positions[sink_id] = (x_min + i, output_y)
 
     if not machines:
-        return _build_netlist(
-            abstract, src_positions, sink_positions, {}, port_rotation
-        )
+        return _build_netlist(abstract, src_positions, sink_positions, {}, port_rotation)
 
     # --- CP-SAT model ---
     model = cp_model.CpModel()
@@ -242,7 +240,7 @@ def place(abstract: dict, platform: str) -> lift.Netlist:
     # Encode via element constraints on R → direction components.
     out_dx_table = [1, 0, -1, 0]  # R=0→E, R=1→N, R=2→W, R=3→S
     out_dy_table = [0, 1, 0, -1]
-    in_dx_table = [-1, 0, 1, 0]   # input is opposite: W, S, E, N
+    in_dx_table = [-1, 0, 1, 0]  # input is opposite: W, S, E, N
     in_dy_table = [0, -1, 0, 1]
 
     for ei, (src_id, dst_id) in enumerate(abstract["edges"]):
@@ -256,8 +254,17 @@ def place(abstract: dict, platform: str) -> lift.Netlist:
             dx = _node_x(dst_id, dst_node, src_positions, sink_positions, m_x, model)
             dy = _node_y(dst_id, dst_node, src_positions, sink_positions, m_y, model)
             _add_output_faces_toward(
-                model, m_r[src_id], sx, sy, dx, dy,
-                out_dx_table, out_dy_table, grid_w, grid_h, f"eout_{ei}",
+                model,
+                m_r[src_id],
+                sx,
+                sy,
+                dx,
+                dy,
+                out_dx_table,
+                out_dy_table,
+                grid_w,
+                grid_h,
+                f"eout_{ei}",
             )
 
         # Dst input must face toward src.
@@ -267,8 +274,17 @@ def place(abstract: dict, platform: str) -> lift.Netlist:
             sx2 = _node_x(src_id, src_node, src_positions, sink_positions, m_x, model)
             sy2 = _node_y(src_id, src_node, src_positions, sink_positions, m_y, model)
             _add_output_faces_toward(
-                model, m_r[dst_id], dx2, dy2, sx2, sy2,
-                in_dx_table, in_dy_table, grid_w, grid_h, f"ein_{ei}",
+                model,
+                m_r[dst_id],
+                dx2,
+                dy2,
+                sx2,
+                sy2,
+                in_dx_table,
+                in_dy_table,
+                grid_w,
+                grid_h,
+                f"ein_{ei}",
             )
 
     # Fan-group structure: machines sharing a source (fan-out) or sink
@@ -315,16 +331,15 @@ def place(abstract: dict, platform: str) -> lift.Netlist:
     # x-position so routes don't cross. A source at lower x should feed
     # machines at lower x than a source at higher x.
     fanout_src_ids = [
-        sid for sid in fan_out_groups
+        sid
+        for sid in fan_out_groups
         if sum(1 for m in fan_out_groups[sid] if node_by_id[m]["kind"] == "machine") >= 2
     ]
     # Sort source IDs by their assigned x-position.
     fanout_by_src: dict[str, list[str]] = {}
     src_x_for_id: dict[str, int] = {}
     for sid in fanout_src_ids:
-        fanout_by_src[sid] = [
-            m for m in fan_out_groups[sid] if node_by_id[m]["kind"] == "machine"
-        ]
+        fanout_by_src[sid] = [m for m in fan_out_groups[sid] if node_by_id[m]["kind"] == "machine"]
         src_x_for_id[sid] = src_positions[sid][0]
     sorted_src_ids = sorted(fanout_src_ids, key=lambda s: src_x_for_id[s])
 
@@ -427,15 +442,16 @@ def place(abstract: dict, platform: str) -> lift.Netlist:
             solver.value(m_r[mid]),
         )
 
-    return _build_netlist(
-        abstract, src_positions, sink_positions, machine_positions, port_rotation
-    )
+    return _build_netlist(abstract, src_positions, sink_positions, machine_positions, port_rotation)
 
 
 def _add_output_faces_toward(
     model: cp_model.CpModel,
     r_var: cp_model.IntVar,
-    ux, uy, vx, vy,
+    ux,
+    uy,
+    vx,
+    vy,
     dx_table: list[int],
     dy_table: list[int],
     grid_w: int,
@@ -480,17 +496,17 @@ def _port_rotation(input_y: int, output_y: int) -> int:
 
 
 def _node_x(nid, node, src_pos, sink_pos, m_x, model):
-    if node["kind"] == "src":
+    if node["kind"] == "platform_in":
         return src_pos[nid][0]
-    if node["kind"] == "sink":
+    if node["kind"] == "platform_out":
         return sink_pos[nid][0]
     return m_x[nid]
 
 
 def _node_y(nid, node, src_pos, sink_pos, m_y, model):
-    if node["kind"] == "src":
+    if node["kind"] == "platform_in":
         return src_pos[nid][1]
-    if node["kind"] == "sink":
+    if node["kind"] == "platform_out":
         return sink_pos[nid][1]
     return m_y[nid]
 
@@ -535,16 +551,24 @@ def _build_netlist(
         pos_for_id[nid] = pos
         n = node_by_id[nid]
         nodes[pos] = lift.Node(
-            x=pos[0], y=pos[1], layer=0, type=n["type"],
-            kind="src", rotation=port_rotation,
+            x=pos[0],
+            y=pos[1],
+            layer=0,
+            type=n["type"],
+            kind="platform_in",
+            rotation=port_rotation,
         )
 
     for nid, pos in sink_positions.items():
         pos_for_id[nid] = pos
         n = node_by_id[nid]
         nodes[pos] = lift.Node(
-            x=pos[0], y=pos[1], layer=0, type=n["type"],
-            kind="sink", rotation=port_rotation,
+            x=pos[0],
+            y=pos[1],
+            layer=0,
+            type=n["type"],
+            kind="platform_out",
+            rotation=port_rotation,
         )
 
     for nid, (x, y, r) in machine_positions.items():
@@ -552,8 +576,12 @@ def _build_netlist(
         pos_for_id[nid] = pos
         n = node_by_id[nid]
         nodes[pos] = lift.Node(
-            x=x, y=y, layer=0, type=n["type"],
-            kind="machine", rotation=r,
+            x=x,
+            y=y,
+            layer=0,
+            type=n["type"],
+            kind="machine",
+            rotation=r,
         )
 
     # Build port cells for multi-cell machines.
@@ -617,6 +645,4 @@ def _build_netlist(
 
         port_edges.append((src_cell, dst_cell))
 
-    return lift.Netlist(
-        nodes=nodes, edges=edges, port_edges=port_edges
-    )
+    return lift.Netlist(nodes=nodes, edges=edges, port_edges=port_edges)

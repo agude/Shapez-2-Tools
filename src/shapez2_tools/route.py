@@ -1036,9 +1036,7 @@ def _node_cell_ports(
     if node.kind == "machine":
         return {
             (node.x + dx, node.y + dy): (ins, outs)
-            for (dx, dy), (ins, outs) in lift._machine_footprint(
-                node.type, node.rotation
-            ).items()
+            for (dx, dy), (ins, outs) in lift._machine_footprint(node.type, node.rotation).items()
         }
     ins, outs = lift._inout(node.type, node.rotation)
     return {(node.x, node.y): (ins, outs)}
@@ -1075,9 +1073,7 @@ def _route_fanin_pass(
 
         if len(unique_src_outs) == 1 and len(active_srcs) >= 4:
             common_out = next(iter(unique_src_outs))
-            seg = _route_merge_chain(
-                active_srcs, dst, common_out, dst_in_dir, obs, bounds, layer
-            )
+            seg = _route_merge_chain(active_srcs, dst, common_out, dst_in_dir, obs, bounds, layer)
             if not seg:
                 failures += 1
             entities.extend(seg)
@@ -1117,21 +1113,27 @@ def _route_fanin_pass(
                 merge_ins.add(approach)
                 turned_approaches[src] = approach
 
-            merger_type, merger_r = _belt_for_cell(
-                frozenset(merge_ins), frozenset({common_out})
-            )
+            merger_type, merger_r = _belt_for_cell(frozenset(merge_ins), frozenset({common_out}))
             entities.append(
                 Entity(
-                    x=merger_pos[0], y=merger_pos[1],
-                    type=merger_type, rotation=merger_r, layer=layer,
+                    x=merger_pos[0],
+                    y=merger_pos[1],
+                    type=merger_type,
+                    rotation=merger_r,
+                    layer=layer,
                 )
             )
             obs.add(merger_pos)
 
             for src, approach_dir in turned_approaches.items():
                 path_entities = route_astar(
-                    src, merger_pos, common_out, approach_dir,
-                    obstacles=obs, layer=layer, bounds=bounds,
+                    src,
+                    merger_pos,
+                    common_out,
+                    approach_dir,
+                    obstacles=obs,
+                    layer=layer,
+                    bounds=bounds,
                 )
                 if not path_entities:
                     failures += 1
@@ -1142,8 +1144,13 @@ def _route_fanin_pass(
             merger_end = (merger_pos[0] + common_out[0], merger_pos[1] + common_out[1])
             if merger_end != dst:
                 path_entities = route_astar(
-                    merger_pos, dst, common_out, dst_in_dir,
-                    obstacles=obs, layer=layer, bounds=bounds,
+                    merger_pos,
+                    dst,
+                    common_out,
+                    dst_in_dir,
+                    obstacles=obs,
+                    layer=layer,
+                    bounds=bounds,
                 )
                 if not path_entities:
                     failures += 1
@@ -1170,8 +1177,11 @@ def _route_fanin_pass(
             )
             entities.append(
                 Entity(
-                    x=merge_pos[0], y=merge_pos[1],
-                    type=merger_type, rotation=merger_r, layer=layer,
+                    x=merge_pos[0],
+                    y=merge_pos[1],
+                    type=merger_type,
+                    rotation=merger_r,
+                    layer=layer,
                 )
             )
             obs.add(merge_pos)
@@ -1186,8 +1196,13 @@ def _route_fanin_pass(
                     approach_dir = S if dy < 0 else N
 
                 path_entities = route_astar(
-                    src, merge_pos, src_out_dir, approach_dir,
-                    obstacles=obs, layer=layer, bounds=bounds,
+                    src,
+                    merge_pos,
+                    src_out_dir,
+                    approach_dir,
+                    obstacles=obs,
+                    layer=layer,
+                    bounds=bounds,
                 )
                 if not path_entities:
                     failures += 1
@@ -1289,17 +1304,15 @@ def reroute_with_junctions(stripped: Blueprint, netlist: lift.Netlist, layer: in
     # branch infrastructure doesn't block outer fans' trunks.  When
     # machines are far (long trunks), outer-first ordering is harmful
     # because the trunk itself crosses inner territory; keep dict order.
-    fanout_groups = [
-        (src, dsts) for src, dsts in outgoing.items() if len(dsts) > 1
-    ]
+    fanout_groups = [(src, dsts) for src, dsts in outgoing.items() if len(dsts) > 1]
     if fanout_groups:
         max_manhattan = max(
-            max(abs(s[0] - d[0]) + abs(s[1] - d[1]) for d in ds)
-            for s, ds in fanout_groups
+            max(abs(s[0] - d[0]) + abs(s[1] - d[1]) for d in ds) for s, ds in fanout_groups
         )
         if max_manhattan <= 5:
             fanout_groups.sort(
-                key=lambda g: _perp_reach(g[0], g[1], cell_out_dir), reverse=True,
+                key=lambda g: _perp_reach(g[0], g[1], cell_out_dir),
+                reverse=True,
             )
 
     fanout_processed: set[tuple[int, int]] = set()
@@ -1377,8 +1390,11 @@ def reroute_with_junctions(stripped: Blueprint, netlist: lift.Netlist, layer: in
             )
             routed_entities.append(
                 Entity(
-                    x=splitter_pos[0], y=splitter_pos[1],
-                    type=splitter_type, rotation=splitter_r, layer=layer,
+                    x=splitter_pos[0],
+                    y=splitter_pos[1],
+                    type=splitter_type,
+                    rotation=splitter_r,
+                    layer=layer,
                 )
             )
             obstacles.add(splitter_pos)
@@ -1388,8 +1404,13 @@ def reroute_with_junctions(stripped: Blueprint, netlist: lift.Netlist, layer: in
             trunk_start = (src[0] + src_out_dir[0], src[1] + src_out_dir[1])
             if trunk_start != splitter_pos:
                 path_entities = route_astar(
-                    src, splitter_pos, src_out_dir, trunk_approach,
-                    obstacles=obstacles, layer=layer, bounds=bounds,
+                    src,
+                    splitter_pos,
+                    src_out_dir,
+                    trunk_approach,
+                    obstacles=obstacles,
+                    layer=layer,
+                    bounds=bounds,
                 )
                 for e in path_entities:
                     obstacles.add((e.x, e.y))
@@ -1399,8 +1420,13 @@ def reroute_with_junctions(stripped: Blueprint, netlist: lift.Netlist, layer: in
             for dst, branch_dir in turned_branches.items():
                 dst_in = dst_in_dirs_map[dst]
                 path_entities = route_astar(
-                    splitter_pos, dst, branch_dir, dst_in,
-                    obstacles=obstacles, layer=layer, bounds=bounds,
+                    splitter_pos,
+                    dst,
+                    branch_dir,
+                    dst_in,
+                    obstacles=obstacles,
+                    layer=layer,
+                    bounds=bounds,
                 )
                 for e in path_entities:
                     obstacles.add((e.x, e.y))
@@ -1426,8 +1452,11 @@ def reroute_with_junctions(stripped: Blueprint, netlist: lift.Netlist, layer: in
             )
             routed_entities.append(
                 Entity(
-                    x=split_pos[0], y=split_pos[1],
-                    type=splitter_type, rotation=splitter_r, layer=layer,
+                    x=split_pos[0],
+                    y=split_pos[1],
+                    type=splitter_type,
+                    rotation=splitter_r,
+                    layer=layer,
                 )
             )
             obstacles.add(split_pos)
@@ -1442,8 +1471,13 @@ def reroute_with_junctions(stripped: Blueprint, netlist: lift.Netlist, layer: in
                     branch_out_dir = N if dy > 0 else S
 
                 path_entities = route_astar(
-                    split_pos, dst, branch_out_dir, dst_in_dir,
-                    obstacles=obstacles, layer=layer, bounds=bounds,
+                    split_pos,
+                    dst,
+                    branch_out_dir,
+                    dst_in_dir,
+                    obstacles=obstacles,
+                    layer=layer,
+                    bounds=bounds,
                 )
                 for e in path_entities:
                     obstacles.add((e.x, e.y))
@@ -1467,9 +1501,7 @@ def reroute_with_junctions(stripped: Blueprint, netlist: lift.Netlist, layer: in
         # Retry with distance-sorted order (longest-range groups first).
         sorted_groups = sorted(
             fanin_groups_list,
-            key=lambda g: max(
-                abs(s[0] - g[0][0]) + abs(s[1] - g[0][1]) for s in g[1]
-            ),
+            key=lambda g: max(abs(s[0] - g[0][0]) + abs(s[1] - g[0][1]) for s in g[1]),
             reverse=True,
         )
         fi_ents2, fi_proc2, fi_fails2 = _route_fanin_pass(
@@ -1524,7 +1556,6 @@ def _rebuild_blueprint(bp: Blueprint, entities: list[Entity]) -> Blueprint:
     return Blueprint(data, bp.format_version)
 
 
-
 def _belt_for_cell(ins: frozenset, outs: frozenset) -> tuple[str, int]:
     """Return (type, rotation) for a belt cell with given input/output direction sets.
 
@@ -1567,7 +1598,6 @@ def _belt_for_cell(ins: frozenset, outs: frozenset) -> tuple[str, int]:
     # No belt type can handle this I/O configuration (e.g., 2-in/2-out crossing)
     # Return a placeholder that will cause unmatched legs — better than crashing
     return "BeltDefaultForwardInternalVariant", 0
-
 
 
 def entities_to_blueprint(
