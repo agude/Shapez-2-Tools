@@ -8,12 +8,16 @@ naturally show their T/X topology.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from shapez2_tools import lift
 from shapez2_tools.blueprint import Blueprint
 from shapez2_tools.generator import Entity, all_entities
 
 CELL_PX = 28
 MARGIN_PX = 30  # room for axis labels
+_DATA = Path(__file__).resolve().parent.parent.parent / "data"
 
 _COLORS = {
     "bg": "#111118",
@@ -33,9 +37,65 @@ _COLORS = {
     "label": "#667788",
     "port_arrow_in": "#55dd66",
     "port_arrow_out": "#dddd44",
+    "platform_fill": "#223344",
+    "platform_edge": "#556677",
 }
 
 W, E, N, S = (-1, 0), (1, 0), (0, 1), (0, -1)
+
+
+def _load_platforms() -> dict:
+    with open(_DATA / "platforms.json") as f:
+        return json.load(f)
+
+
+def _platform_geometry(
+    plat_data: dict,
+) -> tuple[list[tuple[int, int, int, int]], list[tuple[int, int, int, int]]]:
+    """Compute unit-cell rectangles and boundary edges in game coordinates.
+
+    Returns (cells, edges) where each cell is (x0, y0, x1, y1) and each
+    edge is a line segment (x1, y1, x2, y2).
+    """
+    ports = plat_data.get("ports")
+    if not ports:
+        return [], []
+
+    unit = plat_data.get("unit_size", 20)
+    gx0 = min(x for x, _, _ in ports) - 2
+    gy0 = min(y for _, y, _ in ports) - 2
+
+    if "shape_units" in plat_data:
+        shape = plat_data["shape_units"]
+    else:
+        units = plat_data.get("units", [1, 1])
+        if isinstance(units, int):
+            return [], []
+        shape = ["#" * units[0]] * units[1]
+
+    rows = len(shape)
+    occupied: set[tuple[int, int]] = set()
+    for ri, row_str in enumerate(shape):
+        for ci, ch in enumerate(row_str):
+            if ch == "#":
+                occupied.add((ci, rows - 1 - ri))
+
+    cells = []
+    edges = []
+    for ci, ri in occupied:
+        cx = gx0 + ci * unit
+        cy = gy0 + ri * unit
+        cells.append((cx, cy, cx + unit, cy + unit))
+        if (ci, ri - 1) not in occupied:
+            edges.append((cx, cy, cx + unit, cy))
+        if (ci, ri + 1) not in occupied:
+            edges.append((cx, cy + unit, cx + unit, cy + unit))
+        if (ci - 1, ri) not in occupied:
+            edges.append((cx, cy, cx, cy + unit))
+        if (ci + 1, ri) not in occupied:
+            edges.append((cx + unit, cy, cx + unit, cy + unit))
+
+    return cells, edges
 
 
 def _entity_fill(
@@ -149,6 +209,23 @@ def render_html(
             max_x = max(max_x, e.x + dx)
             min_y = min(min_y, e.y + dy)
             max_y = max(max_y, e.y + dy)
+    # Platform outline geometry (expand bounding box to include edges).
+    platforms = _load_platforms()
+    plat_cells: list[tuple[int, int, int, int]] = []
+    plat_edges: list[tuple[int, int, int, int]] = []
+    for plat_entry in bp.entries:
+        plat_type = plat_entry.get("T", "")
+        plat_data = platforms.get(plat_type)
+        if plat_data:
+            cells, edges = _platform_geometry(plat_data)
+            plat_cells.extend(cells)
+            plat_edges.extend(edges)
+            for cx0, cy0, cx1, cy1 in cells:
+                min_x = min(min_x, cx0)
+                max_x = max(max_x, cx1 - 1)
+                min_y = min(min_y, cy0)
+                max_y = max(max_y, cy1 - 1)
+
     min_x -= 1
     max_x += 1
     min_y -= 1
@@ -202,6 +279,32 @@ def render_html(
         parts.append(
             f'<text x="{MARGIN_PX - 4}" y="{y}" '
             f'text-anchor="end" fill="{_COLORS["label"]}" font-size="9">{gy}</text>'
+        )
+
+    # --- platform outline ---
+    def pt_to_svg(x: int, y: int) -> tuple[float, float]:
+        """Game-coordinate point → SVG pixel position."""
+        return (
+            MARGIN_PX + (x - min_x) * CELL_PX,
+            MARGIN_PX + (max_y + 1 - y) * CELL_PX,
+        )
+
+    fill_c = _COLORS["platform_fill"]
+    edge_c = _COLORS["platform_edge"]
+    for cx0, cy0, cx1, cy1 in plat_cells:
+        sx0, sy0 = pt_to_svg(cx0, cy1)
+        sx1, sy1 = pt_to_svg(cx1, cy0)
+        parts.append(
+            f'<rect x="{sx0}" y="{sy0}" '
+            f'width="{sx1 - sx0}" height="{sy1 - sy0}" '
+            f'fill="{fill_c}" opacity="0.35"/>'
+        )
+    for ex1, ey1, ex2, ey2 in plat_edges:
+        sx1, sy1 = pt_to_svg(ex1, ey1)
+        sx2, sy2 = pt_to_svg(ex2, ey2)
+        parts.append(
+            f'<line x1="{sx1}" y1="{sy1}" x2="{sx2}" y2="{sy2}" '
+            f'stroke="{edge_c}" stroke-width="1.5" opacity="0.7"/>'
         )
 
     # --- entities ---
@@ -298,6 +401,7 @@ def render_html(
 
     page_title = title or "Blueprint"
     legend_items = [
+        ("Platform", _COLORS["platform_edge"]),
         ("Input port", _COLORS["port_in"]),
         ("Output port", _COLORS["port_out"]),
         ("Launcher", _COLORS["launcher"]),

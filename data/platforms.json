@@ -4,13 +4,19 @@
     "unit_size": 20,
     "border": 2,
     "seam": 4,
-    "interior_per_axis": "20*units - 4 (each unit is a 20x20 bounding cell with a 16x16 buildable interior; each internal join fills the shared 2+2 border, +4 per seam)",
-    "units_order": "[along_X, along_Y] in the platform-local frame (independent of the placed platform's R)",
-    "verified": {
-      "Foundation_1x1": "16x16 interior, 290 corpus blueprints (square, rotation-invariant)",
-      "Foundation_1x4": "4 units at coordinate pitch 20 in X, reproduced exactly by generator M2"
+    "interior_per_axis": "20*units - 4 per axis for rectangular platforms.",
+    "units_order": "[along_X, along_Y] in the platform-local frame.",
+    "ports": {
+      "_comment": "Ground-truth port positions extracted from calibration templates (TEMPLATES/ in the blueprints repo). Each port is [x, y, r] where r is the port's facing direction: 0=east (west wall), 1=north (south wall), 2=west (east wall), 3=south (north wall).",
+      "entity_type": "BeltPortReceiverInternalVariant",
+      "bidirectional": "Port slots are bidirectional. The same physical slot becomes a source (Receiver) or sink (Sender) depending on the entity placed. In blueprints, all port entities use the flow-direction rotation (e.g. R=3 for south-flowing designs), not the per-wall rotation from the template.",
+      "count_rule": "4 ports per exposed unit-edge face. For an NxM rectangle: 4*2*(N+M) total. For irregular shapes: 4 * perimeter_in_unit_edges."
     },
-    "caveats": "Multi-unit interiors are model-derived, not independently measured. Corpus extents are confounded by per-platform rotation and by belts/ports reaching the rim, so single designs read slightly under the true interior. input_y/output_y/port_x_range are the rotator-style port convention, not platform invariants."
+    "verified": {
+      "Foundation_1x1": "corpus + template",
+      "Foundation_1x4": "generator M2 + template",
+      "all_foundations": "All 13 Foundation types calibrated from user-provided templates (2026-06-05)."
+    }
   },
 
   "Foundation_1x1": {
@@ -18,51 +24,98 @@
     "units": [1, 1],
     "grid_size": [20, 20],
     "interior": [16, 16],
-    "verified": "corpus",
+    "verified": "template",
     "ports_per_layer": 4,
-    "input_y": 17,
-    "output_y": 2,
-    "port_x_range": [8, 11]
+    "ports": [
+      [2,8,0], [2,9,0], [2,10,0], [2,11,0],
+      [8,2,1], [9,2,1], [10,2,1], [11,2,1],
+      [17,8,2], [17,9,2], [17,10,2], [17,11,2],
+      [8,17,3], [9,17,3], [10,17,3], [11,17,3]
+    ]
   },
   "Foundation_1x2": {
-    "description": "1x2 platform",
-    "units": [1, 2],
-    "grid_size": [20, 40],
-    "interior": [16, 36],
-    "verified": "model",
-    "ports_per_layer": 4,
-    "input_y": 17,
-    "output_y": -18,
-    "port_x_range": [8, 11]
+    "description": "1x2 platform (2 wide, 1 tall)",
+    "units": [2, 1],
+    "grid_size": [40, 20],
+    "interior": [36, 16],
+    "verified": "template",
+    "ports_per_layer": 8,
+    "ports": [
+      [2,8,0], [2,9,0], [2,10,0], [2,11,0],
+      [8,2,1], [9,2,1], [10,2,1], [11,2,1], [28,2,1], [29,2,1], [30,2,1], [31,2,1],
+      [37,8,2], [37,9,2], [37,10,2], [37,11,2],
+      [8,17,3], [9,17,3], [10,17,3], [11,17,3], [28,17,3], [29,17,3], [30,17,3], [31,17,3]
+    ]
+  },
+  "Foundation_1x3": {
+    "description": "1x3 platform (3 wide, 1 tall)",
+    "units": [3, 1],
+    "grid_size": [60, 20],
+    "interior": [56, 16],
+    "verified": "template",
+    "ports_per_layer": 12,
+    "ports": [
+      [-18,8,0], [-18,9,0], [-18,10,0], [-18,11,0],
+      [-12,2,1], [-11,2,1], [-10,2,1], [-9,2,1], [8,2,1], [9,2,1], [10,2,1], [11,2,1], [28,2,1], [29,2,1], [30,2,1], [31,2,1],
+      [37,8,2], [37,9,2], [37,10,2], [37,11,2],
+      [-12,17,3], [-11,17,3], [-10,17,3], [-9,17,3], [8,17,3], [9,17,3], [10,17,3], [11,17,3], [28,17,3], [29,17,3], [30,17,3], [31,17,3]
+    ]
   },
   "Foundation_1x4": {
     "description": "Full belt platform (1x4)",
     "units": [4, 1],
     "grid_size": [80, 20],
     "interior": [76, 16],
-    "verified": "M2",
+    "verified": "template",
     "ports_per_layer": 16,
-    "input_y": 17,
-    "output_y": 2,
-    "_port_note": "Ports span four units; the single port_x_range model does not apply. Per-unit ports sit at the same offset as the 1x1, repeated at unit pitch 20."
+    "ports": [
+      [-18,8,0], [-18,9,0], [-18,10,0], [-18,11,0],
+      [-12,2,1], [-11,2,1], [-10,2,1], [-9,2,1], [8,2,1], [9,2,1], [10,2,1], [11,2,1], [28,2,1], [29,2,1], [30,2,1], [31,2,1], [48,2,1], [49,2,1], [50,2,1], [51,2,1],
+      [57,8,2], [57,9,2], [57,10,2], [57,11,2],
+      [-12,17,3], [-11,17,3], [-10,17,3], [-9,17,3], [8,17,3], [9,17,3], [10,17,3], [11,17,3], [28,17,3], [29,17,3], [30,17,3], [31,17,3], [48,17,3], [49,17,3], [50,17,3], [51,17,3]
+    ]
   },
   "Foundation_2x2": {
     "description": "2x2 platform",
     "units": [2, 2],
     "grid_size": [40, 40],
     "interior": [36, 36],
-    "verified": "model",
+    "verified": "template",
     "ports_per_layer": 8,
-    "_port_note": "Ports on multiple edges."
+    "ports": [
+      [2,8,0], [2,9,0], [2,10,0], [2,11,0], [2,28,0], [2,29,0], [2,30,0], [2,31,0],
+      [8,2,1], [9,2,1], [10,2,1], [11,2,1], [28,2,1], [29,2,1], [30,2,1], [31,2,1],
+      [37,8,2], [37,9,2], [37,10,2], [37,11,2], [37,28,2], [37,29,2], [37,30,2], [37,31,2],
+      [8,37,3], [9,37,3], [10,37,3], [11,37,3], [28,37,3], [29,37,3], [30,37,3], [31,37,3]
+    ]
+  },
+  "Foundation_2x3": {
+    "description": "2x3 platform (3 wide, 2 tall)",
+    "units": [3, 2],
+    "grid_size": [60, 40],
+    "interior": [56, 36],
+    "verified": "template",
+    "ports_per_layer": 12,
+    "ports": [
+      [-18,8,0], [-18,9,0], [-18,10,0], [-18,11,0], [-18,28,0], [-18,29,0], [-18,30,0], [-18,31,0],
+      [-12,2,1], [-11,2,1], [-10,2,1], [-9,2,1], [8,2,1], [9,2,1], [10,2,1], [11,2,1], [28,2,1], [29,2,1], [30,2,1], [31,2,1],
+      [37,8,2], [37,9,2], [37,10,2], [37,11,2], [37,28,2], [37,29,2], [37,30,2], [37,31,2],
+      [-12,37,3], [-11,37,3], [-10,37,3], [-9,37,3], [8,37,3], [9,37,3], [10,37,3], [11,37,3], [28,37,3], [29,37,3], [30,37,3], [31,37,3]
+    ]
   },
   "Foundation_2x4": {
     "description": "Full belt 2-row platform (2x4)",
     "units": [4, 2],
     "grid_size": [80, 40],
     "interior": [76, 36],
-    "verified": "model",
-    "ports_per_layer": 24,
-    "_note": "Corrected grid_size: was [80, 60]. Used for painters, mixers with fluid input."
+    "verified": "template",
+    "ports_per_layer": 16,
+    "ports": [
+      [-18,8,0], [-18,9,0], [-18,10,0], [-18,11,0], [-18,28,0], [-18,29,0], [-18,30,0], [-18,31,0],
+      [-12,2,1], [-11,2,1], [-10,2,1], [-9,2,1], [8,2,1], [9,2,1], [10,2,1], [11,2,1], [28,2,1], [29,2,1], [30,2,1], [31,2,1], [48,2,1], [49,2,1], [50,2,1], [51,2,1],
+      [57,8,2], [57,9,2], [57,10,2], [57,11,2], [57,28,2], [57,29,2], [57,30,2], [57,31,2],
+      [-12,37,3], [-11,37,3], [-10,37,3], [-9,37,3], [8,37,3], [9,37,3], [10,37,3], [11,37,3], [28,37,3], [29,37,3], [30,37,3], [31,37,3], [48,37,3], [49,37,3], [50,37,3], [51,37,3]
+    ]
   },
   "Foundation_2x4_Flipped": {
     "description": "Flipped 2x4 (full-belt stacker)",
@@ -70,100 +123,161 @@
     "grid_size": [80, 40],
     "interior": [76, 36],
     "verified": "model",
-    "_note": "Geometry assumed identical to Foundation_2x4; flip affects port arrangement only."
+    "_note": "No template available. Geometry assumed identical to Foundation_2x4; flip may affect port arrangement."
+  },
+  "Foundation_3x3": {
+    "description": "3x3 platform",
+    "units": [3, 3],
+    "grid_size": [60, 60],
+    "interior": [56, 56],
+    "verified": "template",
+    "ports_per_layer": 12,
+    "ports": [
+      [-18,-12,0], [-18,-11,0], [-18,-10,0], [-18,-9,0], [-18,8,0], [-18,9,0], [-18,10,0], [-18,11,0], [-18,28,0], [-18,29,0], [-18,30,0], [-18,31,0],
+      [-12,-18,1], [-11,-18,1], [-10,-18,1], [-9,-18,1], [8,-18,1], [9,-18,1], [10,-18,1], [11,-18,1], [28,-18,1], [29,-18,1], [30,-18,1], [31,-18,1],
+      [37,-12,2], [37,-11,2], [37,-10,2], [37,-9,2], [37,8,2], [37,9,2], [37,10,2], [37,11,2], [37,28,2], [37,29,2], [37,30,2], [37,31,2],
+      [-12,37,3], [-11,37,3], [-10,37,3], [-9,37,3], [8,37,3], [9,37,3], [10,37,3], [11,37,3], [28,37,3], [29,37,3], [30,37,3], [31,37,3]
+    ]
+  },
+  "Foundation_C5": {
+    "description": "Cross-shaped platform (5 units)",
+    "units": 5,
+    "grid_size": [60, 60],
+    "unit_size": 20,
+    "shape_units": [".#.", "###", ".#."],
+    "verified": "template",
+    "ports_per_layer": 12,
+    "ports": [
+      [-18,8,0], [-18,9,0], [-18,10,0], [-18,11,0], [2,-12,0], [2,-11,0], [2,-10,0], [2,-9,0], [2,28,0], [2,29,0], [2,30,0], [2,31,0],
+      [-12,2,1], [-11,2,1], [-10,2,1], [-9,2,1], [8,-18,1], [9,-18,1], [10,-18,1], [11,-18,1], [28,2,1], [29,2,1], [30,2,1], [31,2,1],
+      [17,-12,2], [17,-11,2], [17,-10,2], [17,-9,2], [17,28,2], [17,29,2], [17,30,2], [17,31,2], [37,8,2], [37,9,2], [37,10,2], [37,11,2],
+      [-12,17,3], [-11,17,3], [-10,17,3], [-9,17,3], [8,37,3], [9,37,3], [10,37,3], [11,37,3], [28,17,3], [29,17,3], [30,17,3], [31,17,3]
+    ]
+  },
+  "Foundation_L3": {
+    "description": "Short L platform (3 units)",
+    "units": 3,
+    "grid_size": [40, 40],
+    "unit_size": 20,
+    "shape_units": ["#.", "##"],
+    "verified": "template",
+    "ports_per_layer": 8,
+    "ports": [
+      [2,8,0], [2,9,0], [2,10,0], [2,11,0], [2,28,0], [2,29,0], [2,30,0], [2,31,0],
+      [8,2,1], [9,2,1], [10,2,1], [11,2,1], [28,2,1], [29,2,1], [30,2,1], [31,2,1],
+      [17,28,2], [17,29,2], [17,30,2], [17,31,2], [37,8,2], [37,9,2], [37,10,2], [37,11,2],
+      [8,37,3], [9,37,3], [10,37,3], [11,37,3], [28,17,3], [29,17,3], [30,17,3], [31,17,3]
+    ]
+  },
+  "Foundation_L4": {
+    "description": "Long L platform (4 units)",
+    "units": 4,
+    "grid_size": [60, 40],
+    "unit_size": 20,
+    "shape_units": ["###", "#.."],
+    "verified": "template",
+    "ports_per_layer": 12,
+    "_note": "Platform entity in template has X=-1 Y=1 (offset from island origin).",
+    "ports": [
+      [2,-12,0], [2,-11,0], [2,-10,0], [2,-9,0], [2,8,0], [2,9,0], [2,10,0], [2,11,0],
+      [8,-18,1], [9,-18,1], [10,-18,1], [11,-18,1], [28,2,1], [29,2,1], [30,2,1], [31,2,1], [48,2,1], [49,2,1], [50,2,1], [51,2,1],
+      [17,-12,2], [17,-11,2], [17,-10,2], [17,-9,2], [57,8,2], [57,9,2], [57,10,2], [57,11,2],
+      [8,17,3], [9,17,3], [10,17,3], [11,17,3], [28,17,3], [29,17,3], [30,17,3], [31,17,3], [48,17,3], [49,17,3], [50,17,3], [51,17,3]
+    ]
+  },
+  "Foundation_S4": {
+    "description": "S-shaped platform (4 units)",
+    "units": 4,
+    "grid_size": [60, 40],
+    "unit_size": 20,
+    "shape_units": [".##", "##."],
+    "verified": "template",
+    "ports_per_layer": 12,
+    "ports": [
+      [-18,8,0], [-18,9,0], [-18,10,0], [-18,11,0], [2,28,0], [2,29,0], [2,30,0], [2,31,0],
+      [-12,2,1], [-11,2,1], [-10,2,1], [-9,2,1], [8,2,1], [9,2,1], [10,2,1], [11,2,1], [28,22,1], [29,22,1], [30,22,1], [31,22,1],
+      [17,8,2], [17,9,2], [17,10,2], [17,11,2], [37,28,2], [37,29,2], [37,30,2], [37,31,2],
+      [-12,17,3], [-11,17,3], [-10,17,3], [-9,17,3], [8,37,3], [9,37,3], [10,37,3], [11,37,3], [28,37,3], [29,37,3], [30,37,3], [31,37,3]
+    ]
+  },
+  "Foundation_T4": {
+    "description": "T-shaped platform (4 units)",
+    "units": 4,
+    "grid_size": [60, 40],
+    "unit_size": 20,
+    "shape_units": [".#.", "###"],
+    "verified": "template",
+    "ports_per_layer": 12,
+    "ports": [
+      [-18,8,0], [-18,9,0], [-18,10,0], [-18,11,0], [2,28,0], [2,29,0], [2,30,0], [2,31,0],
+      [-12,2,1], [-11,2,1], [-10,2,1], [-9,2,1], [8,2,1], [9,2,1], [10,2,1], [11,2,1], [28,2,1], [29,2,1], [30,2,1], [31,2,1],
+      [17,28,2], [17,29,2], [17,30,2], [17,31,2], [37,8,2], [37,9,2], [37,10,2], [37,11,2],
+      [-12,17,3], [-11,17,3], [-10,17,3], [-9,17,3], [8,37,3], [9,37,3], [10,37,3], [11,37,3], [28,17,3], [29,17,3], [30,17,3], [31,17,3]
+    ]
   },
 
   "Layout_Normal_1": {
-    "description": "Normal 1x1 island",
+    "description": "Normal 1x1 island (same geometry as Foundation_1x1)",
     "units": [1, 1],
     "grid_size": [20, 20],
     "interior": [16, 16],
     "verified": "corpus",
-    "ports_per_layer": 4,
-    "input_y": 17,
-    "output_y": 2,
-    "port_x_range": [8, 11]
+    "_see": "Foundation_1x1"
   },
   "Layout_Normal_2": {
-    "description": "Normal 1x2 island",
-    "units": [1, 2],
-    "grid_size": [20, 40],
-    "interior": [16, 36],
+    "description": "Normal 1x2 island (same geometry as Foundation_1x2)",
+    "units": [2, 1],
+    "grid_size": [40, 20],
+    "interior": [36, 16],
     "verified": "model",
-    "ports_per_layer": 4,
-    "input_y": 17,
-    "output_y": -18,
-    "port_x_range": [8, 11]
+    "_see": "Foundation_1x2"
   },
   "Layout_Normal_3_L": {
-    "description": "L-shaped island (3 units)",
+    "description": "L-shaped island (3 units, same geometry as Foundation_L3)",
     "units": 3,
     "grid_size": [40, 40],
     "unit_size": 20,
-    "shape_units": [
-      "#.",
-      "##"
-    ],
-    "shape_origin": [-18, -18],
+    "shape_units": ["#.", "##"],
     "verified": "model",
-    "_interior_note": "Irregular: interior = union of per-unit 16x16 plus +4 per internal adjacency; compute from shape_units.",
-    "_note": "L-shape: top-left missing"
+    "_see": "Foundation_L3"
   },
   "Layout_Normal_4_T": {
-    "description": "T-shaped island (4 units)",
+    "description": "T-shaped island (4 units, same geometry as Foundation_T4)",
     "units": 4,
     "grid_size": [60, 40],
     "unit_size": 20,
-    "shape_units": [
-      "###",
-      ".#."
-    ],
-    "shape_origin": [-18, -18],
+    "shape_units": [".#.", "###"],
     "verified": "model",
-    "_note": "T-shape: top row full, bottom center only"
+    "_see": "Foundation_T4"
   },
   "Layout_Normal_4_2x2": {
-    "description": "2x2 square island (4 units)",
+    "description": "2x2 square island (same geometry as Foundation_2x2)",
     "units": [2, 2],
     "grid_size": [40, 40],
     "interior": [36, 36],
     "unit_size": 20,
-    "shape_units": [
-      "##",
-      "##"
-    ],
-    "shape_origin": [-18, -18],
+    "shape_units": ["##", "##"],
     "verified": "model",
-    "_note": "Full 2x2 square; same footprint as Foundation_2x2"
+    "_see": "Foundation_2x2"
   },
   "Layout_Normal_5_Cross": {
-    "description": "Cross-shaped island (5 units)",
+    "description": "Cross-shaped island (5 units, same geometry as Foundation_C5)",
     "units": 5,
     "grid_size": [60, 60],
     "unit_size": 20,
-    "shape_units": [
-      ".#.",
-      "###",
-      ".#."
-    ],
-    "shape_origin": [-18, -38],
+    "shape_units": [".#.", "###", ".#."],
     "verified": "model",
-    "_note": "Cross shape: center + 4 arms"
+    "_see": "Foundation_C5"
   },
   "Layout_Normal_9_3x3": {
-    "description": "3x3 square island (9 units)",
+    "description": "3x3 square island (same geometry as Foundation_3x3)",
     "units": [3, 3],
     "grid_size": [60, 60],
     "interior": [56, 56],
     "unit_size": 20,
-    "shape_units": [
-      "###",
-      "###",
-      "###"
-    ],
-    "shape_origin": [-18, -38],
+    "shape_units": ["###", "###", "###"],
     "verified": "model",
-    "_note": "Full 3x3 square"
+    "_see": "Foundation_3x3"
   },
 
   "Layout_ShapeMiner": {

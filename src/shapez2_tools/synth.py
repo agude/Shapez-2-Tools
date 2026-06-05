@@ -69,7 +69,10 @@ class Spec:
     def lanes(self) -> int:
         with open(_DATA / "platforms.json") as f:
             platforms = json.load(f)
-        return platforms[self.platform]["ports_per_layer"]
+        plat = platforms[self.platform]
+        if "ports" in plat:
+            return sum(1 for _, _, r in plat["ports"] if r == 3)
+        return plat["ports_per_layer"]
 
 
 def netlist_from_spec(spec: Spec) -> dict:
@@ -124,7 +127,11 @@ class DiagonalSpec:
     def validate(self) -> None:
         with open(_DATA / "platforms.json") as f:
             platforms = json.load(f)
-        ports = platforms[self.platform]["ports_per_layer"]
+        plat = platforms[self.platform]
+        if "ports" in plat:
+            ports = sum(1 for _, _, r in plat["ports"] if r == 3)
+        else:
+            ports = plat["ports_per_layer"]
         if self.ports_needed > ports:
             raise ValueError(
                 f"{self.pairs} pairs need {self.ports_needed} ports, "

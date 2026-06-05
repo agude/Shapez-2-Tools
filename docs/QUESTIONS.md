@@ -39,10 +39,14 @@ alongside shape belts, so the lifter needs a pipe routing model (calibrate
 pipe Forward/turn/junction in/out sides, like belts) before painters lift. A
 clean painter with belts **and** pipes on its I/O would calibrate it.
 
-## 5. Non-1×1/1×4 platform ports  *(calibration)*
-The swapper (2×2) and painter (2×4) blueprints leave unmatched legs at their
-ports. Are belt ports on 2×2 / 2×4 platforms placed or oriented differently from
-the 1×1 / 1×4 convention I calibrated?
+## 5. Non-1×1/1×4 platform ports — RESOLVED
+User provided calibration templates (TEMPLATES/ in the blueprints repo) for all
+13 Foundation types. Port slots are `BeltPortReceiverInternalVariant` and are
+**bidirectional** — the same physical slot becomes a source (Receiver) or sink
+(Sender) depending on the entity placed. Ground-truth port positions added to
+`platforms.json` as `[x, y, rotation]` lists. Foundation_1x2 geometry corrected
+(was modeled as portrait, actually landscape). Eight new Foundation types added:
+1x3, 2x3, 3x3, C5 (cross), L3 (short L), L4 (long L), S4, T4.
 
 ## 6. Rotation direction sanity check
 The interpreter maps `RotatorOneQuad` → clockwise, `RotatorOneQuadCCW` →

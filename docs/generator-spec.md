@@ -26,7 +26,8 @@ regression floor. The hard target is intra-platform **place-and-route**.
 - `font.py` — pre-extracted 10×14 mono bitmap font (95 printable ASCII glyphs,
   stored as row bitmasks; no Pillow runtime dependency). `silkscreen()` renders
   text as `Trash` entities at a given origin and scale.
-- `data/platforms.json` — seam-aware platform geometry (interior = 20·units − 4).
+- `data/platforms.json` — seam-aware platform geometry + ground-truth port
+  positions for all 13 Foundation types (calibrated from templates).
 - `lift.py` — recovers a machine-level netlist from a placed blueprint. Belt
   direction is calibrated for **all** routing variants (belts + every
   splitter/merger); **machines expand to multi-cell footprints**
@@ -105,7 +106,7 @@ regression floor. The hard target is intra-platform **place-and-route**.
   lowers it through the full pipeline. Verified on 1×1 with 2 pairs: 8/8 edges,
   validates, and interprets to the correct diagonals (`Ru--Ru--` / `--Ru--Ru`).
   CLI: `synth swap_diagonal [--pairs N]`. Scaling to 4 pairs needs a platform
-  with 8 ports (Foundation_2x2, port calibration Q5 still open).
+  with 8 ports (Foundation_2x2, port calibration done — Q5 resolved).
   **26 synth tests green, 1 xfail (150 total, 3 xfail).**
 - CLI: `gen`, `diff`, `show`, `lift`, `viz`, `place`, `synth`. `synth` synthesizes
   a blueprint from a spec (e.g. `synth rotate_180` or `synth rotate_cw,rotate_cw`).
@@ -191,19 +192,18 @@ throughput=2). CLI: `just run synth rotate_180 -o out.spz2bp`.
 - **The diagonal extractor** (north-star demo): `DiagonalSpec` +
   `synthesize_diagonal()` landed for 2 pairs on 1×1 (8/8 edges, validates,
   interprets to correct diagonals). Scaling to 4 pairs (the full-belt target)
-  needs a platform with 8 ports — Foundation_2x2 is the candidate, but its
-  port positions/orientations aren't calibrated (Q5 open). Once Q5 is
-  answered, add port data to platforms.json and update the placer's port
-  assignment logic for multi-unit-width platforms.
+  needs a platform with 8 ports — Foundation_2x2 is the candidate and is now
+  calibrated (Q5 resolved).
+- **Platform calibration done (2026-06-05).** User provided 13 empty
+  templates (TEMPLATES/ in the blueprints repo) with `BeltPortReceiverInternalVariant`
+  on every IO port slot. Port slots are **bidirectional** (Receiver = source,
+  Sender = sink). Ground-truth port positions added to `platforms.json` for all
+  13 Foundation types; `place.py` reads positions from the `ports` list.
+  Foundation_1x2 geometry corrected (was [1,2], now [2,1]). New types:
+  Foundation_1x3, 2x3, 3x3, C5 (cross), L3 (short L), L4 (long L), S4, T4.
 - **Machine placement is often a human design decision; the product is the
   router.** The placer validates the pipeline and will improve as the router
   matures.
-- **Platform calibration blueprints needed (ACTION: user provides).** Export
-  one blueprint per platform type: fill the interior with trash and populate
-  all I/O port slots. This gives ground-truth grid bounds, port positions
-  (all four sides), and coordinate-system validation — fixing Q5 and the
-  Foundation_1x2 geometry discrepancy. Until these arrive, multi-unit
-  platform support is blocked on uncalibrated data in `platforms.json`.
 - Machine-type breadth work (stacker WP-F, painter WP-G, full-blueprint sim
   WP-H) blocks nothing on the diagonal extractor — its machines (rotators,
   swappers, belts) are already lifted and simulated.
@@ -280,10 +280,11 @@ throughput=2). CLI: `just run synth rotate_180 -o out.spz2bp`.
   fills the shared border: +4 cells per internal seam.**
 - Interior = `20·units − 4` per axis. Verified: 1×1 = 16×16 (corpus), 1×4 = 76×16
   (M2). Generalizes to any size (2×4 = 76×36, 2×8, …).
-- `platforms.json` rewritten with the unit model, correct interiors, provenance
-  flags, and the four previously-missing platforms.
-- Corpus extents are confounded by per-platform rotation and belt/port sprawl, so
-  geometry is taken from the model, not raw measurement.
+- `platforms.json` carries ground-truth `ports` lists (all 13 Foundation types
+  calibrated from templates, 2026-06-05). Port slots are bidirectional
+  `BeltPortReceiverInternalVariant`; direction is determined by entity type
+  (Receiver = source, Sender = sink). 4 ports per exposed unit-edge face.
+  Foundation_1x2 geometry corrected (was [1,2], now [2,1]).
 
 ### Per-family parametrics (reference)
 - Lane-preserving belt ops: **12 in / 12 out** (quarter), **48 / 48** (full belt).
@@ -642,8 +643,8 @@ widens the spec space but blocks nothing on the diagonal extractor.
   - ✓ `TestDiagonalSynthesize::test_diagonal_validates` — physical validation clean.
   - ✓ `TestDiagonalSynthesize::test_diagonal_edge_count` — 8/8 edges realized.
   - ✓ `TestDiagonalSynthesize::test_diagonal_interprets` — diagonals from N/S inputs.
-- **Remaining:** scaling to 4 pairs (the full-belt target) needs Foundation_2x2
-  port calibration (Q5 open).
+- **Remaining:** scaling to 4 pairs (the full-belt target) — Foundation_2x2
+  port calibration done (Q5 resolved); placer needs multi-edge port support.
 
 #### WP-F — Stacker cross-floor lift *(breadth track)*
 - **Goal:** lift inter-floor machines; complete the table for stacking specs.

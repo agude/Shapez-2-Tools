@@ -66,6 +66,11 @@ def abstract_netlist(nl: lift.Netlist) -> dict:
     return {"nodes": nodes, "edges": edges}
 
 
+def _edge_ports(plat: dict, rotation: int) -> list[tuple[int, int]]:
+    """Port positions for a given facing direction, sorted by x then y."""
+    return sorted((x, y) for x, y, r in plat["ports"] if r == rotation)
+
+
 def place(abstract: dict, platform: str) -> lift.Netlist:
     """Place an abstract netlist on a platform via CP-SAT.
 
@@ -84,9 +89,13 @@ def place(abstract: dict, platform: str) -> lift.Netlist:
     x_min, x_max = border, grid_w - border - 1
     y_min, y_max = border, grid_h - border - 1
 
-    input_y = plat["input_y"]
-    output_y = plat["output_y"]
-    port_x_range = plat.get("port_x_range")
+    # Port positions from the calibrated ports list.
+    # Convention: sources on the north wall (R=3, items flow south into the
+    # platform), sinks on the south wall (R=1, items exit south).
+    source_ports = _edge_ports(plat, 3)
+    sink_ports = _edge_ports(plat, 1)
+    input_y = source_ports[0][1]
+    output_y = sink_ports[0][1]
 
     # Index nodes by id.
     node_by_id: dict[str, dict] = {n["id"]: n for n in abstract["nodes"]}
@@ -96,22 +105,15 @@ def place(abstract: dict, platform: str) -> lift.Netlist:
     sinks = [n for n in abstract["nodes"] if n["kind"] == "platform_out"]
     machines = [n for n in abstract["nodes"] if n["kind"] == "machine"]
 
-    # Assign port positions: sources at input_y, sinks at output_y.
-    # Port x positions come from port_x_range; assign left to right.
-    #
+    # Assign port positions from the actual port list, left to right.
     # To avoid route crossings, order sinks to match the source ordering:
     # trace each source → machines → sink chain, then assign the sink that
     # a leftmost source feeds to the leftmost sink port, etc.
     port_rotation = _port_rotation(input_y, output_y)
 
     src_positions: dict[str, tuple[int, int]] = {}
-    if port_x_range:
-        for i, src in enumerate(sources):
-            x = port_x_range[0] + i
-            src_positions[src["id"]] = (x, input_y)
-    else:
-        for i, src in enumerate(sources):
-            src_positions[src["id"]] = (x_min + i, input_y)
+    for i, src in enumerate(sources):
+        src_positions[src["id"]] = source_ports[i]
 
     # Build the src → sink mapping by tracing through machine edges.
     edge_out: dict[str, list[str]] = {}
@@ -153,13 +155,8 @@ def place(abstract: dict, platform: str) -> lift.Netlist:
             ordered_sinks.append(sink["id"])
 
     sink_positions: dict[str, tuple[int, int]] = {}
-    if port_x_range:
-        for i, sink_id in enumerate(ordered_sinks):
-            x = port_x_range[0] + i
-            sink_positions[sink_id] = (x, output_y)
-    else:
-        for i, sink_id in enumerate(ordered_sinks):
-            sink_positions[sink_id] = (x_min + i, output_y)
+    for i, sink_id in enumerate(ordered_sinks):
+        sink_positions[sink_id] = sink_ports[i]
 
     if not machines:
         return _build_netlist(abstract, src_positions, sink_positions, {}, port_rotation)
