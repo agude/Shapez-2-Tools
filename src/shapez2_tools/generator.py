@@ -179,6 +179,52 @@ def substitute(tile: list[Entity], mapping: dict[str, str]) -> list[Entity]:
     return [Entity(e.x, e.y, mapping.get(e.type, e.type), e.rotation, e.layer) for e in tile]
 
 
+_DIRECTION_LABELS: dict[str, str] = {"180": "180", "cw": "CW", "ccw": "CCW"}
+_LABEL_TYPE = "LabelDefaultInternalVariant"
+_LABEL_POS = (54, 3)
+
+
+def _find_gaps(entities: list[Entity]) -> list[tuple[int, int]]:
+    """Find contiguous free-X runs on layer 0 between the outermost occupied columns."""
+    occupied = sorted(set(e.x for e in entities if e.layer == 0))
+    if not occupied:
+        return []
+    free = sorted(set(range(occupied[0], occupied[-1] + 1)) - set(occupied))
+    gaps: list[tuple[int, int]] = []
+    for x in free:
+        if gaps and x == gaps[-1][1] + 1:
+            gaps[-1] = (gaps[-1][0], x)
+        else:
+            gaps.append((x, x))
+    return gaps
+
+
+def _add_silkscreen(entities: list[Entity], direction: str, platform: str) -> list[Entity]:
+    """Add font-rendered trash-block text and a name-tag label to a 1x4 rotator."""
+    if platform != "1x4":
+        return entities
+
+    from shapez2_tools.font import CELL_HEIGHT, CELL_WIDTH, silkscreen
+
+    label = _DIRECTION_LABELS[direction]
+    gaps = _find_gaps(entities)
+
+    text: list[Entity] = []
+    chars = list(label)
+    # Distribute characters across gaps, centering each in its gap.
+    # More gaps than chars: use the rightmost gaps (leftmost gap stays empty).
+    assigned = gaps[-len(chars):]
+    y_span = 16 - 2  # usable rows y=2..17
+    origin_y = 2 + (y_span + CELL_HEIGHT) // 2 - 1  # center vertically
+
+    for ch, (gx_lo, gx_hi) in zip(chars, assigned):
+        gap_w = gx_hi - gx_lo + 1
+        origin_x = gx_lo + (gap_w - CELL_WIDTH) // 2
+        text.extend(silkscreen(ch, origin_x=origin_x, origin_y=origin_y, layer=0, scale=1))
+
+    return entities + text + [Entity(*_LABEL_POS, _LABEL_TYPE)]
+
+
 def generate_rotator(direction: str, platform: str = "1x1") -> Blueprint:
     """Generate a rotator blueprint (180/cw/ccw) on a platform (1x1/1x4).
 
@@ -195,7 +241,8 @@ def generate_rotator(direction: str, platform: str = "1x1") -> Blueprint:
     tile = substitute(
         lift_tile(reference(_BASE_TILE)), {"RotatorHalfInternalVariant": rotator_type}
     )
-    bp = build_from_skeleton(reference(PLATFORM_SKELETON[platform]), stamp_platform(tile, platform))
+    entities = _add_silkscreen(stamp_platform(tile, platform), direction, platform)
+    bp = build_from_skeleton(reference(PLATFORM_SKELETON[platform]), entities)
     data_icon = list(bp.icon)
     data_icon[3] = icon
     bp.icon = data_icon
