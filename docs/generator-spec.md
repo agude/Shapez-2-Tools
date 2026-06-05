@@ -1,6 +1,6 @@
 # Blueprint Synthesis — Plan
 
-**Status:** Draft, updated 2026-06-04.
+**Status:** Draft, updated 2026-06-04. **WP-E synthesis landed.**
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -16,7 +16,7 @@ regression floor. The hard target is intra-platform **place-and-route**.
 
 ## 0. Status & handoff (2026-06-04)
 
-**Built and green** (124 tests pass, 2 xfail, `just test`, ruff clean):
+**Built and green** (133 tests pass, 2 xfail, `just test`, ruff clean):
 - `blueprint.py` — faithful `.spz2bp` codec.
 - `generator.py` — tile-replication generator: builds the rotator family
   (180/cw/ccw × 1×1/1×4) from one lifted tile. `Entity`, lift/stamp/build,
@@ -89,12 +89,22 @@ regression floor. The hard target is intra-platform **place-and-route**.
   **The placer is scaffolding** — machine placement is often a human design
   decision; the product is the router. The placer validates the full pipeline
   (abstract → place → route → verify) and will improve as the router matures.
-- CLI: `gen`, `diff`, `show`, `lift`, `viz`, `place`. `viz` renders a blueprint
-  as HTML/SVG (belts as directional lines, machines/ports as filled rectangles,
-  failed edges as dashed red overlays; `--open` launches a browser). `place`
-  runs the full abstract→place→route pipeline on a blueprint and writes the
-  result. `data/reference/` holds oracle fixtures and `*_font.spz2bp` copies
-  with font-based silk screening for comparison.
+- `synth.py` — spec-driven synthesis (WP-E, single-op platforms). `Spec(op,
+  platform, throughput)` defines a single-operation platform; `netlist_from_spec`
+  builds the abstract netlist (L lanes × T machines per lane, fan-out/fan-in
+  topology); `synthesize` runs the full pipeline (spec → abstract → place → route
+  → blueprint). Verified: rotate-180/cw/ccw on 1×1 quarter (isomorphic to
+  oracles, 16/16 edges), half-destroy on 1×1 (validates + interprets correctly at
+  throughput=2; oracle uses throughput=3 which exceeds the router's 1→3 fan
+  capacity in tight space). **9 synth tests green (133 total, 2 xfail).**
+- CLI: `gen`, `diff`, `show`, `lift`, `viz`, `place`, `synth`. `synth` synthesizes
+  a blueprint from an op + platform + throughput spec (e.g. `synth rotate_180`).
+  `viz` renders a blueprint as HTML/SVG (belts as directional lines,
+  machines/ports as filled rectangles, failed edges as dashed red overlays;
+  `--open` launches a browser). `place` runs the full abstract→place→route
+  pipeline on a blueprint and writes the result. `data/reference/` holds oracle
+  fixtures and `*_font.spz2bp` copies with font-based silk screening for
+  comparison.
 
 **WP-A and WP-B: DONE.** Netlist isomorphism via networkx graph comparison; physical
 validator with corpus sweep. Both green.
@@ -153,26 +163,32 @@ interpreter correctly refuses). Next: identify which source ports are which feed
 (port labelling / structural analysis), then assert the diagonals fall out of the
 real blueprint.
 
-**Next steps — see §7 for the full test-first work plan.** Critical path to the
-north star (synthesis): ~~WP-A~~ ✓ → ~~WP-B~~ ✓ → ~~WP-C~~ ✓ (single-cell +
-cell-level multi-cell ports + spacious wide fans) → ~~**WP-D placement**~~ ✓
-(rotator quarter 16/16) → **WP-E** synthesize. WP-D pipeline runs end-to-end
-(abstract→place→route→lift ≅ original) on the rotator quarter. Four fixes
-landed: `route_astar` overlap bug (start==end bypassed obstacle check), placer
-constraints (port-row margin 2, inter-group x-gap 2), conditional outside-in
-fan-out ordering (applied when max Manhattan ≤ 5; skipped for long trunks to
-avoid half-destroyer regression), and **y-stagger** (edge fan-out groups placed
-one row closer to sources than inner neighbours, with ≤ 1 row separation — the
-y-component of wire length is invariant so this is a pure tiebreaker that
-produces the oracle's staggered two-row pattern). Fan-in retry logic
-(`_route_fanin_pass`) tries default and distance-sorted orderings, keeping the
-better result. The tight 2D merger packing from WP-C (cutter/swapper xfails)
-remains: the placer must reserve routing channels for dense fans. **Machine
-placement is often a human design decision; the product is the router.** The
-placer validates the pipeline and will improve as the router matures. The
-diagonal extractor needs **none** of the machine-type breadth work (stacker
-WP-F, painter WP-G, full-blueprint sim WP-H) — its machines (rotators,
-swappers, belts) are already lifted and simulated.
+**Critical path — complete through WP-E.** ~~WP-A~~ ✓ → ~~WP-B~~ ✓ →
+~~WP-C~~ ✓ (single-cell + cell-level multi-cell ports + spacious wide fans) →
+~~**WP-D placement**~~ ✓ (rotator quarter 16/16) → ~~**WP-E synthesize**~~ ✓
+(single-op platforms). `synth.py` runs the full pipeline from a `Spec(op,
+platform, throughput)`: spec → abstract netlist → place → route → blueprint.
+Verified: rotate-180/cw/ccw on 1×1 quarter (**isomorphic to oracles**, 16/16
+edges each), half-destroy on 1×1 (validates + interprets correctly at
+throughput=2). Limitation: the router can't handle 1→3 fan-out in tight space
+(the half-destroyer oracle uses throughput=3; the synthesizer works at
+throughput=2). CLI: `just run synth rotate_180 -o out.spz2bp`.
+
+**Remaining gaps:**
+- The tight 2D merger packing from WP-C (cutter/swapper xfails) — the placer
+  must reserve routing channels for dense fans. The 1→3 fan-out limitation for
+  the half-destroyer is the same underlying issue.
+- The diagonal extractor (north-star demo) needs a **multi-op spec** — the
+  current `Spec` handles single-op platforms only. The diagonal extractor
+  requires rotators + swappers in a specific topology, not a uniform fan-out
+  pattern. Extending the spec language to express operation graphs is the next
+  step.
+- **Machine placement is often a human design decision; the product is the
+  router.** The placer validates the pipeline and will improve as the router
+  matures.
+- Machine-type breadth work (stacker WP-F, painter WP-G, full-blueprint sim
+  WP-H) blocks nothing on the diagonal extractor — its machines (rotators,
+  swappers, belts) are already lifted and simulated.
 
 ---
 
@@ -569,15 +585,27 @@ widens the spec space but blocks nothing on the diagonal extractor.
 
 #### WP-E — Rung 4: synthesize from spec *(the product; critical path)*
 - **Goal:** I5. Spec → netlist → place (D) → route (C) → entities → file.
-- **Tests first:** `test_synth_rotate_180_quarter` (`isomorphic(lift(synth),
-  netlist(spec))` + `interpret == rotate_180` per lane + `validate`);
-  `test_synth_diagonal_extractor` (north-star spec ⇒ structurally iso to a
-  hand-derived netlist + `interpret` yields the two diagonals + compactness vs
-  `Swap Diagonal`); `test_synth_loads_in_game` (manual gate).
-- **Implementation:** a small spec language (named ops + lane signature + output
-  pinning) → `netlist(spec)` builder → the lowering pipeline (D then C) →
-  `generator`/`blueprint` to a file.
-- **Done when:** both synth tests green; manual in-game load passes.
+- **Status: DONE for single-op platforms.** `synth.py` with `Spec(op, platform,
+  throughput)` → `netlist_from_spec` → `synthesize`. 9 tests green (3 unit + 6
+  end-to-end). Rotate-180/cw/ccw on 1×1 quarter: **isomorphic to oracles**
+  (16/16 edges). Half-destroy at throughput=2: validates + interprets correctly
+  (oracle uses throughput=3, which exceeds router 1→3 capacity). CLI: `synth`.
+- **Tests:**
+  - ✓ `test_rotate_180_quarter_topology` — 4 src + 8 machines + 4 sinks, 16 edges.
+  - ✓ `test_machine_type_matches_op` — CW spec → RotatorOneQuad machines.
+  - ✓ `test_edge_structure_fan_out_fan_in` — each src fans to T, each sink gathers T.
+  - ✓ `test_synth_rotate_180_quarter` — isomorphic to oracle.
+  - ✓ `test_synth_rotate_180_quarter_validate` — physical validation clean.
+  - ✓ `test_synth_rotate_180_quarter_interpret` — RuCuSuWu → SuWuRuCu on all lanes.
+  - ✓ `test_synth_rotate_cw_quarter` — isomorphic to oracle.
+  - ✓ `test_synth_rotate_ccw_quarter` — isomorphic to oracle.
+  - ✓ `test_synth_half_destroy_quarter` — validates + interprets → RuCu---- on all lanes.
+- **Remaining:** `test_synth_diagonal_extractor` (north-star spec ⇒ structurally
+  iso to a hand-derived netlist + `interpret` yields the two diagonals +
+  compactness vs `Swap Diagonal`); `test_synth_loads_in_game` (manual gate).
+  The diagonal extractor requires a **multi-op spec** (rotators + swappers in a
+  specific topology), not the uniform fan-out pattern that `Spec` currently
+  expresses.
 
 #### WP-F — Stacker cross-floor lift *(breadth track)*
 - **Goal:** lift inter-floor machines; complete the table for stacking specs.

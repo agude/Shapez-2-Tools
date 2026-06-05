@@ -134,6 +134,40 @@ def cmd_viz(args: argparse.Namespace) -> None:
         )
 
 
+def cmd_synth(args: argparse.Namespace) -> None:
+    """Synthesize a blueprint from a spec."""
+    from shapez2_tools import lift, viz
+    from shapez2_tools.synth import Spec, synthesize
+
+    spec = Spec(op=args.op, platform=args.platform, throughput=args.throughput)
+    print(f"spec: {spec.op} on {spec.platform}, throughput={spec.throughput}")
+    print(f"lanes: {spec.lanes}, machines: {spec.lanes * spec.throughput}")
+
+    result = synthesize(spec)
+
+    nl = lift.trace_layer(result, 0)
+    n_edges = len(nl.edges)
+    expected = spec.lanes * spec.throughput * 2
+    print(f"routed: {n_edges}/{expected} edges")
+
+    if args.output:
+        result.to_file(args.output)
+        print(f"Wrote blueprint: {args.output}")
+
+    title = f"synth {spec.op} ({n_edges}/{expected} edges)"
+    html = viz.render_html(result, layer=0, title=title)
+    viz_out = args.viz_output or Path(f"synth_{spec.op}.html")
+    viz_out.write_text(html)
+    print(f"Wrote viz: {viz_out}")
+
+    if not args.no_open:
+        import subprocess
+
+        subprocess.Popen(
+            ["xdg-open", str(viz_out)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+
+
 def cmd_place(args: argparse.Namespace) -> None:
     """Re-place and re-route a blueprint via CP-SAT, then visualize."""
     from shapez2_tools import lift, viz
@@ -276,6 +310,16 @@ def main() -> None:
     viz_cmd.add_argument("--layer", type=int, default=0, help="Floor 0/1/2")
     viz_cmd.add_argument("--open", action="store_true", help="Open in browser")
     viz_cmd.set_defaults(func=cmd_viz)
+
+    # synth command
+    synth_cmd = subparsers.add_parser("synth", help="Synthesize a blueprint from a spec")
+    synth_cmd.add_argument("op", choices=["rotate_180", "rotate_cw", "rotate_ccw", "half_destroy"])
+    synth_cmd.add_argument("--platform", default="Foundation_1x1")
+    synth_cmd.add_argument("--throughput", type=int, default=2)
+    synth_cmd.add_argument("-o", "--output", type=Path, help="Output blueprint file")
+    synth_cmd.add_argument("--viz-output", type=Path, help="Output HTML viz file")
+    synth_cmd.add_argument("--no-open", action="store_true", help="Don't open in browser")
+    synth_cmd.set_defaults(func=cmd_synth)
 
     # place command
     place_cmd = subparsers.add_parser(
