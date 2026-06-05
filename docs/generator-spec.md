@@ -16,7 +16,7 @@ regression floor. The hard target is intra-platform **place-and-route**.
 
 ## 0. Status & handoff (2026-06-04)
 
-**Built and green** (133 tests pass, 2 xfail, `just test`, ruff clean):
+**Built and green** (138 tests pass, 3 xfail, `just test`, ruff clean):
 - `blueprint.py` — faithful `.spz2bp` codec.
 - `generator.py` — tile-replication generator: builds the rotator family
   (180/cw/ccw × 1×1/1×4) from one lifted tile. `Entity`, lift/stamp/build,
@@ -89,16 +89,17 @@ regression floor. The hard target is intra-platform **place-and-route**.
   **The placer is scaffolding** — machine placement is often a human design
   decision; the product is the router. The placer validates the full pipeline
   (abstract → place → route → verify) and will improve as the router matures.
-- `synth.py` — spec-driven synthesis (WP-E, single-op platforms). `Spec(op,
-  platform, throughput)` defines a single-operation platform; `netlist_from_spec`
-  builds the abstract netlist (L lanes × T machines per lane, fan-out/fan-in
-  topology); `synthesize` runs the full pipeline (spec → abstract → place → route
-  → blueprint). Verified: rotate-180/cw/ccw on 1×1 quarter (isomorphic to
-  oracles, 16/16 edges), half-destroy on 1×1 (validates + interprets correctly at
-  throughput=2; oracle uses throughput=3 which exceeds the router's 1→3 fan
-  capacity in tight space). **9 synth tests green (133 total, 2 xfail).**
+- `synth.py` — spec-driven synthesis (WP-E). `Spec(op, platform, throughput)`
+  where `op` is a single operation or a tuple of operations forming a **series
+  chain**: each lane's source feeds `throughput` parallel paths, each path passing
+  through every stage in order, then fan-in to the sink. `_lower(abstract,
+  platform)` runs the generic pipeline (any abstract netlist → place → route →
+  blueprint). Verified: single-op rotate-180/cw/ccw on 1×1 quarter (isomorphic
+  to oracles, 16/16 edges); half-destroy (validates + interprets at throughput=2);
+  series chains (2×CW = 180°, 3×CCW = CW, both validate + interpret correctly).
+  **14 synth tests green, 1 xfail (138 total, 3 xfail).**
 - CLI: `gen`, `diff`, `show`, `lift`, `viz`, `place`, `synth`. `synth` synthesizes
-  a blueprint from an op + platform + throughput spec (e.g. `synth rotate_180`).
+  a blueprint from a spec (e.g. `synth rotate_180` or `synth rotate_cw,rotate_cw`).
   `viz` renders a blueprint as HTML/SVG (belts as directional lines,
   machines/ports as filled rectangles, failed edges as dashed red overlays;
   `--open` launches a browser). `place` runs the full abstract→place→route
@@ -585,27 +586,31 @@ widens the spec space but blocks nothing on the diagonal extractor.
 
 #### WP-E — Rung 4: synthesize from spec *(the product; critical path)*
 - **Goal:** I5. Spec → netlist → place (D) → route (C) → entities → file.
-- **Status: DONE for single-op platforms.** `synth.py` with `Spec(op, platform,
-  throughput)` → `netlist_from_spec` → `synthesize`. 9 tests green (3 unit + 6
-  end-to-end). Rotate-180/cw/ccw on 1×1 quarter: **isomorphic to oracles**
-  (16/16 edges). Half-destroy at throughput=2: validates + interprets correctly
-  (oracle uses throughput=3, which exceeds router 1→3 capacity). CLI: `synth`.
+- **Status: DONE for single-op and series-chain platforms.** `Spec(op, platform,
+  throughput)` where `op` is a string or tuple of strings (series chain).
+  `_lower(abstract, platform)` runs the generic pipeline on any abstract netlist.
+  14 tests green, 1 xfail (series+throughput=2 on 1×1 — 16 machines too dense).
+  CLI: `synth rotate_cw,rotate_cw --throughput 1`.
 - **Tests:**
   - ✓ `test_rotate_180_quarter_topology` — 4 src + 8 machines + 4 sinks, 16 edges.
   - ✓ `test_machine_type_matches_op` — CW spec → RotatorOneQuad machines.
   - ✓ `test_edge_structure_fan_out_fan_in` — each src fans to T, each sink gathers T.
+  - ✓ `test_series_chain_topology` — 4×1×2 stages = 8 machines, 12 edges.
+  - ✓ `test_series_chain_edge_structure` — every machine 1-in/1-out.
+  - ✓ `test_series_with_throughput_topology` — 4×2×2 = 16 machines, 24 edges.
   - ✓ `test_synth_rotate_180_quarter` — isomorphic to oracle.
   - ✓ `test_synth_rotate_180_quarter_validate` — physical validation clean.
   - ✓ `test_synth_rotate_180_quarter_interpret` — RuCuSuWu → SuWuRuCu on all lanes.
   - ✓ `test_synth_rotate_cw_quarter` — isomorphic to oracle.
   - ✓ `test_synth_rotate_ccw_quarter` — isomorphic to oracle.
-  - ✓ `test_synth_half_destroy_quarter` — validates + interprets → RuCu---- on all lanes.
-- **Remaining:** `test_synth_diagonal_extractor` (north-star spec ⇒ structurally
-  iso to a hand-derived netlist + `interpret` yields the two diagonals +
-  compactness vs `Swap Diagonal`); `test_synth_loads_in_game` (manual gate).
-  The diagonal extractor requires a **multi-op spec** (rotators + swappers in a
-  specific topology), not the uniform fan-out pattern that `Spec` currently
-  expresses.
+  - ✓ `test_synth_half_destroy_quarter` — validates + interprets → RuCu---- on all.
+  - ✓ `test_series_cw_cw_equals_180` — 2×CW in series = 180° (validate + interpret).
+  - ✓ `test_series_ccw_ccw_ccw_equals_cw` — 3×CCW = CW (validate + interpret).
+  - ✗ `test_series_with_throughput` — xfail (16 machines on 1×1 too dense).
+- **Remaining:** the diagonal extractor requires a **multi-op graph spec** (not
+  expressible as a lane pipeline) and **multi-cell placement** (swapper = 2-cell
+  machine). The `_lower` function already accepts arbitrary abstract netlists,
+  so the spec compiler is the gap — not the pipeline.
 
 #### WP-F — Stacker cross-floor lift *(breadth track)*
 - **Goal:** lift inter-floor machines; complete the table for stacking specs.

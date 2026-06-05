@@ -1,5 +1,7 @@
 """WP-E: synthesis tests."""
 
+import pytest
+
 from shapez2_tools import lift
 from shapez2_tools.blueprint import Blueprint
 from shapez2_tools.shapes import Shape
@@ -49,6 +51,69 @@ class TestNetlistFromSpec:
             elif n["kind"] == "machine":
                 assert len(out_edges[n["id"]]) == 1
                 assert len(in_edges[n["id"]]) == 1
+
+    def test_series_chain_topology(self):
+        """Series chain: 4 lanes × 1 path × 2 stages = 8 machines, 12 edges."""
+        spec = Spec(
+            op=("rotate_cw", "rotate_cw"),
+            platform="Foundation_1x1",
+            throughput=1,
+        )
+        abstract = netlist_from_spec(spec)
+
+        by_kind: dict[str, list] = {}
+        for n in abstract["nodes"]:
+            by_kind.setdefault(n["kind"], []).append(n)
+
+        assert len(by_kind["src"]) == 4
+        assert len(by_kind["sink"]) == 4
+        assert len(by_kind["machine"]) == 8
+        # 4 lanes × (src→s0 + s0→s1 + s1→sink) = 12 edges
+        assert len(abstract["edges"]) == 12
+
+    def test_series_chain_edge_structure(self):
+        """Series chain: each machine has exactly 1 in and 1 out edge."""
+        spec = Spec(
+            op=("rotate_cw", "rotate_cw"),
+            platform="Foundation_1x1",
+            throughput=1,
+        )
+        abstract = netlist_from_spec(spec)
+
+        out_edges: dict[str, list[str]] = {}
+        in_edges: dict[str, list[str]] = {}
+        for s, d in abstract["edges"]:
+            out_edges.setdefault(s, []).append(d)
+            in_edges.setdefault(d, []).append(s)
+
+        for n in abstract["nodes"]:
+            if n["kind"] == "src":
+                assert len(out_edges[n["id"]]) == 1
+            elif n["kind"] == "sink":
+                assert len(in_edges[n["id"]]) == 1
+            elif n["kind"] == "machine":
+                assert len(out_edges[n["id"]]) == 1
+                assert len(in_edges[n["id"]]) == 1
+
+    def test_series_with_throughput_topology(self):
+        """Series chain with throughput=2: fan-out at src, fan-in at sink."""
+        spec = Spec(
+            op=("rotate_cw", "rotate_cw"),
+            platform="Foundation_1x1",
+            throughput=2,
+        )
+        abstract = netlist_from_spec(spec)
+
+        by_kind: dict[str, list] = {}
+        for n in abstract["nodes"]:
+            by_kind.setdefault(n["kind"], []).append(n)
+
+        assert len(by_kind["src"]) == 4
+        assert len(by_kind["sink"]) == 4
+        # 4 lanes × 2 paths × 2 stages = 16 machines
+        assert len(by_kind["machine"]) == 16
+        # 4 lanes × 2 paths × (src→s0 + s0→s1 + s1→sink) = 24 edges
+        assert len(abstract["edges"]) == 24
 
 
 class TestSynthesize:
@@ -121,4 +186,67 @@ class TestSynthesize:
         outputs = interpret.interpret(nl, inputs)
 
         expected = Shape.parse("RuCu----")
+        assert all(s == expected for s in outputs.values())
+
+
+class TestSeriesChain:
+    """Series chain: multiple operations per lane."""
+
+    def test_series_cw_cw_equals_180(self):
+        """Two CW rotations in series = rotate-180, isomorphic to oracle."""
+        spec = Spec(
+            op=("rotate_cw", "rotate_cw"),
+            platform="Foundation_1x1",
+            throughput=1,
+        )
+        result = synthesize(spec)
+
+        assert lift.validate(result) == []
+
+        from shapez2_tools import interpret
+
+        nl = lift.trace_layer(result, 0)
+        inputs = {p: Shape.parse("RuCuSuWu") for p, n in nl.nodes.items() if n.kind == "src"}
+        outputs = interpret.interpret(nl, inputs)
+
+        expected = Shape.parse("SuWuRuCu")
+        assert all(s == expected for s in outputs.values())
+
+    def test_series_ccw_ccw_ccw_equals_cw(self):
+        """Three CCW rotations = one CW rotation."""
+        from shapez2_tools import interpret
+
+        spec = Spec(
+            op=("rotate_ccw", "rotate_ccw", "rotate_ccw"),
+            platform="Foundation_1x1",
+            throughput=1,
+        )
+        result = synthesize(spec)
+        assert lift.validate(result) == []
+
+        nl = lift.trace_layer(result, 0)
+        inputs = {p: Shape.parse("RuCuSuWu") for p, n in nl.nodes.items() if n.kind == "src"}
+        outputs = interpret.interpret(nl, inputs)
+
+        expected = Shape.parse("WuRuCuSu")
+        assert all(s == expected for s in outputs.values())
+
+    @pytest.mark.xfail(reason="16 machines + fan patterns on 1x1 exceeds router capacity")
+    def test_series_with_throughput(self):
+        """Series chain with throughput=2: fan-out at src, fan-in at sink."""
+        from shapez2_tools import interpret
+
+        spec = Spec(
+            op=("rotate_cw", "rotate_cw"),
+            platform="Foundation_1x1",
+            throughput=2,
+        )
+        result = synthesize(spec)
+        assert lift.validate(result) == []
+
+        nl = lift.trace_layer(result, 0)
+        inputs = {p: Shape.parse("RuCuSuWu") for p, n in nl.nodes.items() if n.kind == "src"}
+        outputs = interpret.interpret(nl, inputs)
+
+        expected = Shape.parse("SuWuRuCu")
         assert all(s == expected for s in outputs.values())

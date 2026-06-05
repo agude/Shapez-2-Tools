@@ -1,6 +1,19 @@
 """Synthesize blueprints from a functional spec (WP-E).
 
 Spec → abstract netlist → place (CP-SAT) → route (A*) → blueprint.
+
+The ``Spec.op`` field accepts either a single operation name (the common case)
+or a tuple of operations forming a **series chain**: each lane's source feeds
+``throughput`` parallel paths, each path passing through every stage in order,
+and the last stage fans in to the lane's sink.
+
+Examples::
+
+    Spec("rotate_180", "Foundation_1x1", throughput=2)
+        # 4 lanes × 2 parallel rotate-180 machines (matches the oracle).
+
+    Spec(("rotate_cw", "rotate_cw"), "Foundation_1x1", throughput=1)
+        # 4 lanes × 1 path × 2 series machines = rotate-180 via two CW.
 """
 
 from __future__ import annotations
@@ -29,20 +42,20 @@ SINK_TYPE = "BeltPortSenderInternalVariant"
 
 @dataclass(frozen=True)
 class Spec:
-    """A single-op platform spec.
+    """A platform spec: one or more operations per lane, with parallel throughput.
 
-    op: operation name (key into OP_TYPES).
+    op: operation name or tuple of names forming a series chain.
     platform: platform name from platforms.json.
-    throughput: machines per lane, placed in parallel (fan-out then fan-in).
+    throughput: parallel paths per lane (fan-out at source, fan-in at sink).
     """
 
-    op: str
+    op: str | tuple[str, ...]
     platform: str
     throughput: int = 2
 
     @property
-    def machine_type(self) -> str:
-        return OP_TYPES[self.op]
+    def stages(self) -> tuple[str, ...]:
+        return (self.op,) if isinstance(self.op, str) else self.op
 
     @property
     def lanes(self) -> int:
@@ -58,10 +71,11 @@ def netlist_from_spec(spec: Spec) -> dict:
       - "nodes": list of {"id": str, "type": str, "kind": str}
       - "edges": list of (src_id, dst_id)
 
-    Topology for a single-op spec with throughput T and L lanes:
-      L sources, each fan-out to T machines, those T machines fan-in to 1 sink.
-      Total: L sources + L*T machines + L sinks.
+    Topology: L lanes × T parallel paths × S serial stages.
+    Each path: src → stage[0] → stage[1] → … → stage[-1] → sink.
+    Fan-out from src to T path-heads; fan-in from T path-tails to sink.
     """
+    stages = spec.stages
     nodes: list[dict] = []
     edges: list[tuple[str, str]] = []
 
@@ -71,23 +85,21 @@ def netlist_from_spec(spec: Spec) -> dict:
         nodes.append({"id": src_id, "type": SRC_TYPE, "kind": "src"})
         nodes.append({"id": sink_id, "type": SINK_TYPE, "kind": "sink"})
 
-        for m in range(spec.throughput):
-            mid = f"machine{lane}_{m}"
-            nodes.append({"id": mid, "type": spec.machine_type, "kind": "machine"})
-            edges.append((src_id, mid))
-            edges.append((mid, sink_id))
+        for path in range(spec.throughput):
+            prev_id = src_id
+            for si, stage_op in enumerate(stages):
+                mid = f"m{lane}_{path}_s{si}"
+                nodes.append({"id": mid, "type": OP_TYPES[stage_op], "kind": "machine"})
+                edges.append((prev_id, mid))
+                prev_id = mid
+            edges.append((prev_id, sink_id))
 
     return {"nodes": nodes, "edges": edges}
 
 
-def synthesize(spec: Spec, layer: int = 0) -> Blueprint:
-    """Synthesize a blueprint from a spec.
-
-    Runs the full pipeline: spec → abstract netlist → place → route → blueprint.
-    """
-    abstract = netlist_from_spec(spec)
-    placed = place(abstract, spec.platform)
-
+def _lower(abstract: dict, platform: str, layer: int = 0) -> Blueprint:
+    """Lower an abstract netlist to a blueprint: place → route → blueprint."""
+    placed = place(abstract, platform)
     entities = [
         Entity(
             type=node.type,
@@ -98,5 +110,10 @@ def synthesize(spec: Spec, layer: int = 0) -> Blueprint:
         )
         for node in placed.nodes.values()
     ]
-    stripped = entities_to_blueprint(entities, platform=spec.platform)
+    stripped = entities_to_blueprint(entities, platform=platform)
     return reroute_with_junctions(stripped, placed, layer=layer)
+
+
+def synthesize(spec: Spec, layer: int = 0) -> Blueprint:
+    """Synthesize a blueprint from a spec."""
+    return _lower(netlist_from_spec(spec), spec.platform, layer)

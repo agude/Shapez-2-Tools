@@ -139,24 +139,27 @@ def cmd_synth(args: argparse.Namespace) -> None:
     from shapez2_tools import lift, viz
     from shapez2_tools.synth import Spec, synthesize
 
-    spec = Spec(op=args.op, platform=args.platform, throughput=args.throughput)
-    print(f"spec: {spec.op} on {spec.platform}, throughput={spec.throughput}")
-    print(f"lanes: {spec.lanes}, machines: {spec.lanes * spec.throughput}")
+    ops = tuple(args.op.split(",")) if "," in args.op else args.op
+    spec = Spec(op=ops, platform=args.platform, throughput=args.throughput)
+    stages = spec.stages
+    n_machines = spec.lanes * spec.throughput * len(stages)
+    print(f"spec: {'+'.join(stages)} on {spec.platform}, throughput={spec.throughput}")
+    print(f"lanes: {spec.lanes}, machines: {n_machines}")
 
     result = synthesize(spec)
 
     nl = lift.trace_layer(result, 0)
     n_edges = len(nl.edges)
-    expected = spec.lanes * spec.throughput * 2
+    expected = spec.lanes * spec.throughput * (len(stages) + 1)
     print(f"routed: {n_edges}/{expected} edges")
 
     if args.output:
         result.to_file(args.output)
         print(f"Wrote blueprint: {args.output}")
 
-    title = f"synth {spec.op} ({n_edges}/{expected} edges)"
+    title = f"synth {'+'.join(stages)} ({n_edges}/{expected} edges)"
     html = viz.render_html(result, layer=0, title=title)
-    viz_out = args.viz_output or Path(f"synth_{spec.op}.html")
+    viz_out = args.viz_output or Path(f"synth_{'_'.join(stages)}.html")
     viz_out.write_text(html)
     print(f"Wrote viz: {viz_out}")
 
@@ -313,7 +316,9 @@ def main() -> None:
 
     # synth command
     synth_cmd = subparsers.add_parser("synth", help="Synthesize a blueprint from a spec")
-    synth_cmd.add_argument("op", choices=["rotate_180", "rotate_cw", "rotate_ccw", "half_destroy"])
+    synth_cmd.add_argument(
+        "op", help="Operation(s), comma-separated for series chain",
+    )
     synth_cmd.add_argument("--platform", default="Foundation_1x1")
     synth_cmd.add_argument("--throughput", type=int, default=2)
     synth_cmd.add_argument("-o", "--output", type=Path, help="Output blueprint file")
