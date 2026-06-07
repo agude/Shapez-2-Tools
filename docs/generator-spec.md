@@ -16,7 +16,7 @@ regression floor. The hard target is intra-platform **place-and-route**.
 
 ## 0. Status & handoff (2026-06-06)
 
-**Built and green** (164 tests pass, 3 xfail, `just test`, ruff clean):
+**Built and green** (180 tests pass, 3 xfail, `just test`, ruff clean):
 - `blueprint.py` — faithful `.spz2bp` codec.
 - `generator.py` — tile-replication generator: builds the rotator family
   (180/cw/ccw × 1×1/1×4) from one lifted tile. `Entity`, lift/stamp/build,
@@ -40,8 +40,11 @@ regression floor. The hard target is intra-platform **place-and-route**.
   occupancy; verified on a synthetic closed fixture (2 inputs, 1 output per
   stacker) and both open stacker fixtures (4 straight, 8 bent).
   Includes `isomorphic(a, b)` for structural netlist comparison (WP-A done).
-- `shapes.py` — shape model + absolute ops (rotate / cut / half-destroy /
-  swap-west). Convention: quadrants `(NE, SE, SW, NW)`, west = `SW+NW`.
+- `shapes.py` — **multi-layer** shape model + absolute ops (rotate / cut /
+  half-destroy / swap-west / **stack**). Convention: quadrants `(NE, SE, SW, NW)`,
+  west = `SW+NW`, layers separated by `:`. **Gravity** (orthogonal adjacency,
+  connected groups fall as units) implemented for the stacker; diagonal quadrant
+  pairs (NE↔SW, NW↔SE) are not connected and fall independently.
 - `interpret.py` — pushes shapes through a lifted netlist, **per cell** via the
   netlist's `port_edges`, so multi-port machines work. Verified: rotators +
   half-destroyer on every lane (quarter + full belt's 48), the **cutter** (1→2,
@@ -674,9 +677,13 @@ widens the spec space but blocks nothing on the diagonal extractor.
     with ports on L0+L1: stacker is 2-in (L0 primary + L1 secondary) / 1-out.
   - ✓ `test_stacker_cross_floor_trace_finds_all_nodes` — both open fixtures
     (4 straight, 8 bent) produce the right node counts.
-- **Remaining (separate sub-task):** the stacker shape op needs a **layered**
-  shape model — `Shape` is single-layer today; extend to N layers before
-  `interpret` can stack.
+- **Shape op DONE.** `Shape` extended to multi-layer (`upper` field, `:` syntax).
+  `shapes.stack(bottom, top)` implements full gravity (gap layer, orthogonal
+  adjacency grouping, group falling, MAX_LAYERS truncation). `_machine_op` wired
+  for `Stacker → stack`. 16 new tests (multi-layer parse/rotate, stacking with
+  overlap/no-overlap/diagonal-gravity/truncation, gravity group adjacency).
+  Remaining: the **interpreter** can't exercise stackers on real blueprints until
+  it supports 3-D node keys (cross-floor `port_edges`).
 
 #### WP-G — Painter pipe layer *(breadth track)*
 - **Goal:** lift fluid machines (painter, later crystallizer/miner).

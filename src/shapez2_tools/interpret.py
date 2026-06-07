@@ -39,6 +39,8 @@ def _machine_op(type_: str):
         return 1, lambda s: list(shapes.cut(s[0]))
     if "Swapper" in type_:
         return 2, lambda s: list(shapes.swap_west(s[0], s[1]))
+    if "Stacker" in type_:
+        return 2, lambda s: [shapes.stack(s[0], s[1])]
     raise ValueError(f"no shape op for machine {type_!r}")
 
 

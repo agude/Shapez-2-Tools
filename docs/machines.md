@@ -106,9 +106,34 @@ back input, an L+1 vertical input over the anchor, and the output above.
 **Lifter implication:** the rotator family had independent floors ("no lifts"),
 so the lifter is per-floor today. The stacker is the **first machine that
 connects floors**, so lifting it needs vertical-port support in the occupancy
-model (read a cell at `L±1`). Until then the stacker's structure is known but not
-lifted. The stacking *semantics* (how two shapes combine into layers) are still
-needed for the simulator.
+model (read a cell at `L±1`). Cross-floor lifting landed in WP-F.
+
+### Stacking semantics (gravity)
+
+The stacker combines primary (bottom) and secondary (top) shapes via:
+
+1. **Place** top layers above bottom layers with **one empty gap layer** between.
+2. **Apply gravity** — process layers bottom-to-top:
+   a. Split each layer into groups of **orthogonally adjacent** filled quadrants.
+   b. Adjacency: NE↔SE, SE↔SW, SW↔NW, NW↔NE. **Diagonal pairs (NE↔SW, NW↔SE)
+      are never connected** — they form separate groups.
+   c. A group is **supported** if any member sits directly above a supported part
+      or is on layer 0. Horizontal connectivity propagates support within a group.
+   d. Each **unsupported group falls as a unit** to the lowest position where at
+      least one member lands on an occupied slot or layer 0.
+3. **Truncate** to max layers (4 normal, 5 insane mode). Excess discarded from top.
+
+**Consequences:**
+- East half on west half (no overlap) → one layer (top falls to layer 0).
+- Full shape on full shape → two layers (every quadrant supported).
+- Diagonal (NE+SW) on a shape supporting only NE → NE stays, SW falls
+  independently (diagonal quadrants are separate groups).
+
+**Special cases** (not yet modeled): pins never connect horizontally; crystals
+shatter when unsupported; crystals can fuse vertically (hanging support).
+
+Sources: [Shapez 2 Wiki — Shape Gravity Rules](https://shapez2.wiki.gg/wiki/Shapes#Shape_Gravity_Rules),
+[Vystel/shapez2-solver](https://github.com/Vystel/shapez2-solver).
 
 ## Painter (`Painter` / `PainterMirrored`) — needs a pipe layer
 Painters consume a **fluid** (paint) delivered on a separate **pipe** transport

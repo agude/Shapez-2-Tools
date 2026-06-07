@@ -23,15 +23,11 @@ with the west half = `SW + NW`. The diagonal-swap test passes with this, but doe
 it match the game's shape-code order (e.g. `RuCuSuWu`)? A wrong labeling would
 still pass the structural tests yet mislabel parts.
 
-## 4. Stacker stacking semantics  *(simulator only — ports are solved)*
-The stacker **structure is fully solved** (see Resolved): 1×1, primary input on
-the back (same floor), **secondary input from the floor above** (dropped onto the
-anchor), output front (`StackerStraight`) or to the side (bent `StackerDefault`
-right / `…Mirrored` left). Lifting it is gated on cross-floor support in the
-lifter (my work, not a question). The remaining *question*: confirm the stacking
-**semantics** for the simulator — how do the two input shapes combine into
-layers (primary = bottom, secondary = top)? What happens on collisions / full
-stacks?
+## 4. Stacker stacking semantics — RESOLVED
+Primary = bottom, secondary = top, with one empty gap layer between, then gravity
+applied. Gravity splits each layer into groups of orthogonally adjacent quadrants
+(diagonal pairs NE↔SW, NW↔SE are **not** connected) and drops unsupported groups.
+Truncate to 4 layers. Full rules in `docs/machines.md` § Stacking semantics.
 
 ## 4b. Painter pipe layer  *(blocks lifting painters)*
 Painters consume paint on a separate **pipe** transport layer (`PipeForward`, …)
