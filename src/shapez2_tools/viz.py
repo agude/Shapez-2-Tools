@@ -39,6 +39,7 @@ _COLORS = {
     "port_arrow_out": "#dddd44",
     "platform_fill": "#223344",
     "platform_edge": "#556677",
+    "port_unused": "#8899aa",
 }
 
 W, E, N, S = (-1, 0), (1, 0), (0, 1), (0, -1)
@@ -52,7 +53,11 @@ def _load_platforms() -> dict:
 def _platform_geometry(
     plat_data: dict,
 ) -> tuple[list[tuple[int, int, int, int]], list[tuple[int, int, int, int]]]:
-    """Compute unit-cell rectangles and boundary edges in game coordinates.
+    """Compute buildable-area rectangles and boundary edges in game coordinates.
+
+    Ports sit 2 cells from the platform edge; the buildable area starts 1 cell
+    past the ports (inset=3 from exposed edges).  At shared edges between
+    adjacent occupied cells the interior extends through (no inset).
 
     Returns (cells, edges) where each cell is (x0, y0, x1, y1) and each
     edge is a line segment (x1, y1, x2, y2).
@@ -62,8 +67,10 @@ def _platform_geometry(
         return [], []
 
     unit = plat_data.get("unit_size", 20)
-    gx0 = min(x for x, _, _ in ports) - 2
-    gy0 = min(y for _, y, _ in ports) - 2
+    port_border = 2
+    inset = port_border + 1
+    gx0 = min(x for x, _, _ in ports) - port_border
+    gy0 = min(y for _, y, _ in ports) - port_border
 
     if "shape_units" in plat_data:
         shape = plat_data["shape_units"]
@@ -85,15 +92,19 @@ def _platform_geometry(
     for ci, ri in occupied:
         cx = gx0 + ci * unit
         cy = gy0 + ri * unit
-        cells.append((cx, cy, cx + unit, cy + unit))
+        x0 = cx if (ci - 1, ri) in occupied else cx + inset
+        x1 = cx + unit if (ci + 1, ri) in occupied else cx + unit - inset
+        y0 = cy if (ci, ri - 1) in occupied else cy + inset
+        y1 = cy + unit if (ci, ri + 1) in occupied else cy + unit - inset
+        cells.append((x0, y0, x1, y1))
         if (ci, ri - 1) not in occupied:
-            edges.append((cx, cy, cx + unit, cy))
+            edges.append((x0, y0, x1, y0))
         if (ci, ri + 1) not in occupied:
-            edges.append((cx, cy + unit, cx + unit, cy + unit))
+            edges.append((x0, y1, x1, y1))
         if (ci - 1, ri) not in occupied:
-            edges.append((cx, cy, cx, cy + unit))
+            edges.append((x0, y0, x0, y1))
         if (ci + 1, ri) not in occupied:
-            edges.append((cx + unit, cy, cx + unit, cy + unit))
+            edges.append((x1, y0, x1, y1))
 
     return cells, edges
 
@@ -307,6 +318,28 @@ def render_html(
             f'stroke="{edge_c}" stroke-width="1.5" opacity="0.7"/>'
         )
 
+    # --- unused port slots ---
+    used_ports = {(e.x, e.y) for e in layer_ents if "Port" in e.type}
+    unused_c = _COLORS["port_unused"]
+    for plat_entry in bp.entries:
+        plat_type = plat_entry.get("T", "")
+        plat_data = platforms.get(plat_type)
+        if not plat_data:
+            continue
+        port_list = plat_data.get("ports")
+        if not port_list or not isinstance(port_list, list):
+            continue
+        for px_g, py_g, _side in port_list:
+            if (px_g, py_g) not in used_ports:
+                px, py = to_svg(px_g, py_g)
+                parts.append(
+                    f'<rect x="{px + 2}" y="{py + 2}" '
+                    f'width="{CELL_PX - 4}" height="{CELL_PX - 4}" '
+                    f'fill="none" stroke="{unused_c}" stroke-width="1.5" '
+                    f'opacity="0.5" rx="3" stroke-dasharray="3,2">'
+                    f"<title>Unused port ({px_g},{py_g})</title></rect>"
+                )
+
     # --- entities ---
     belt_lines: list[str] = []
 
@@ -404,6 +437,7 @@ def render_html(
         ("Platform", _COLORS["platform_edge"]),
         ("Input port", _COLORS["port_in"]),
         ("Output port", _COLORS["port_out"]),
+        ("Unused port", _COLORS["port_unused"]),
         ("Launcher", _COLORS["launcher"]),
         ("Catcher", _COLORS["catcher"]),
         ("Rotator", _COLORS["machine_rotator"]),
