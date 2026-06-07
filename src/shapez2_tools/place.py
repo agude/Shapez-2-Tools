@@ -587,8 +587,8 @@ def _build_netlist(
     for nid, (x, y, r) in machine_positions.items():
         n = node_by_id[nid]
         fp = lift._machine_footprint(n["type"], r)
-        ins = [(x + dx, y + dy) for (dx, dy), (i, _o) in fp.items() if i]
-        outs = [(x + dx, y + dy) for (dx, dy), (_i, o) in fp.items() if o]
+        ins = [(x + dx, y + dy) for (dx, dy, dl), (i, _o) in fp.items() if i and dl == 0]
+        outs = [(x + dx, y + dy) for (dx, dy, dl), (_i, o) in fp.items() if o and dl == 0]
         machine_in_cells[nid] = ins
         machine_out_cells[nid] = outs
 

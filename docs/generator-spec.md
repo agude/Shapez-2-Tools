@@ -1,6 +1,6 @@
 # Blueprint Synthesis — Plan
 
-**Status:** Draft, updated 2026-06-06. **Diagonal swapper synthesis scales to 4 pairs on 2×2 (the full-belt target).**
+**Status:** Draft, updated 2026-06-06. **Stacker cross-floor lift landed (WP-F partial).**
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -16,7 +16,7 @@ regression floor. The hard target is intra-platform **place-and-route**.
 
 ## 0. Status & handoff (2026-06-06)
 
-**Built and green** (156 tests pass, 3 xfail, `just test`, ruff clean):
+**Built and green** (161 tests pass, 3 xfail, `just test`, ruff clean):
 - `blueprint.py` — faithful `.spz2bp` codec.
 - `generator.py` — tile-replication generator: builds the rotator family
   (180/cw/ccw × 1×1/1×4) from one lifted tile. `Entity`, lift/stamp/build,
@@ -31,8 +31,14 @@ regression floor. The hard target is intra-platform **place-and-route**.
 - `lift.py` — recovers a machine-level netlist from a placed blueprint. Belt
   direction is calibrated for **all** routing variants (belts + every
   splitter/merger); **machines expand to multi-cell footprints**
-  (`_machine_footprint`). `trace_layer`, `unmatched_legs`, `edge_kinds`. **Lifts
-  the rotator family + half-destroyer + the cutter at 0 unmatched legs.**
+  (`_machine_footprint`, 3-D offsets `(dx, dy, dl)`). `trace_layer`,
+  `unmatched_legs`, `edge_kinds`. **Lifts the rotator family + half-destroyer
+  + the cutter at 0 unmatched legs.** The **stacker** (2-in/1-out) has a
+  cross-floor secondary input at `(0,0,+1)` — three output variants
+  (Straight/Default/Mirrored). `trace(bp)` spans all floors via
+  `_occupancy_3d`, resolving L+1 belt→stacker connections through the 3-D
+  occupancy; verified on a synthetic closed fixture (2 inputs, 1 output per
+  stacker) and both open stacker fixtures (4 straight, 8 bent).
   Includes `isomorphic(a, b)` for structural netlist comparison (WP-A done).
 - `shapes.py` — shape model + absolute ops (rotate / cut / half-destroy /
   swap-west). Convention: quadrants `(NE, SE, SW, NW)`, west = `SW+NW`.
@@ -648,22 +654,26 @@ widens the spec space but blocks nothing on the diagonal extractor.
 
 #### WP-F — Stacker cross-floor lift *(breadth track)*
 - **Goal:** lift inter-floor machines; complete the table for stacking specs.
-- **Tests first:** `test_stacker_footprint_vertical_input` (unit: the 3-D
-  `_machine_footprint` puts the secondary input one floor up at the anchor,
-  offset `(0,0,+1)`, accepting from the back; output front=straight /
-  right=`StackerDefault` / left=`…Mirrored`); `test_stacker_blueprint_lifts_clean`
-  (save `Full Belt Stacker` → `data/reference/stacker_full_belt.spz2bp`; whole-
-  blueprint `unmatched_legs == 0`; stackers = 2-in (one cross-floor) / 1-out);
-  `test_independent_floors_unchanged` (rotator quarter/full belt still lift
-  per-floor at 0 — the 3-D change must not break independent-floor families).
-- **Implementation:** occupancy keyed by `(x, y, layer)`; `_machine_footprint`
-  returns 3-tuple offsets; add `trace(bp)` spanning floors (keep `trace_layer` for
-  single-floor families). The stacker claims the cell **directly above** its
-  anchor as an input port (the L+1 feed belt's output lands there). `down`/`reach`
-  / `unmatched_legs` operate in 3-D.
-- **Then (separate sub-task):** the stacker shape op needs a **layered** shape
-  model — `Shape` is single-layer today; extend to N layers before `interpret`
-  can stack.
+- **Status: cross-floor lift DONE.** `_machine_footprint` returns 3-D offsets
+  `(dx, dy, dl)` for all machines; the stacker claims `(0, 0, 1)` as a
+  secondary input (in from back, no output). Three output variants:
+  `StackerStraight` (forward), `StackerDefault` (right of flow),
+  `StackerDefaultMirrored` (left of flow). `_occupancy_3d` + `trace(bp)` span
+  all floors; `trace_layer` unchanged for single-floor families. All 10 callers
+  of `_machine_footprint` updated to filter `dl == 0` where needed. All prior
+  tests still pass (161 + 3 xfail).
+- **Tests:**
+  - ✓ `test_footprint_vertical_input` — all 3 stacker variants at R=0.
+  - ✓ `test_footprint_rotated` — cross-floor input direction rotates with R.
+  - ✓ `test_stacker_nodes_in_single_layer_trace` — 4 stackers found by
+    `trace_layer` (open fixture, no edges — no ports).
+  - ✓ `test_stacker_cross_floor_trace_synthetic` — programmatic closed fixture
+    with ports on L0+L1: stacker is 2-in (L0 primary + L1 secondary) / 1-out.
+  - ✓ `test_stacker_cross_floor_trace_finds_all_nodes` — both open fixtures
+    (4 straight, 8 bent) produce the right node counts.
+- **Remaining (separate sub-task):** the stacker shape op needs a **layered**
+  shape model — `Shape` is single-layer today; extend to N layers before
+  `interpret` can stack.
 
 #### WP-G — Painter pipe layer *(breadth track)*
 - **Goal:** lift fluid machines (painter, later crystallizer/miner).

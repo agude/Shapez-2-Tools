@@ -324,8 +324,9 @@ class TestMultiCellPlacement:
         all_cells: list[tuple[int, int]] = []
         for pos, node in nl.nodes.items():
             fp = lift._machine_footprint(node.type, node.rotation)
-            for dx, dy in fp:
-                all_cells.append((pos[0] + dx, pos[1] + dy))
+            for dx, dy, dl in fp:
+                if dl == 0:
+                    all_cells.append((pos[0] + dx, pos[1] + dy))
         assert len(all_cells) == len(set(all_cells)), f"overlap: {all_cells}"
 
     def test_swapper_lowered_validates(self):

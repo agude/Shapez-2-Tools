@@ -49,8 +49,8 @@ def _node_cells(node) -> tuple[list[Cell], list[Cell]]:
     if node.kind == "platform_out":
         return [a], []
     fp = _machine_footprint(node.type, node.rotation)
-    ins = [(a[0] + dx, a[1] + dy) for (dx, dy), (i, _o) in fp.items() if i]
-    outs = [(a[0] + dx, a[1] + dy) for (dx, dy), (_i, o) in fp.items() if o]
+    ins = [(a[0] + dx, a[1] + dy) for (dx, dy, dl), (i, _o) in fp.items() if i and dl == 0]
+    outs = [(a[0] + dx, a[1] + dy) for (dx, dy, dl), (_i, o) in fp.items() if o and dl == 0]
     return ins, outs
 
 

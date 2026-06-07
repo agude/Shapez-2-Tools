@@ -772,8 +772,9 @@ def reroute_astar(stripped: Blueprint, netlist: lift.Netlist, layer: int = 0) ->
         initial_obstacles.add((e.x, e.y))
         # Add footprint cells for multi-cell machines
         footprint = lift._machine_footprint(e.type, e.rotation)
-        for dx, dy in footprint:
-            initial_obstacles.add((e.x + dx, e.y + dy))
+        for dx, dy, dl in footprint:
+            if dl == 0:
+                initial_obstacles.add((e.x + dx, e.y + dy))
 
     # Build edge list with port directions
     edges: list[tuple[tuple[int, int], tuple[int, int], tuple[int, int], tuple[int, int]]] = []
@@ -1034,9 +1035,11 @@ def _node_cell_ports(
     machine (e.g. a cutter's two output cells), not just the anchor's.
     """
     if node.kind == "machine":
+        fp = lift._machine_footprint(node.type, node.rotation)
         return {
             (node.x + dx, node.y + dy): (ins, outs)
-            for (dx, dy), (ins, outs) in lift._machine_footprint(node.type, node.rotation).items()
+            for (dx, dy, dl), (ins, outs) in fp.items()
+            if dl == 0
         }
     ins, outs = lift._inout(node.type, node.rotation)
     return {(node.x, node.y): (ins, outs)}
@@ -1265,8 +1268,9 @@ def reroute_with_junctions(stripped: Blueprint, netlist: lift.Netlist, layer: in
     for e in kept:
         obstacles.add((e.x, e.y))
         footprint = lift._machine_footprint(e.type, e.rotation)
-        for dx, dy in footprint:
-            obstacles.add((e.x + dx, e.y + dy))
+        for dx, dy, dl in footprint:
+            if dl == 0:
+                obstacles.add((e.x + dx, e.y + dy))
 
     # Build per-cell port directions across every node's footprint. Each cell
     # has at most one input side and one output side for the calibrated

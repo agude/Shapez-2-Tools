@@ -12,11 +12,17 @@ merge to an output).
 Calibrated: Forward / Left (+Mirrored) / Filter / Reader (1-in/1-out),
 Splitter1To2L (+Mirrored), Merger2To1L (+Mirrored), ports, and the rotator.
 Machines may span more than one cell: a machine entity is expanded into its
-footprint (see ``_machine_footprint``). Calibrated machines: rotators and the
-half-destroyer (1×1), the cutter (1-in/2-out) and the swapper (2-in/2-out) — each
-one entity + a second cell to the side. Not yet handled: the stacker (its second
-input is on the floor above — needs cross-floor support) and the painter (needs a
-pipe routing layer).
+footprint (see ``_machine_footprint``).  Footprint keys are 3-D offsets
+``(dx, dy, dl)`` where ``dl`` is the layer offset (0 = same floor).
+Calibrated machines: rotators and the half-destroyer (1×1), the cutter
+(1-in/2-out) and the swapper (2-in/2-out) — each one entity + a second cell
+to the side — and the stacker (2-in/1-out, three variants with distinct
+output directions: ``StackerStraight`` forward, ``StackerDefault`` right of
+flow, ``StackerDefaultMirrored`` left of flow).  The stacker's secondary
+input is a cross-floor claim at ``(0, 0, +1)`` — the belt on the floor above
+feeds into the anchor position.  ``trace_layer`` works per-floor;
+``trace`` spans all floors via ``_occupancy_3d``.  Not yet handled: the
+painter (needs a pipe routing layer).
 """
 
 from __future__ import annotations
@@ -101,27 +107,41 @@ def _inout(type_: str, r: int):
     return _rot({W}, r), _rot({E}, r)
 
 
-def _machine_footprint(type_: str, r: int) -> dict[tuple[int, int], tuple[frozenset, frozenset]]:
-    """Occupied cells of a machine as offsets from its anchor -> (ins, outs).
+def _machine_footprint(
+    type_: str, r: int
+) -> dict[tuple[int, int, int], tuple[frozenset, frozenset]]:
+    """Occupied cells of a machine as 3-D offsets ``(dx, dy, dl)`` -> ``(ins, outs)``.
 
-    Default machine: a single 1-in/1-out cell (rotators, half-destroyer). The
-    cutter and swapper each span a second cell **to the right of flow** for the
-    Default variant (``Mirrored`` puts it left); both take input(s) on the back
-    and emit on the front:
-      - cutter (1-in/2-out): the second cell is **output-only** (its half comes
-        from the internal cut), so belts merely routing past it never connect.
-      - swapper (2-in/2-out): the second cell mirrors the anchor (in-back,
-        out-front); the two west halves are swapped internally.
-    Verified at 0 unmatched legs against data/reference/cutter_12_to_24.spz2bp
-    and swap_diagonal.spz2bp (plus the pinwheel exports), every rotation/variant.
+    Keys are ``(dx, dy, dl)`` relative to the anchor, where ``dl`` is the layer
+    offset (0 = same floor, 1 = one floor up).  Most machines are single-cell
+    ``(0, 0, 0)``; the cutter/swapper span a second cell on the same floor; the
+    stacker claims a secondary-input cell one floor up.
+
+    Stacker variants:
+      - ``StackerStraight``: 1-in (back) / 1-out (front), + L+1 in (back).
+      - ``StackerDefault``: 1-in (back) / 1-out (right of flow), + L+1 in (back).
+      - ``StackerDefault…Mirrored``: 1-in (back) / 1-out (left of flow), + L+1 in.
     """
     back, fwd = _rotd(W, r), _rotd(E, r)
     through = (frozenset({back}), frozenset({fwd}))  # 1-in (back) / 1-out (front)
     if ("Cutter" in type_ and "Half" not in type_) or "Swapper" in type_:
         second = _rotd(N, r) if "Mirrored" in type_ else _rotd(S, r)
         output_only = (frozenset(), frozenset({fwd}))
-        return {(0, 0): through, second: through if "Swapper" in type_ else output_only}
-    return {(0, 0): through}
+        return {
+            (0, 0, 0): through,
+            (*second, 0): through if "Swapper" in type_ else output_only,
+        }
+    if "Stacker" in type_:
+        if "Straight" in type_:
+            out_dir = fwd
+        elif "Mirrored" in type_:
+            out_dir = _rotd(N, r)
+        else:
+            out_dir = _rotd(S, r)
+        l0 = (frozenset({back}), frozenset({out_dir}))
+        l1_in = (frozenset({back}), frozenset())
+        return {(0, 0, 0): l0, (0, 0, 1): l1_in}
+    return {(0, 0, 0): through}
 
 
 @dataclass(frozen=True)
@@ -173,7 +193,9 @@ def _occupancy(bp: Blueprint, layer: int) -> dict[tuple[int, int], _Cell]:
             continue
         anchor = (e.x, e.y)
         if kind(e.type) == "machine":
-            for (dx, dy), (ins, outs) in _machine_footprint(e.type, e.rotation).items():
+            for (dx, dy, dl), (ins, outs) in _machine_footprint(e.type, e.rotation).items():
+                if dl != 0:
+                    continue
                 occ[(e.x + dx, e.y + dy)] = _Cell(ins, outs, anchor, False)
         else:
             ins, outs = _inout(e.type, e.rotation)
@@ -246,6 +268,91 @@ def trace_layer(bp: Blueprint, layer: int) -> Netlist:
     return Netlist(nodes, edges, port_edges)
 
 
+Cell3D = tuple[int, int, int]
+
+
+def _occupancy_3d(bp: Blueprint) -> dict[Cell3D, _Cell]:
+    """Map every occupied tile across all floors to its ports and owning entity.
+
+    Like ``_occupancy`` but keyed by ``(x, y, layer)``.  Machine footprints
+    with ``dl != 0`` (stackers' cross-floor input) are included at their
+    absolute layer.
+    """
+    occ: dict[Cell3D, _Cell] = {}
+    for e in all_entities(bp):
+        if e.type in DECORATION_TYPES:
+            continue
+        anchor: Cell3D = (e.x, e.y, e.layer)
+        if kind(e.type) == "machine":
+            for (dx, dy, dl), (ins, outs) in _machine_footprint(e.type, e.rotation).items():
+                occ[(e.x + dx, e.y + dy, e.layer + dl)] = _Cell(ins, outs, anchor, False)
+        else:
+            ins, outs = _inout(e.type, e.rotation)
+            occ[anchor] = _Cell(ins, outs, anchor, kind(e.type) == "belt")
+    return occ
+
+
+def trace(bp: Blueprint) -> Netlist:
+    """Recover the machine/port-level netlist spanning all floors.
+
+    Cross-floor connections (e.g. a stacker's L+1 secondary input) are
+    resolved through the 3-D occupancy: a belt on floor *L+1* can feed
+    into a machine claim cell on that floor, whose anchor is the machine
+    entity on floor *L*.  Belt paths are contracted exactly as in
+    ``trace_layer``.
+
+    Node keys are 3-D ``(x, y, layer)`` tuples (stored in a ``Netlist``
+    whose ``Cell`` alias is nominally 2-D — the runtime types are 3-tuples).
+    """
+    occ = _occupancy_3d(bp)
+    anchor_cells: dict[Cell3D, list[Cell3D]] = defaultdict(list)
+    for cell, c in occ.items():
+        anchor_cells[c.anchor].append(cell)
+
+    def down(cell: Cell3D) -> list[Cell3D]:
+        result: list[Cell3D] = []
+        for d in occ[cell].outs:
+            n: Cell3D = (cell[0] + d[0], cell[1] + d[1], cell[2])
+            nc = occ.get(n)
+            if nc and _neg(d) in nc.ins:
+                result.append(n)
+        return result
+
+    def reach_cells(start: Cell3D) -> set[Cell3D]:
+        out: set[Cell3D] = set()
+        seen: set[Cell3D] = set()
+        stack = list(down(start))
+        while stack:
+            cell = stack.pop()
+            if cell in seen:
+                continue
+            seen.add(cell)
+            if occ[cell].is_belt:
+                stack.extend(down(cell))
+            else:
+                out.add(cell)
+        return out
+
+    nodes = {}
+    node_anchors: set[Cell3D] = set()
+    for e in all_entities(bp):
+        if e.type in DECORATION_TYPES:
+            continue
+        if kind(e.type) != "belt":
+            key: Cell3D = (e.x, e.y, e.layer)
+            nodes[key] = Node(e.x, e.y, e.layer, e.type, kind(e.type), e.rotation)
+            node_anchors.add(key)
+
+    port_edges_3d: list[tuple[Cell3D, Cell3D]] = [
+        (out_cell, dst_cell)
+        for anchor_3d in node_anchors
+        for out_cell in anchor_cells.get(anchor_3d, [])
+        for dst_cell in reach_cells(out_cell)
+    ]
+    edges_3d = sorted({(occ[s].anchor, occ[d].anchor) for s, d in port_edges_3d})
+    return Netlist(nodes, edges_3d, port_edges_3d)
+
+
 def edge_kinds(nl: Netlist) -> Counter:
     """Count netlist edges by (source kind, destination kind)."""
     return Counter((nl.nodes[a].kind, nl.nodes[b].kind) for a, b in nl.edges)
@@ -302,10 +409,10 @@ def validate(bp: Blueprint) -> list[Problem]:
         occupied[key].append(e.type)
         # Multi-cell machines: also check their footprint cells.
         if kind(e.type) == "machine":
-            for dx, dy in _machine_footprint(e.type, e.rotation):
-                if (dx, dy) != (0, 0):
-                    key2 = (e.x + dx, e.y + dy, e.layer)
-                    occupied[key2].append(f"{e.type}[+{dx},{dy}]")
+            for dx, dy, dl in _machine_footprint(e.type, e.rotation):
+                if (dx, dy, dl) != (0, 0, 0):
+                    key2 = (e.x + dx, e.y + dy, e.layer + dl)
+                    occupied[key2].append(f"{e.type}[+{dx},{dy},{dl}]")
 
     # Check for overlaps.
     for (x, y, layer), types in occupied.items():

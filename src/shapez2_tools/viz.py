@@ -216,7 +216,9 @@ def render_html(
     max_y = max(e.y for e in layer_ents)
     for e in layer_ents:
         fp = lift._machine_footprint(e.type, e.rotation)
-        for dx, dy in fp:
+        for dx, dy, dl in fp:
+            if dl != 0:
+                continue
             min_x = min(min_x, e.x + dx)
             max_x = max(max_x, e.x + dx)
             min_y = min(min_y, e.y + dy)
@@ -355,8 +357,8 @@ def render_html(
         if fill is not None:
             # Machine or port: filled rectangle spanning the full footprint.
             fp = lift._machine_footprint(e.type, e.rotation)
-            all_gx = [e.x + dx for dx, dy in fp]
-            all_gy = [e.y + dy for dx, dy in fp]
+            all_gx = [e.x + dx for dx, dy, dl in fp if dl == 0]
+            all_gy = [e.y + dy for dx, dy, dl in fp if dl == 0]
             gx_min, gx_max = min(all_gx), max(all_gx)
             gy_min, gy_max = min(all_gy), max(all_gy)
             px0, py0 = to_svg(gx_min, gy_min)
@@ -370,7 +372,9 @@ def render_html(
             )
             # Port-direction arrows per cell (skip trash — accepts any direction)
             is_trash = "Trash" in e.type or "Destroy" in e.type
-            for (dx, dy), (fins, fouts) in fp.items():
+            for (dx, dy, dl), (fins, fouts) in fp.items():
+                if dl != 0:
+                    continue
                 gx, gy = e.x + dx, e.y + dy
                 px, py = to_svg(gx, gy)
                 cx = px + CELL_PX / 2

@@ -67,13 +67,13 @@ class TestCutter:
         # output on its front) + an output-only second cell on the front. The
         # second cell sits right of flow (Default) / left (Mirrored).
         fp = lift._machine_footprint("CutterDefaultInternalVariant", 0)
-        assert fp[(0, 0)] == (frozenset({lift.W}), frozenset({lift.E}))
-        assert fp[lift.S] == (frozenset(), frozenset({lift.E}))  # right of flow
+        assert fp[(0, 0, 0)] == (frozenset({lift.W}), frozenset({lift.E}))
+        assert fp[(*lift.S, 0)] == (frozenset(), frozenset({lift.E}))  # right of flow
         mirrored = lift._machine_footprint("CutterDefaultInternalVariantMirrored", 0)
-        assert mirrored[lift.N] == (frozenset(), frozenset({lift.E}))  # left of flow
+        assert mirrored[(*lift.N, 0)] == (frozenset(), frozenset({lift.E}))  # left of flow
         # The half-destroyer stays a single 1-in/1-out cell.
         half = lift._machine_footprint("CutterHalfInternalVariant", 0)
-        assert half == {(0, 0): (frozenset({lift.W}), frozenset({lift.E}))}
+        assert half == {(0, 0, 0): (frozenset({lift.W}), frozenset({lift.E}))}
 
     def test_belts_routing_past_a_machine_are_not_inputs(self):
         # The dense 12->24 blueprint is 16 independent 1-in/2-out cutters per
@@ -99,9 +99,9 @@ class TestSwapper:
         # unmatched legs (swappers as output-only second cell does not).
         through = (frozenset({lift.W}), frozenset({lift.E}))
         fp = lift._machine_footprint("HalvesSwapperDefaultInternalVariant", 0)
-        assert fp == {(0, 0): through, lift.S: through}  # 2nd cell right of flow
+        assert fp == {(0, 0, 0): through, (*lift.S, 0): through}  # 2nd cell right of flow
         mirrored = lift._machine_footprint("HalvesSwapperDefaultInternalVariantMirrored", 0)
-        assert mirrored == {(0, 0): through, lift.N: through}  # left of flow
+        assert mirrored == {(0, 0, 0): through, (*lift.N, 0): through}  # left of flow
 
     def test_swap_diagonal_lifts_clean(self):
         # The diagonal extractor: 32 swappers fed two shapes each, swapping west
@@ -116,3 +116,77 @@ class TestSwapper:
         outdeg = Counter(a for a, _b in nl.edges if a in swappers)
         assert set(indeg.values()) == {2} and len(indeg) == 32  # two inputs each
         assert set(outdeg.values()) == {2} and len(outdeg) == 32  # two outputs each
+
+
+STACK_STRAIGHT = REF / "stackers_straight_4.spz2bp"
+STACK_BENT = REF / "stackers_bent_8.spz2bp"
+
+
+class TestStacker:
+    def test_footprint_vertical_input(self):
+        """The stacker's secondary input is one floor up at the anchor."""
+        # StackerStraight: in from back, out forward, L+1 in from back.
+        fp = lift._machine_footprint("StackerStraightInternalVariant", 0)
+        assert fp[(0, 0, 0)] == (frozenset({lift.W}), frozenset({lift.E}))
+        assert fp[(0, 0, 1)] == (frozenset({lift.W}), frozenset())
+
+        # StackerDefault: in from back, out RIGHT of flow, L+1 in from back.
+        fp = lift._machine_footprint("StackerDefaultInternalVariant", 0)
+        assert fp[(0, 0, 0)] == (frozenset({lift.W}), frozenset({lift.S}))
+        assert fp[(0, 0, 1)] == (frozenset({lift.W}), frozenset())
+
+        # Mirrored: out LEFT of flow.
+        fp = lift._machine_footprint("StackerDefaultInternalVariantMirrored", 0)
+        assert fp[(0, 0, 0)] == (frozenset({lift.W}), frozenset({lift.N}))
+        assert fp[(0, 0, 1)] == (frozenset({lift.W}), frozenset())
+
+    def test_footprint_rotated(self):
+        """Cross-floor input direction rotates with the machine."""
+        fp = lift._machine_footprint("StackerStraightInternalVariant", 1)
+        # R=1: back=S, fwd=N.
+        assert fp[(0, 0, 0)] == (frozenset({lift.S}), frozenset({lift.N}))
+        assert fp[(0, 0, 1)] == (frozenset({lift.S}), frozenset())
+
+    def test_stacker_nodes_in_single_layer_trace(self):
+        """trace_layer finds 4 stacker nodes on L0 (open fixture, no edges)."""
+        bp = Blueprint.from_file(STACK_STRAIGHT)
+        nl = lift.trace_layer(bp, 0)
+        stackers = {p for p, n in nl.nodes.items() if "Stacker" in n.type}
+        assert len(stackers) == 4
+
+    def test_stacker_cross_floor_trace_synthetic(self):
+        """Synthetic stacker with ports on both floors: 2-in / 1-out."""
+        entries = [
+            {"X": 5, "Y": 7, "T": "BeltPortReceiverInternalVariant"},
+            {"X": 6, "Y": 7, "T": "BeltDefaultForwardInternalVariant"},
+            {"X": 7, "Y": 7, "T": "BeltDefaultForwardInternalVariant"},
+            {"X": 8, "Y": 7, "T": "StackerStraightInternalVariant"},
+            {"X": 9, "Y": 7, "T": "BeltDefaultForwardInternalVariant"},
+            {"X": 10, "Y": 7, "T": "BeltPortSenderInternalVariant"},
+            {"X": 6, "Y": 7, "L": 1, "T": "BeltPortReceiverInternalVariant"},
+            {"X": 7, "Y": 7, "L": 1, "T": "BeltDefaultForwardInternalVariant"},
+        ]
+        data = {
+            "V": 1137,
+            "BP": {
+                "$type": "Island",
+                "Entries": [{"T": "Foundation_1x1", "B": {"Entries": entries}}],
+                "Icon": {"Data": []},
+            },
+        }
+        bp = Blueprint(data)
+        nl = lift.trace(bp)
+        stacker_key = (8, 7, 0)
+        assert "Stacker" in nl.nodes[stacker_key].type
+        indeg = sum(1 for _a, b in nl.edges if b == stacker_key)
+        outdeg = sum(1 for a, _b in nl.edges if a == stacker_key)
+        assert indeg == 2  # L0 primary + L1 secondary
+        assert outdeg == 1
+
+    def test_stacker_cross_floor_trace_finds_all_nodes(self):
+        """3-D trace finds all stackers across both open fixtures."""
+        for name, count in [("stackers_straight_4.spz2bp", 4), ("stackers_bent_8.spz2bp", 8)]:
+            bp = Blueprint.from_file(REF / name)
+            nl = lift.trace(bp)
+            stackers = {p for p, n in nl.nodes.items() if "Stacker" in n.type}
+            assert len(stackers) == count, f"{name}: expected {count}, got {len(stackers)}"
