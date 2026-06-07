@@ -1,6 +1,6 @@
 # Blueprint Synthesis — Plan
 
-**Status:** Draft, updated 2026-06-06. **Stacker cross-floor lift landed (WP-F partial).**
+**Status:** Draft, updated 2026-06-06. **WP-H full-blueprint functional drive landed.**
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -16,7 +16,7 @@ regression floor. The hard target is intra-platform **place-and-route**.
 
 ## 0. Status & handoff (2026-06-06)
 
-**Built and green** (161 tests pass, 3 xfail, `just test`, ruff clean):
+**Built and green** (164 tests pass, 3 xfail, `just test`, ruff clean):
 - `blueprint.py` — faithful `.spz2bp` codec.
 - `generator.py` — tile-replication generator: builds the rotator family
   (180/cw/ccw × 1×1/1×4) from one lifted tile. `Entity`, lift/stamp/build,
@@ -46,7 +46,12 @@ regression floor. The hard target is intra-platform **place-and-route**.
   netlist's `port_edges`, so multi-port machines work. Verified: rotators +
   half-destroyer on every lane (quarter + full belt's 48), the **cutter** (1→2,
   east/west), and the **swapper** (2→2) including the **diagonal trick**
-  (north-only + south-only in → the two diagonals out).
+  (north-only + south-only in → the two diagonals out). **`collect` mode** for
+  throughput blueprints: sinks fed by multiple distinct shapes return a
+  `frozenset[Shape]` instead of raising. **`classify_sources(nl)`** partitions
+  sources into feed groups via 2-coloring the swapper constraint graph.
+  Full-blueprint functional drive on `swap_diagonal` (WP-H): 26 sinks, 17
+  single-shape + 9 multi-shape (throughput mergers), all verified.
 - `validate.py` — physical validator (WP-B done). Checks overlap, dangling legs,
   off-grid placement. Corpus sweep passes on all closed fixtures.
 - `route.py` — junction-aware A* router (WP-C done for single-cell machines).
@@ -168,17 +173,15 @@ right of flow (Default) / left (Mirrored):
 `tests/test_lift.py::TestCutter`/`TestSwapper`. See `docs/machines.md`,
 `QUESTIONS.md` Q1.
 
-**Rung 2 (interpret) — multi-port done; full-blueprint drive remaining.** The
-interpreter is now port-aware (`Node.rotation`, `Netlist.port_edges`, per-cell
-propagation) and the cutter/swapper ops + the diagonal trick are verified on
-hand-built netlists (`tests/test_interpret.py::TestMultiPort`). What's *not* yet
-done: driving the **whole** `swap_diagonal` blueprint end-to-end. Its sinks gather
-several machines through throughput mergers, so it only computes the diagonals
-under its **intended input pattern** (specific north-feed / south-feed sources) —
-feeding all sources one shape makes the gather points see different shapes (the
-interpreter correctly refuses). Next: identify which source ports are which feed
-(port labelling / structural analysis), then assert the diagonals fall out of the
-real blueprint.
+**Rung 2 (interpret) — DONE, including full-blueprint drive.** The interpreter is
+port-aware (`Node.rotation`, `Netlist.port_edges`, per-cell propagation); the
+cutter/swapper ops + the diagonal trick are verified on hand-built netlists
+(`tests/test_interpret.py::TestMultiPort`). **Full-blueprint drive (WP-H):** the
+entire `swap_diagonal` blueprint (26 sources, 26 sinks, 32 swappers, 48 rotators)
+runs end-to-end with `collect=True`. With uniform input S, single-feed sinks
+produce `{S}` and throughput-merged sinks produce `{S, CW(S)}` — 17 + 9 = 26
+sinks verified. `classify_sources(nl)` partitions the 26 sources into two swapper
+feed groups (9 + 8) plus 9 pass-throughs via 2-coloring the constraint graph.
 
 **Critical path — complete through WP-E.** ~~WP-A~~ ✓ → ~~WP-B~~ ✓ →
 ~~WP-C~~ ✓ (single-cell + cell-level multi-cell ports + spacious wide fans) →
@@ -686,19 +689,16 @@ widens the spec space but blocks nothing on the diagonal extractor.
   both. Likely needs a fresh export with belts **and** pipes on its I/O —
   `QUESTIONS.md` Q4b. Sim needs a color model (defer).
 
-#### WP-H — Full-blueprint functional drive *(breadth track; confidence, not capability)*
+#### WP-H — Full-blueprint functional drive *(breadth track; confidence, not capability)* — **DONE**
 - **Goal:** I3 on a whole dense blueprint, not just hand-built netlists.
-- **Problem:** a closed extractor's sinks gather several machines through
-  throughput mergers, so it resolves to single shapes only under its **intended
-  input pattern**; uniform input makes a gather see different shapes (the
-  interpreter rightly refuses — observed on `swap_diagonal`).
-- **Tests first:** `test_swap_diagonal_computes_diagonals` — feed the intended
-  per-source pattern (north-feed / south-feed lanes) ⇒ the two diagonals at the
-  labelled sinks.
-- **Implementation:** derive each source's input role and each sink's output role
-  structurally (trace reachable machines / feeders), or take the I/O contract from
-  the blueprint name / user. Lower priority: the ops are already proven on minimal
-  netlists, so this is confidence, not new capability.
+- **Solution:** `interpret(nl, inputs, collect=True)` allows throughput-merged
+  sinks to return `frozenset[Shape]` instead of raising. `classify_sources(nl)`
+  partitions sources into swapper feed groups via 2-coloring.
+- **Verified on `swap_diagonal`:** 26 sources, 26 sinks, 32 swappers, 48
+  rotators. With uniform input S: 17 single-feed sinks → `{S}`, 9 multi-feed
+  sinks → `{S, CW(S)}`. Source partition: 9 group A + 8 group B + 9 pass-through.
+- **Tests:** `TestFullBlueprintDrive` — `test_swap_diagonal_computes_diagonals`,
+  `test_swap_diagonal_sink_counts`, `test_classify_sources_partitions`.
 
 ### 7.3 Sequencing & dependencies
 - **Critical path:** A → B → C → D → E, each gated by the prior's invariant.

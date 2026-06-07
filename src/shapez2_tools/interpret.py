@@ -7,7 +7,8 @@ operation, to the sink ports, in topological order. This turns a lift into a
 Works at **cell** granularity using the netlist's ``port_edges`` (output cell ->
 input cell), so multi-port machines work: a cutter takes one input and emits two
 distinct outputs, a swapper takes two inputs and emits two. Equal-shape merges
-collapse; a single input cell fed by genuinely different shapes is an error.
+collapse; a single input cell fed by genuinely different shapes is an error
+(unless *collect* mode is used for throughput sinks).
 """
 
 from __future__ import annotations
@@ -54,8 +55,17 @@ def _node_cells(node) -> tuple[list[Cell], list[Cell]]:
     return ins, outs
 
 
-def interpret(nl: Netlist, inputs: dict[Cell, Shape]) -> dict[Cell, Shape]:
-    """Return the shape at each sink, given a shape at each source."""
+def interpret(
+    nl: Netlist,
+    inputs: dict[Cell, Shape],
+    *,
+    collect: bool = False,
+) -> dict[Cell, Shape | frozenset[Shape]]:
+    """Return the shape at each sink, given a shape at each source.
+
+    When *collect* is True, sinks fed by multiple distinct shapes (throughput
+    mergers) return a ``frozenset[Shape]`` instead of raising.
+    """
     cell_node: dict[Cell, Cell] = {}
     in_cells: dict[Cell, list[Cell]] = {}
     out_cells: dict[Cell, list[Cell]] = {}
@@ -78,7 +88,7 @@ def interpret(nl: Netlist, inputs: dict[Cell, Shape]) -> dict[Cell, Shape]:
             indeg[b] += 1
 
     cell_shape: dict[Cell, Shape] = {}
-    out: dict[Cell, Shape] = {}
+    out: dict[Cell, Shape | frozenset[Shape]] = {}
     queue = deque(p for p, d in indeg.items() if d == 0)
     while queue:
         p = queue.popleft()
@@ -86,13 +96,20 @@ def interpret(nl: Netlist, inputs: dict[Cell, Shape]) -> dict[Cell, Shape]:
         if node.kind == "platform_in":
             cell_shape[out_cells[p][0]] = inputs[p]
         else:
-            feeds = []
+            feeds: list[Shape] = []
+            collected = False
             for c in in_cells[p]:
                 distinct = {cell_shape[s] for s in feeders[c]}
                 if len(distinct) != 1:
+                    if collect and node.kind == "platform_out" and distinct:
+                        out[p] = frozenset(distinct)
+                        collected = True
+                        break
                     raise ValueError(f"input cell {c} of {p} has {len(distinct)} shapes")
                 feeds.append(next(iter(distinct)))
-            if node.kind == "platform_out":
+            if collected:
+                pass
+            elif node.kind == "platform_out":
                 out[p] = feeds[0]
             else:
                 arity, op = _machine_op(node.type)
@@ -106,3 +123,78 @@ def interpret(nl: Netlist, inputs: dict[Cell, Shape]) -> dict[Cell, Shape]:
                 queue.append(q)
 
     return out
+
+
+def classify_sources(nl: Netlist) -> dict[Cell, str]:
+    """Partition sources into feed groups via the swapper topology.
+
+    Returns ``"A"`` / ``"B"`` for sources that feed different swapper inputs,
+    ``"pass"`` for sources that bypass all swappers.
+    """
+    cell_owner: dict[Cell, Cell] = {}
+    node_ins: dict[Cell, list[Cell]] = {}
+    for p, node in nl.nodes.items():
+        ins, outs = _node_cells(node)
+        node_ins[p] = ins
+        for c in ins + outs:
+            cell_owner[c] = p
+
+    rev: dict[Cell, list[Cell]] = defaultdict(list)
+    for s, d in nl.port_edges:
+        rev[d].append(s)
+
+    def _trace_sources(start_cell: Cell) -> set[Cell]:
+        visited: set[Cell] = set()
+        queue = deque([start_cell])
+        sources: set[Cell] = set()
+        while queue:
+            c = queue.popleft()
+            if c in visited:
+                continue
+            visited.add(c)
+            for src_cell in rev.get(c, []):
+                owner = cell_owner.get(src_cell)
+                if owner is None:
+                    continue
+                node = nl.nodes[owner]
+                if node.kind == "platform_in":
+                    sources.add(owner)
+                else:
+                    for ic in node_ins.get(owner, []):
+                        queue.append(ic)
+        return sources
+
+    adj: dict[Cell, set[Cell]] = defaultdict(set)
+    swapper_sources: set[Cell] = set()
+    for p, node in nl.nodes.items():
+        if "Swapper" not in node.type:
+            continue
+        ins = node_ins[p]
+        if len(ins) != 2:
+            continue
+        g0 = _trace_sources(ins[0])
+        g1 = _trace_sources(ins[1])
+        swapper_sources |= g0 | g1
+        for a in g0:
+            for b in g1:
+                adj[a].add(b)
+                adj[b].add(a)
+
+    color: dict[Cell, int] = {}
+    for start in swapper_sources:
+        if start in color:
+            continue
+        color[start] = 0
+        bfs: deque[Cell] = deque([start])
+        while bfs:
+            s = bfs.popleft()
+            for nb in adj[s]:
+                if nb not in color:
+                    color[nb] = 1 - color[s]
+                    bfs.append(nb)
+
+    all_sources = {p for p, n in nl.nodes.items() if n.kind == "platform_in"}
+    return {
+        p: ("A" if color[p] == 0 else "B") if p in color else "pass"
+        for p in all_sources
+    }

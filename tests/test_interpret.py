@@ -102,3 +102,46 @@ class TestMultiPort:
         out = interpret.interpret(self._swapper_netlist(), {(9, 10): north, (9, 9): south})
         assert out[(11, 10)] == Shape.parse("Ru--Ru--")  # NE + SW diagonal
         assert out[(11, 9)] == Shape.parse("--Ru--Ru")  # SE + NW diagonal
+
+
+SWAP = Path(__file__).resolve().parent.parent / "data" / "reference" / "swap_diagonal.spz2bp"
+
+
+class TestFullBlueprintDrive:
+    """WP-H: drive the entire swap_diagonal blueprint end-to-end."""
+
+    def test_swap_diagonal_computes_diagonals(self):
+        nl = lift.trace_layer(Blueprint.from_file(SWAP), 0)
+        shape = Shape.parse("RuCuSuWu")
+        inputs = {p: shape for p, n in nl.nodes.items() if n.kind == "platform_in"}
+        out = interpret.interpret(nl, inputs, collect=True)
+
+        cw = shapes.rotate_cw(shape)
+        expected_multi = frozenset({shape, cw})
+        for p, v in out.items():
+            if isinstance(v, frozenset):
+                assert v == expected_multi, f"sink {p}: got {v}"
+            else:
+                assert v == shape, f"sink {p}: got {v}"
+
+    def test_swap_diagonal_sink_counts(self):
+        nl = lift.trace_layer(Blueprint.from_file(SWAP), 0)
+        shape = Shape.parse("RuCuSuWu")
+        inputs = {p: shape for p, n in nl.nodes.items() if n.kind == "platform_in"}
+        out = interpret.interpret(nl, inputs, collect=True)
+
+        single = sum(1 for v in out.values() if isinstance(v, Shape))
+        multi = sum(1 for v in out.values() if isinstance(v, frozenset))
+        assert single == 17
+        assert multi == 9
+        assert single + multi == 26
+
+    def test_classify_sources_partitions(self):
+        nl = lift.trace_layer(Blueprint.from_file(SWAP), 0)
+        groups = interpret.classify_sources(nl)
+        from collections import Counter
+
+        counts = Counter(groups.values())
+        assert counts["A"] + counts["B"] == 17
+        assert counts["pass"] == 9
+        assert sum(counts.values()) == 26
