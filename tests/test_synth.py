@@ -418,6 +418,26 @@ class TestDiagonalNetlist:
         with pytest.raises(ValueError, match="6 ports"):
             netlist_from_diagonal_spec(spec)
 
+    def test_four_pair_topology(self):
+        """4 pairs on 2x2: 8 sources, 4 swappers, 8 sinks, 16 edges."""
+        spec = DiagonalSpec(pairs=4, platform="Foundation_2x2")
+        abstract = netlist_from_diagonal_spec(spec)
+
+        by_kind: dict[str, list] = {}
+        for n in abstract["nodes"]:
+            by_kind.setdefault(n["kind"], []).append(n)
+
+        assert len(by_kind["platform_in"]) == 8
+        assert len(by_kind["platform_out"]) == 8
+        assert len(by_kind["machine"]) == 4
+        assert len(abstract["edges"]) == 16
+
+    def test_four_pair_too_many_raises(self):
+        """5 pairs need 10 ports; Foundation_2x2 has only 8."""
+        spec = DiagonalSpec(pairs=5, platform="Foundation_2x2")
+        with pytest.raises(ValueError, match="10 ports"):
+            netlist_from_diagonal_spec(spec)
+
 
 class TestDiagonalSynthesize:
     """End-to-end: synthesize diagonal trick → validate → interpret."""
@@ -459,3 +479,51 @@ class TestDiagonalSynthesize:
         out_shapes = {str(s) for s in outputs.values()}
         assert "Ru--Ru--" in out_shapes  # upper-left diagonal
         assert "--Ru--Ru" in out_shapes  # upper-right diagonal
+
+
+class TestDiagonalSynthesize4Pair:
+    """4-pair diagonal trick on Foundation_2x2 — the full-belt target."""
+
+    def test_validates(self):
+        spec = DiagonalSpec(pairs=4, platform="Foundation_2x2")
+        result = synthesize_diagonal(spec)
+        assert lift.validate(result) == []
+
+    def test_edge_count(self):
+        """All 16 edges realized (8 src→swap + 8 swap→sink)."""
+        spec = DiagonalSpec(pairs=4, platform="Foundation_2x2")
+        result = synthesize_diagonal(spec)
+        nl = lift.trace_layer(result, 0)
+        assert len(nl.edges) == 16
+
+    def test_unmatched_legs(self):
+        spec = DiagonalSpec(pairs=4, platform="Foundation_2x2")
+        result = synthesize_diagonal(spec)
+        assert lift.unmatched_legs(result, 0) == 0
+
+    def test_interprets(self):
+        """Feeding north/south halves produces the two diagonals on all 8 lanes."""
+        from shapez2_tools import interpret
+
+        spec = DiagonalSpec(pairs=4, platform="Foundation_2x2")
+        result = synthesize_diagonal(spec)
+        nl = lift.trace_layer(result, 0)
+
+        srcs = sorted(
+            [(p, n) for p, n in nl.nodes.items() if n.kind == "platform_in"],
+            key=lambda pn: pn[0][0],
+        )
+        assert len(srcs) == 8
+
+        north = Shape.parse("Ru----Ru")
+        south = Shape.parse("--RuRu--")
+        inputs = {}
+        for i, (pos, _) in enumerate(srcs):
+            inputs[pos] = north if i % 2 == 0 else south
+
+        outputs = interpret.interpret(nl, inputs)
+        assert len(outputs) == 8
+
+        out_shapes = {str(s) for s in outputs.values()}
+        assert "Ru--Ru--" in out_shapes
+        assert "--Ru--Ru" in out_shapes

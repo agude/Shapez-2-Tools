@@ -204,7 +204,7 @@ def _add_silkscreen(entities: list[Entity], direction: str, platform: str) -> li
     if platform != "1x4":
         return entities
 
-    from shapez2_tools.font import CELL_HEIGHT, CELL_WIDTH, silkscreen
+    from shapez2_tools.font import CELL_WIDTH, silkscreen
 
     label = _DIRECTION_LABELS[direction]
     gaps = _find_gaps(entities)
@@ -214,8 +214,7 @@ def _add_silkscreen(entities: list[Entity], direction: str, platform: str) -> li
     # Distribute characters across gaps, centering each in its gap.
     # More gaps than chars: use the rightmost gaps (leftmost gap stays empty).
     assigned = gaps[-len(chars) :]
-    y_span = 16 - 2  # usable rows y=2..17
-    origin_y = 2 + (y_span + CELL_HEIGHT) // 2 - 1  # center vertically
+    origin_y = 3  # one row below output ports at y=2; text grows in +y
 
     for ch, (gx_lo, gx_hi) in zip(chars, assigned):
         gap_w = gx_hi - gx_lo + 1
@@ -289,7 +288,7 @@ def render_text(bp: Blueprint, layer: int = 0) -> str:
     xs = [x for x, _ in cells]
     ys = [y for _, y in cells]
     lines = []
-    for y in range(max(ys), min(ys) - 1, -1):
+    for y in range(min(ys), max(ys) + 1):
         row = "".join(
             _symbol(cells[(x, y)]) if (x, y) in cells else "·" for x in range(min(xs), max(xs) + 1)
         )

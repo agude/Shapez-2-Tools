@@ -44,9 +44,9 @@ class TestSilkscreen:
         shifted_xs = {e.x for e in shifted}
         assert shifted_xs == {x + 50 for x in base_xs}
 
-    def test_y_decreases_from_origin(self):
+    def test_y_increases_from_origin(self):
         entities = silkscreen("A", 0, 100, scale=1)
-        assert all(e.y <= 100 for e in entities)
+        assert all(e.y >= 100 for e in entities)
 
     def test_layer_propagates(self):
         for e in silkscreen("A", 0, 14, layer=2):

@@ -1,6 +1,6 @@
 # Blueprint Synthesis — Plan
 
-**Status:** Draft, updated 2026-06-05. **Diagonal swapper synthesis landed (2 pairs on 1×1).**
+**Status:** Draft, updated 2026-06-06. **Diagonal swapper synthesis scales to 4 pairs on 2×2 (the full-belt target).**
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -14,9 +14,9 @@ regression floor. The hard target is intra-platform **place-and-route**.
 
 ---
 
-## 0. Status & handoff (2026-06-05)
+## 0. Status & handoff (2026-06-06)
 
-**Built and green** (150 tests pass, 3 xfail, `just test`, ruff clean):
+**Built and green** (156 tests pass, 3 xfail, `just test`, ruff clean):
 - `blueprint.py` — faithful `.spz2bp` codec.
 - `generator.py` — tile-replication generator: builds the rotator family
   (180/cw/ccw × 1×1/1×4) from one lifted tile. `Entity`, lift/stamp/build,
@@ -103,11 +103,11 @@ regression floor. The hard target is intra-platform **place-and-route**.
   correctly (placement + routing + port assignment verified end-to-end).
   **Diagonal trick synthesis:** `DiagonalSpec(pairs, platform)` generates the
   paired north/south → swapper → diagonal topology; `synthesize_diagonal()`
-  lowers it through the full pipeline. Verified on 1×1 with 2 pairs: 8/8 edges,
-  validates, and interprets to the correct diagonals (`Ru--Ru--` / `--Ru--Ru`).
-  CLI: `synth swap_diagonal [--pairs N]`. Scaling to 4 pairs needs a platform
-  with 8 ports (Foundation_2x2, port calibration done — Q5 resolved).
-  **26 synth tests green, 1 xfail (150 total, 3 xfail).**
+  lowers it through the full pipeline. Verified on 1×1 with 2 pairs (8/8 edges)
+  **and on 2×2 with 4 pairs** (16/16 edges, validates, interprets to the correct
+  diagonals on all 8 lanes). CLI: `synth swap_diagonal [--pairs N] [--platform P]`.
+  Reference: `data/reference/swap_diagonal_4pair_2x2.spz2bp`.
+  **30 synth tests green, 1 xfail (156 total, 3 xfail).**
 - CLI: `gen`, `diff`, `show`, `lift`, `viz`, `place`, `synth`. `synth` synthesizes
   a blueprint from a spec (e.g. `synth rotate_180` or `synth rotate_cw,rotate_cw`).
   `viz` renders a blueprint as HTML/SVG (belts as directional lines,

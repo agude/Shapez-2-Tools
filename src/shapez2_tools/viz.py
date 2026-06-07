@@ -142,12 +142,13 @@ def _edge_midpoint(
 ) -> tuple[float, float]:
     """SVG coordinates of the midpoint of a cell edge.
 
-    Game north (0,+1) maps to the SVG top edge because Y is flipped.
+    Game y increases southward (same as SVG y), so N=(0,+1)
+    maps to the bottom edge and S=(0,-1) maps to the top edge.
     """
     if side == N:
-        return cell_px_x + CELL_PX / 2, cell_px_y
-    if side == S:
         return cell_px_x + CELL_PX / 2, cell_px_y + CELL_PX
+    if side == S:
+        return cell_px_x + CELL_PX / 2, cell_px_y
     if side == E:
         return cell_px_x + CELL_PX, cell_px_y + CELL_PX / 2
     if side == W:
@@ -248,10 +249,14 @@ def render_html(
     svg_h = rows * CELL_PX + 2 * MARGIN_PX
 
     def to_svg(gx: int, gy: int) -> tuple[float, float]:
-        """Game coords → SVG pixel coords (top-left of cell)."""
+        """Game coords → SVG pixel coords (top-left of cell).
+
+        Game y increases southward (downward on screen), same as SVG,
+        so no y-flip is needed.
+        """
         return (
             MARGIN_PX + (gx - min_x) * CELL_PX,
-            MARGIN_PX + (max_y - gy) * CELL_PX,
+            MARGIN_PX + (gy - min_y) * CELL_PX,
         )
 
     parts: list[str] = []
@@ -285,7 +290,7 @@ def render_html(
             f'text-anchor="middle" fill="{_COLORS["label"]}" font-size="9">{gx}</text>'
         )
     for r in range(rows):
-        gy = max_y - r
+        gy = min_y + r
         y = MARGIN_PX + r * CELL_PX + CELL_PX / 2 + 3
         parts.append(
             f'<text x="{MARGIN_PX - 4}" y="{y}" '
@@ -297,14 +302,14 @@ def render_html(
         """Game-coordinate point → SVG pixel position."""
         return (
             MARGIN_PX + (x - min_x) * CELL_PX,
-            MARGIN_PX + (max_y + 1 - y) * CELL_PX,
+            MARGIN_PX + (y - min_y) * CELL_PX,
         )
 
     fill_c = _COLORS["platform_fill"]
     edge_c = _COLORS["platform_edge"]
     for cx0, cy0, cx1, cy1 in plat_cells:
-        sx0, sy0 = pt_to_svg(cx0, cy1)
-        sx1, sy1 = pt_to_svg(cx1, cy0)
+        sx0, sy0 = pt_to_svg(cx0, cy0)
+        sx1, sy1 = pt_to_svg(cx1, cy1)
         parts.append(
             f'<rect x="{sx0}" y="{sy0}" '
             f'width="{sx1 - sx0}" height="{sy1 - sy0}" '
@@ -348,36 +353,43 @@ def render_html(
         tip = f"{_short_type(e.type)} ({e.x},{e.y}) R={e.rotation}"
 
         if fill is not None:
-            # Machine or port: filled rectangle(s)
+            # Machine or port: filled rectangle spanning the full footprint.
             fp = lift._machine_footprint(e.type, e.rotation)
+            all_gx = [e.x + dx for dx, dy in fp]
+            all_gy = [e.y + dy for dx, dy in fp]
+            gx_min, gx_max = min(all_gx), max(all_gx)
+            gy_min, gy_max = min(all_gy), max(all_gy)
+            px0, py0 = to_svg(gx_min, gy_min)
+            w_cells = gx_max - gx_min + 1
+            h_cells = gy_max - gy_min + 1
+            parts.append(
+                f'<rect x="{px0 + 1}" y="{py0 + 1}" '
+                f'width="{CELL_PX * w_cells - 2}" height="{CELL_PX * h_cells - 2}" '
+                f'fill="{fill}" opacity="0.65" rx="3">'
+                f"<title>{tip}</title></rect>"
+            )
+            # Port-direction arrows per cell (skip trash — accepts any direction)
+            is_trash = "Trash" in e.type or "Destroy" in e.type
             for (dx, dy), (fins, fouts) in fp.items():
                 gx, gy = e.x + dx, e.y + dy
                 px, py = to_svg(gx, gy)
-                is_ext = dx != 0 or dy != 0
-                opacity = "0.35" if is_ext else "0.65"
-                parts.append(
-                    f'<rect x="{px + 1}" y="{py + 1}" '
-                    f'width="{CELL_PX - 2}" height="{CELL_PX - 2}" '
-                    f'fill="{fill}" opacity="{opacity}" rx="3">'
-                    f"<title>{tip}</title></rect>"
-                )
-                # Port-direction arrows inside the cell
                 cx = px + CELL_PX / 2
                 cy = py + CELL_PX / 2
-                for s in fins:
-                    ex, ey = _edge_midpoint(px, py, s)
-                    belt_lines.append(
-                        f'<line x1="{ex}" y1="{ey}" x2="{cx}" y2="{cy}" '
-                        f'stroke="{_COLORS["port_arrow_in"]}" '
-                        f'stroke-width="1.5" opacity="0.5"/>'
-                    )
-                for s in fouts:
-                    ex, ey = _edge_midpoint(px, py, s)
-                    belt_lines.append(
-                        f'<line x1="{cx}" y1="{cy}" x2="{ex}" y2="{ey}" '
-                        f'stroke="{_COLORS["port_arrow_out"]}" '
-                        f'stroke-width="1.5" opacity="0.5"/>'
-                    )
+                if not is_trash:
+                    for s in fins:
+                        ex, ey = _edge_midpoint(px, py, s)
+                        belt_lines.append(
+                            f'<line x1="{ex}" y1="{ey}" x2="{cx}" y2="{cy}" '
+                            f'stroke="{_COLORS["port_arrow_in"]}" '
+                            f'stroke-width="1.5" opacity="0.5"/>'
+                        )
+                    for s in fouts:
+                        ex, ey = _edge_midpoint(px, py, s)
+                        belt_lines.append(
+                            f'<line x1="{cx}" y1="{cy}" x2="{ex}" y2="{ey}" '
+                            f'stroke="{_COLORS["port_arrow_out"]}" '
+                            f'stroke-width="1.5" opacity="0.5"/>'
+                        )
         else:
             # Belt: draw lines from each input edge through center to each output edge
             result = lift.routing_inout(e.type, e.rotation)

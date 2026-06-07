@@ -129,7 +129,7 @@ def silkscreen(
 
     Each font pixel becomes ``scale`` tiles wide and 1 tile tall.  The origin
     is the top-left corner of the text in blueprint coordinates (Y increases
-    upward, so rows extend downward from ``origin_y``).
+    southward, so rows extend in +y from ``origin_y``).
 
     Characters not in the font are replaced with a filled rectangle.
     """
@@ -142,7 +142,7 @@ def silkscreen(
         for row_idx, row_bits in enumerate(glyph):
             if not row_bits:
                 continue
-            tile_y = origin_y - row_idx
+            tile_y = origin_y + row_idx
             for px in range(CELL_WIDTH):
                 if row_bits & (1 << px):
                     for sx in range(scale):
