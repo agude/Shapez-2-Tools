@@ -421,18 +421,18 @@ the demand signal and the partial oracle. Functional spec, as stated:
   (4 faces × 4 slots × 3 floors = 48 lanes).
 - **Operation:** cut every shape into its west half and east half (the
   absolute-halves cutter — `CutterDefault`, 1-in/2-out).
-- **Output routing (the hard part):**
-  - **West halves** (48 belts) → the **west-side port faces plus the two
-    west-most north faces**.
-  - **East halves** (48 belts) → the **remaining four faces** (east side +
-    east-most north faces).
+- **Output routing (the hard part):** 48 west-half belts and 48 east-half
+  belts must exit on the 8 non-south faces. The hand build pinned them (west
+  halves → west faces + the two west-most north faces; east halves → the
+  rest), but that pinning is **relaxed — see "Spec relaxation" below**: the
+  optimizer assigns output ports.
 - **Port arithmetic — CONFIRMED (2026-06-09, mined from the blueprint):**
   platform is `Foundation_2x4` (8 non-south faces = 4 north + 2 west + 2
   east). The build is **entirely on layer 0** (all 1562 entities): 16 input
-  lanes (S faces) → 32 output lanes per floor; the evident plan is the
-  tile-replication convention — duplicate the floor ×3 for 48→96. **This is a
-  floor quotient** (route one floor, stamp three), the same instance-shrinking
-  move as WP-L's lane quotient.
+  lanes (S faces) → 32 output lanes per floor; the hand plan was the
+  tile-replication convention — duplicate the floor ×3 for 48→96 (a **floor
+  quotient**, the same instance-shrinking move as WP-L's lane quotient).
+  Per the spec relaxation below, that is a baseline strategy, not the target.
 - **Machine arithmetic (complete in the build):** per input lane: 1→4
   splitter tree (3 × `Splitter1To2L`) → **4 cutters** (cutter rate = ¼ belt)
   → two 4→1 merger trees (6 × `Merger2To1L`, 3 per half). 16 lanes ⇒ 48
@@ -454,6 +454,25 @@ the demand signal and the partial oracle. Functional spec, as stated:
   north-face fan-in. The human completed every local route and stopped at
   exactly the maximal-crossing hauls. That is the regime WP-I + WP-K must
   win at.
+- **Spec relaxation (2026-06-09, user decision).** Two properties of the hand
+  build are *artifacts of hand design*, not requirements — do not imitate
+  them:
+  1. **Output ports are not pinned.** The user hand-assigned which half-kind
+     exits which face and considers that a weakness, not a spec. The
+     synthesizer's contract is only: 48 west-half belts out, 48 east-half
+     belts out, with **face purity** (a face carries one half-kind only, so
+     the platform is usable in a factory). *Which* faces carry which kind is
+     the optimizer's choice (WP-L assigns; wirelength should naturally group
+     west halves toward the west). Hard pinning remains available as an
+     optional per-sink constraint for factory-integration cases.
+  2. **Single-floor + copy-paste layers is a hand convenience.** Humans build
+     one floor and duplicate it because hand-routing in 3-D is miserable; the
+     optimizer has no such excuse. Full 3-D routing — lifts, non-identical
+     floors, cross-floor paths — is sanctioned and expected (**WP-J is on
+     this instance's critical path after all**). The floor quotient (route
+     one floor at 16→32, stamp ×3) is demoted to an optional baseline: cheap
+     to compute, useful as an I7 reference point and as a fallback when full
+     3-D search struggles, but not the target strategy.
 - **Role in the plan:** this is the acceptance instance for the full scaling
   arc — WP-M's north-star gate (`test_synth_half_splitter_2x4`, alongside the
   diagonal extractor). Lifting the unfinished build (even partially routed) is
@@ -519,7 +538,12 @@ spec library and the measuring stick.
 ## 5. Open questions
 
 - Decoration detection: family/position-aware, not type-based.
-- Output-port pinning: how the netlist encodes "this result → that physical port".
+- Output-port pinning — **DECIDED (2026-06-09):** pinning is per-sink and
+  optional, three levels: `Pinned` (exact port), `Region` (any port on a
+  given face set), `Free` (any port). Default for synthesized platforms is
+  `Free` + **face purity** (one result kind per face); the assignment stage
+  (WP-L) chooses ports. Hand pinning stays available for factory integration.
+  Remaining sub-question: the concrete encoding on netlist sink nodes.
 - Routing objective: fit-first, then compactness; how to measure vs human.
 - Icon convention mismatch (`icon:Platforms` used for both quarter and full belt);
   `BinaryVersion` meaning.
@@ -1073,6 +1097,15 @@ is one the router never negotiates.
   assignment minimizes pairwise inversions for uniform specs — most "insane"
   crossings never come into existence. Implementation: a deterministic sort in
   `synth._lower` before placement; no solver.
+- **Output-port assignment (scope added 2026-06-09):** sinks default to
+  `Free` with face purity (§5 pinning decision) — the assignment stage also
+  chooses **which physical port each sink uses**, not just the ordering
+  within pinned groups. Monotone rule extends naturally: sort each result
+  kind's sinks and the candidate ports in flow order, assign k-th to k-th;
+  face purity is enforced by assigning whole faces to one kind before slot
+  assignment. Which faces get which kind: minimize total Manhattan distance
+  from the kind's machine outputs to the face (a tiny assignment problem —
+  8 faces × 2 kinds; brute force is fine).
 - **General case (defer until a real need):** interchangeable-instance groups
   on *lifted* netlists + pairwise-crossing minimization via CP-SAT (bool
   `x[i][s]` = instance i in slot s; crossing bools reified from order
@@ -1123,9 +1156,13 @@ Build **after** WP-I (it consumes PathFinder's overuse output as feedback).
   (regression); **north-star gates:** `test_synth_diagonal_full_belt_2x4` — the
   48-in/96-out full-belt diagonal extractor validates + interprets correctly —
   and `test_synth_half_splitter_2x4` — the Half Splitter (§2a: 48 in south,
-  cut, west halves to the 4 western faces, east halves to the 4 eastern faces)
-  validates + interprets correctly. Record belts vs the human oracle where one
-  exists (I7, tracked metric, soft target ≤ 2×).
+  cut, 48 west-half + 48 east-half belts out on `Free` ports with face
+  purity; full 3-D allowed) validates + interprets correctly, asserting only
+  the relaxed contract — per-kind belt counts and face purity, **not** any
+  specific face assignment. Record belts vs the human oracle where one
+  exists (I7, tracked metric, soft target ≤ 2×), and record which faces the
+  optimizer chose per kind (expect west halves to gravitate west via
+  wirelength; if they don't, that is cost-model signal, not a failure).
 - **Done when:** the north-star gates pass end-to-end (spec → assign → place
   → route → emit → lift → interpret).
 
@@ -1140,10 +1177,12 @@ Build **after** WP-I (it consumes PathFinder's overuse output as feedback).
   arises; none block the diagonal-extractor north star.
 - New deps (§6): A/H add `networkx`; D adds `OR-Tools`. Nothing else.
 - **Scaling arc (2026-06-09): I → {J, K, L, in any order} → M → north star**
-  (the 48→96 full-belt diagonal extractor). WP-I first: no new calibration
-  needed, and its gate is the two existing xfails. J blocks on a lift fixture
-  (Q8); K blocks on a launcher fixture (Q7); L is pure software. M comes last —
-  it consumes WP-I's congestion feedback and deletes the hand constraints.
+  (the Half Splitter + the 48→96 full-belt diagonal extractor). WP-I first: no
+  new calibration needed, and its gate is the two existing xfails. J blocks on
+  a lift fixture (Q8) and is on the Half Splitter's critical path (full 3-D
+  routing sanctioned, §2a spec relaxation); K blocks on a launcher fixture
+  (Q7); L is pure software. M comes last — it consumes WP-I's congestion
+  feedback and deletes the hand constraints.
 
 ### 7.4 Test infrastructure to build first
 - `tests/conftest.py`: fixture loaders + the `CLOSED_FIXTURES` / `OPEN_FIXTURES`
