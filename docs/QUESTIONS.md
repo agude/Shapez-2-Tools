@@ -49,20 +49,41 @@ The interpreter maps `RotatorOneQuad` → clockwise, `RotatorOneQuadCCW` →
 counter-clockwise. Tests pass, but confirm that matches in-game (the building
 icons should settle it).
 
-## 7. Launcher/catcher routing model  *(future — after WP-D)*
+## 7. Launcher/catcher routing model  *(blocks WP-K)*
 Belt launchers and catchers act as same-layer vias: a launcher sends items over
 other belts to a catcher, allowing routes to cross without conflicting. Multiple
 launched belts can even share a lane (2–3 flights over the same ground cell).
-Questions for when we add them:
-- What are the exact entity types and how do they encode the flight
-  path (launcher rotation → catcher position, or is there a pairing field)?
+**Entity types identified** (2026-06-09, from `identifiers.json`):
+`BeltPortSenderVariant` (launcher) and `BeltPortReceiverVariant` (catcher) —
+the placeable siblings of the platform-edge port slots (`*InternalVariant`).
+Remaining calibration questions:
+- How is the pair encoded — is it positional (sender throws along its facing
+  direction to the first receiver in line), or is there a pairing field?
 - What is the maximum flight distance? Is it fixed or variable?
 - Can a launcher/catcher pair cross a machine cell, or only belt cells?
 - How many flight lanes can stack over one ground cell (2? 3?)?
-The routing model will need per-cell **lane tracking** (ground vs flight lanes)
-instead of a simple occupied set, and A* would try launcher hops when ground
-routing fails or detours excessively. Not a priority until belt routing on
-the ground layer is solid (WP-C/D done).
+
+**Requested fixture:** a small *closed* blueprint (ports on every lane) with
+one launcher→catcher hop flying over a perpendicular belt — ideally two
+variants at different flight distances. That calibrates pairing + range and
+gives the lift-side test (`test_hop_fixture_lifts_clean`, WP-K).
+
+## 8. Lift calibration  *(blocks WP-J)*
+Lift entities move items between floors; the router needs them as inter-layer
+edges. Variants exist in `identifiers.json`:
+`Lift1{Up,Down}{Forward,Backward,Left}InternalVariant` (+ `LeftMirrored`),
+plus `Lift2*` two-layer versions. Unknowns:
+- In/out sides per variant × R, and which cell(s) a lift occupies — hypothesis:
+  a `Lift1UpForward` at `(x, y, L)` takes input from its back at layer L and
+  outputs at layer L+1 in its facing direction, occupying the cell on both
+  layers (Forward/Backward/Left name the exit direction relative to entry).
+- Does `Lift2*` span L0→L2 directly through one cell on all three layers?
+
+**Requested fixture:** a small *closed* blueprint where one belt lane goes up
+one floor via a lift, runs a few cells, and comes back down — one copy using
+Forward variants, one using Left/Backward if convenient. That calibrates the
+in/out table and gives the lift-side test (`test_lift_fixture_lifts_clean`,
+WP-J).
 
 ---
 

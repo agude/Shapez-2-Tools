@@ -1,6 +1,8 @@
 # Blueprint Synthesis — Plan
 
-**Status:** Draft, updated 2026-06-06. **WP-H full-blueprint functional drive landed.**
+**Status:** Draft, updated 2026-06-09. **WP-H landed. Scaling plan added:
+§2a (architecture) + WP-I…WP-M (§7.2) — negotiated-congestion routing for
+dense platforms.**
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -14,7 +16,7 @@ regression floor. The hard target is intra-platform **place-and-route**.
 
 ---
 
-## 0. Status & handoff (2026-06-06)
+## 0. Status & handoff (2026-06-09)
 
 **Built and green** (180 tests pass, 3 xfail, `just test`, ruff clean):
 - `blueprint.py` — faithful `.spz2bp` codec.
@@ -198,9 +200,13 @@ throughput=2). Limitation: the router can't handle 1→3 fan-out in tight space
 throughput=2). CLI: `just run synth rotate_180 -o out.spz2bp`.
 
 **Remaining gaps:**
-- The tight 2D merger packing from WP-C (cutter/swapper xfails) — the placer
-  must reserve routing channels for dense fans. The 1→3 fan-out limitation for
-  the half-destroyer is the same underlying issue.
+- The tight 2D merger packing from WP-C (cutter/swapper xfails) and the 1→3
+  fan-out limit are **one disease: greedy sequential routing with hard
+  obstacles cannot negotiate congestion**. The fix is not more placer
+  constraints — it is replacing the routing algorithm. See §2a (architecture)
+  and WP-I…WP-M (§7.2). **WP-I (PathFinder router) is the next unit of work**:
+  it needs no new calibration, and its acceptance gate is exactly these two
+  xfails.
 - **The diagonal extractor** (north-star demo): `DiagonalSpec` +
   `synthesize_diagonal()` landed for 2 pairs on 1×1 (8/8 edges, validates,
   interprets to correct diagonals). Scaling to 4 pairs (the full-belt target)
@@ -328,6 +334,125 @@ throughput=2). CLI: `just run synth rotate_180 -o out.spz2bp`.
 
 ---
 
+## 2a. Scaling architecture — dense platforms (added 2026-06-09)
+
+How place-and-route reaches the real targets: ~50–150 nets (48 input belts →
+12–16 machines → 96 output belts) crossing each other across a 76×36×3-floor
+interior. This section is the *why*; the implementable detail is WP-I…WP-M in
+§7.2. Read this section before touching any of those WPs.
+
+### Why the current router cannot get there
+
+`route.py` is sequential A\* with hard obstacle marking. Two structural limits:
+
+1. **Net ordering.** Each laid route permanently claims cells with no
+   knowledge of later nets, so route #40 of 96 finds its corridor walled off.
+   For congested instances **no ordering succeeds** — feasibility requires
+   nets to mutually compromise, which a one-pass greedy scheme cannot express.
+   The cutter/swapper corpus xfails are this failure at small scale; adding
+   more ordering heuristics (we already have three) only moves the cliff.
+2. **No crossing capacity.** One-occupant-per-cell on a single floor makes
+   crossings impossible by construction — there is no 2-in/2-out belt cell
+   (§1: junction variants are 1→2, 1→3, 2→1, 3→1, T). Yet the platform
+   physically offers crossing capacity: 3 floors joined by lift entities
+   (`Lift1Up*`/`Lift1Down*`), and launcher→catcher hops
+   (`BeltPortSenderVariant`/`BeltPortReceiverVariant`) that fly over cells.
+   Dense human builds spend that capacity freely; the router cannot express
+   any of it.
+
+### The fix (standard chip-CAD, sized for us)
+
+This problem is FPGA detailed routing, which is solved at 1000× our scale by
+**negotiated-congestion routing** (PathFinder, McMurchie & Ebeling 1995; the
+VPR router): route every net optimally *allowing overlaps*, then iteratively
+re-price shared cells and rip-up-and-reroute until no cell is shared. Nets
+negotiate — a net with a cheap alternative vacates a contested cell; a net
+without one pays the price and keeps it. VPR routes 100k+ nets this way; we
+have ~150 on ~8k cells × 3 floors.
+
+A giant co-formulated CP-SAT model (placement + routing together) stays
+**rejected** (the chicken-egg decision): cell-level multi-commodity flow here
+is ~3M booleans, and it discards the negotiation structure that makes
+PathFinder converge. CP-SAT's jobs are assignment (WP-L) and
+capacity-constrained placement (WP-M) — never the routing grid itself.
+
+### Pipeline
+
+```
+abstract netlist
+ → lane / instance assignment     WP-L  kill crossings before they exist; quotient symmetric lanes
+ → placement w/ channel capacity  WP-M  rows + belt channels, CP-SAT, routability-aware
+ → detailed routing               WP-I  PathFinder negotiated congestion …
+     … on the unified 3-D graph   WP-J  floors + lifts      WP-K  launcher hops
+ → emit                           existing  junction typing via the calibration table
+ → verify                         existing  lift→isomorphic (I4) · interpret (I3/I5) · validate (I6)
+```
+
+The verification loop is untouched and is what makes the rebuild safe: routed
+output is never eyeballed — it is lifted back and graph-compared (I4). Emit
+must keep producing exactly the types+rotations `lift.routing_inout` decodes
+(single shared calibration table, both directions).
+
+### The unified routing graph (the key data structure)
+
+One graph encodes all the physics, so the router needs no special-case
+crossing logic — going over (lift), flying over (hop), and detouring around
+become the same decision under one cost model:
+
+- **Nodes:** cells `(x, y, layer)`, layer ∈ {0, 1, 2}. Capacity = 1 net per
+  cell. Machine-occupied cells are not nodes.
+- **Step edges:** 4-adjacent same-layer cells, cost 1.0.
+- **Lift edges (WP-J):** between adjacent layers via lift entities, cost
+  ≈ 3.0; claiming one claims a cell on **both** layers. Geometry must be
+  calibrated from a fixture first (QUESTIONS.md Q8).
+- **Hop edges (WP-K):** launcher → catcher, straight line, same layer, cost
+  ≈ 2.0 + 0.05·distance; **flight cells are not occupied** (or lane-limited —
+  per Q7 calibration). Endpoints each occupy one cell.
+- **Legal leg patterns per cell:** (1 in, 1 out), (1, 2), (1, 3), (2, 1),
+  (3, 1) — exactly the junction variant table. Max 4 legs. Never 2-in/2-out.
+
+### Concrete north-star instance: the Half Splitter (added 2026-06-09)
+
+The user's hand build exists, unfinished, at
+`~/Projects/shapez_2_blueprints/UNFINISHED Half Splitter.spz2bp` — it is both
+the demand signal and the partial oracle. Functional spec, as stated:
+
+- **Input:** 48 full-shape belts entering across the **four south port faces**
+  (4 faces × 4 slots × 3 floors = 48 lanes).
+- **Operation:** cut every shape into its west half and east half (the
+  absolute-halves cutter — `CutterDefault`, 1-in/2-out).
+- **Output routing (the hard part):**
+  - **West halves** (48 belts) → the **west-side port faces plus the two
+    west-most north faces**.
+  - **East halves** (48 belts) → the **remaining four faces** (east side +
+    east-most north faces).
+- **Port arithmetic (to be confirmed against the blueprint):** 96 output belts
+  need 8 faces; a Foundation_2x4 provides exactly 8 non-south faces (4 north +
+  2 west + 2 east), so the platform is presumably 2×4. Confirm the platform
+  type, the exact face assignment, and floor usage by lifting the unfinished
+  blueprint before encoding the spec in `synth`.
+- **Why it is hard:** every cutter emits two streams with *opposite* target
+  sides, so ~half of all output belts must cross the other half's territory —
+  exactly the massive-crossing regime §2a exists for. Expect heavy use of
+  floors (WP-J) and launcher hops (WP-K); the unfinished hand build should be
+  mined for which crossing mechanism the human reached for (that is oracle
+  data for the cost model).
+- **Role in the plan:** this is the acceptance instance for the full scaling
+  arc — WP-M's north-star gate (`test_synth_half_splitter_2x4`, alongside the
+  diagonal extractor). Lifting the unfinished build (even partially routed) is
+  also a corpus stress test for WP-I: its completed regions are tight-packed
+  fan trees.
+
+### Crossing budget (cheap infeasibility check)
+
+With pinned inputs and outputs, the minimum number of route crossings is fixed
+by the permutation (its inversion count). Floors, lifts, hops, and channel
+heights give a computable crossing capacity. Compare the two **before**
+solving anything: an impossible spec is rejected with a counting argument and
+a clear message instead of a solver timeout. (Built as part of WP-M.)
+
+---
+
 ## 3. The ladder
 
 Your hand-built library is the **oracle at every rung** — it supplies both the
@@ -402,6 +527,33 @@ Shapez-2 shape/format/belt knowledge; you should not hand-roll a constraint solv
 - **Routing (multi-net, 3-D)**: mostly in-house; no clean Python package. A* core
   can lean on `networkx`; CP-SAT may absorb small instances.
 - **CLI**: `argparse` (stdlib) now; `typer`/`click` optional later.
+
+### Library survey for the scaling arc (2026-06-09)
+
+Searched for an embeddable negotiated-congestion / grid router. Conclusion:
+**build the PathFinder loop in-house** (~400 lines on `heapq` + the existing
+grid model). Every existing implementation is format-locked or unembeddable,
+and our cell semantics (junction variant set, directional belts, lifts, hops)
+are the domain anyway:
+
+- **VPR / VTR** (C++): the canonical PathFinder implementation. Not
+  embeddable from Python; **read it for the cost schedule** if WP-I's
+  parameters need retuning.
+- **OrthoRoute** (Python + CUDA, KiCad plugin): PathFinder on a Manhattan
+  lattice — the closest existing code to WP-I. KiCad-locked, GPU-dependent.
+  Reading material, not a dependency.
+- **Freerouting** (Java, Specctra DSN) / **KiCadRoutingTools** (Rust+Python,
+  KiCad): PCB-format-locked rip-up-and-reroute routers. Not usable.
+- **Factorio-SAT** (R-O-C-K-E-T/Factorio-SAT): SAT-encodes belt semantics to
+  synthesize balancers inside small fixed boxes. Corroborates the chicken-egg
+  decision (exact global models only work at window scale). Borrowable
+  *pattern*, held in reserve: exact CP-SAT **local repair** of one stubborn
+  congested window after PathFinder converges everywhere else. Not a WP.
+- **networkx `steiner_tree`** (kou/mehlhorn): optional better initial tree
+  topology for wide nets. Farthest-first growth should suffice; do not add
+  until measured.
+- **scipy `linear_sum_assignment`** or CP-SAT: only for WP-L's deferred
+  general case; the monotone fast path needs no solver.
 
 **Phasing:** Rungs 1–2 need at most `networkx`; `OR-Tools` arrives only at Rung 3.
 The dependency footprint stays near-zero until the solver phase.
@@ -707,6 +859,259 @@ widens the spec space but blocks nothing on the diagonal extractor.
 - **Tests:** `TestFullBlueprintDrive` — `test_swap_diagonal_computes_diagonals`,
   `test_swap_diagonal_sink_counts`, `test_classify_sources_partitions`.
 
+#### WP-I — PathFinder detailed router *(critical path; replaces sequential A\*)*
+
+Read §2a first. This WP needs **no new calibration** and **no new fixtures** —
+start here.
+
+- **Goal:** replace hard-obstacle sequential A\* with negotiated-congestion
+  routing. Acceptance gate: the two corpus xfails
+  (`test_reroute_roundtrip_multi_cell` over `cutter_12_to_24` and
+  `swap_diagonal`) go green **on the oracle's own placement** — strip belts,
+  re-route, lift back, isomorphic (I4).
+- **New module** `src/shapez2_tools/pathfinder.py`. Keep `route.py` working
+  until parity, then make `reroute_with_junctions` delegate to it (callers and
+  tests keep the same entry point).
+- **Data model** (single floor for now; the `layer` slot exists so WP-J does
+  not change signatures):
+
+  ```python
+  Cell = tuple[int, int, int]              # (x, y, layer); layer == 0 until WP-J
+
+  @dataclass
+  class Net:
+      net_id: int
+      kind: Literal["fanout", "fanin"]     # 1→N or N→1; a 1→1 net is fanout, N=1
+      root: Cell                           # the single-port end
+      terminals: list[Cell]                # the N-port end
+      tree_cells: set[Cell]                # result of growth
+      tree_edges: list[tuple[Cell, Cell]]  # directed src→dst, derived after growth
+
+  class RoutingGraph:
+      passable: set[Cell]                  # interior minus machine cells
+      base: dict[Cell, float]              # 1.0 everywhere initially
+      hist: dict[Cell, float]              # accumulated overuse history, starts 0.0
+      occ: dict[Cell, set[int]]            # net ids currently claiming the cell
+  ```
+
+- **Net extraction:** from `netlist.port_edges` at **cell granularity** (reuse
+  `_node_cell_ports` from `route.py`). Group edges into connected components by
+  shared endpoint cells. Each component must be 1→N (one source cell) or N→1
+  (one sink cell); `raise NotImplementedError` on N→M components (none exist
+  in current specs; do not silently mishandle one). Copy the endpoint
+  conventions from `reroute_with_junctions` verbatim — including the
+  adjacent-skip fix (when an endpoint is adjacent to the junction, there is no
+  trunk to route).
+- **Signal router (route one net):** grow a tree from `root`. Connect
+  terminals **farthest-first** (builds the trunk first, the way the oracle's
+  combs do). Each connection is one Dijkstra run seeded with *every current
+  tree cell at cost 0*, expanding only through `passable` cells, terminating
+  at the terminal. Rules:
+  - Tree cells are seeds, never intermediate path cells (prevents within-net
+    cycles): once seeded, do not re-expand into a tree cell.
+  - Expansion *out of* a tree cell `t` is allowed only while `legs(t) < 4` and
+    the resulting leg pattern stays in the legal set (§2a). Track per-cell leg
+    counts on the growing tree.
+  - For `fanin` nets, grow the identical tree with root = the sink cell and
+    terminals = the sources, then flip every edge direction when deriving
+    `tree_edges`.
+- **Cost function** (the negotiation — this is the entire trick):
+
+  ```
+  overuse(n)    = max(0, len(occ[n] − {this_net}) + 1 − 1)     # capacity = 1
+  enter_cost(n) = (base[n] + hist[n]) * (1 + pres_fac * overuse(n))
+  ```
+
+- **Global loop:**
+
+  ```
+  pres_fac = PRES_FAC_INIT
+  for iteration in range(MAX_ITERS):
+      for net in nets sorted by net_id:          # rip up and reroute EVERY net
+          release net's cells from occ
+          regrow net's tree under current costs
+          claim the new cells in occ
+      if no cell has len(occ) > 1:  SUCCESS
+      for every overused cell n:    hist[n] += HIST_GAIN * (len(occ[n]) − 1)
+      pres_fac *= PRES_FAC_MULT
+  FAIL → return the overused cells               # placement feedback for WP-M
+  ```
+
+  Early iterations: `pres_fac` is small, every net takes its best path,
+  overlaps allowed. Later: shared cells get expensive; nets with alternatives
+  move off; nets without alternatives stay and pay. The history term breaks
+  oscillation (two nets endlessly swapping the same two corridors).
+- **Parameters** (record any retuning here; do not scatter magic numbers):
+  `BASE = 1.0`, `PRES_FAC_INIT = 0.5`, `PRES_FAC_MULT = 1.8`,
+  `HIST_GAIN = 1.0`, `MAX_ITERS = 60`.
+- **Emit:** per tree cell, legs = incident `tree_edges` with directions ⇒
+  `(in_sides, out_sides)` ⇒ entity type + R via the **inverse of
+  `lift.routing_inout`**. Build the inverse table once, programmatically, in a
+  helper (`emit_table()`); **never hand-write a second table** — the I4
+  round-trip depends on the two directions sharing one source of truth.
+- **Determinism:** sort nets by `net_id`; Dijkstra tie-break by
+  `(cost, y, x, layer)`. Tests assert run-twice-identical output.
+- **Tests first** (`tests/test_pathfinder.py`, flavours 4 + 5):
+  1. `test_blocked_pocket_negotiates` — net B's sink sits in a pocket with a
+     single entrance cell; net A's shortest path runs through that entrance
+     but A has a detour. Route A first. Sequential hard-obstacle routing
+     strands B; assert PathFinder routes both, disjoint cells.
+  2. `test_oscillation_breaks_via_history` — two nets, two equal-cost shared
+     corridors (symmetric — the classic oscillation case); assert convergence
+     in < `MAX_ITERS` and both routed.
+  3. `test_tight_fanin_two_cells_from_sink` — 4 sources, sink ~2 cells away
+     (the corpus disease the merger staircase bails on, synthesized small);
+     assert all 4 edges route and lift back.
+  4. `test_fanout_tree_legs_legal` / `test_fanin_tree_legs_legal` — 1→4 and
+     4→1 in open space; every tree cell's leg pattern is in the legal set;
+     emitted junctions decode via `routing_inout`.
+  5. `test_emit_roundtrip_small` — tiny netlist → route → emit → lift →
+     `isomorphic`.
+  6. `test_single_cell_corpus_parity` — parametrize the 7 single-cell fixtures
+     through the new router (strip → pathfinder → lift ≅ original).
+  7. `test_deterministic` — route the same instance twice; identical entity
+     lists.
+  8. **The gate:** remove xfail from `test_reroute_roundtrip_multi_cell`
+     (cutter_12_to_24: 66/66 edges; swap_diagonal: all edges).
+- **Done when:** the gate is green, single-cell parity holds, the corpus sweep
+  is green, and `_route_split_chain` / `_route_merge_chain` are deleted (the
+  tree growth subsumes both).
+- **Pitfalls:**
+  - There is no 2-in/2-out cell. If two nets *topologically must* cross on one
+    floor, PathFinder will iterate to `MAX_ITERS` and fail — that is correct
+    behaviour; crossing capacity arrives in WP-J/WP-K. Do not "fix" it here.
+  - A junction cell belongs to exactly one net. Cell capacity is always 1.
+  - Machine cells are not passable; platform border cells are not passable;
+    port cells are endpoints with fixed directions.
+  - Throughput-aware parallel lanes stay deferred (one belt per edge).
+
+#### WP-J — third dimension: floors + lifts *(crossing capacity, part 1)*
+
+- **Goal:** routes change floors through lift entities; the router decides
+  when going up-and-over beats detouring.
+- **Blocked on calibration (Q8 — needs a user fixture export).** The variants
+  exist in `identifiers.json`: `Lift1{Up,Down}{Forward,Backward,Left}
+  InternalVariant` (+ `LeftMirrored`), and `Lift2*` two-layer versions.
+  Working hypothesis to verify: a `Lift1UpForward` at `(x, y, L)` takes input
+  from its back at layer L and outputs at layer L+1 (Forward = exit continues
+  in the facing direction; Backward/Left = the exit turns), occupying the cell
+  on both layers. **Do not guess: calibrate.** Order of work:
+  1. User exports a small *closed* fixture (Q8): one belt lane that goes up
+     one floor, runs, and comes back down, with ports on every lane.
+  2. Extend the calibration table (`routing_inout`-style entries per lift
+     variant × R, with a layer-delta component) and `_occupancy_3d`.
+  3. The fixture lifts at 0 unmatched legs (flavour 2 test).
+  4. Only then add lift edges to `RoutingGraph` (`LIFT_COST = 3.0`, claims
+     both cells) and let WP-I's loop use them — no router code changes beyond
+     edge generation, which is the entire point of the unified graph.
+- **Tests first:**
+  - `test_lift_variant_inout` — unit: in/out sides + layer delta per variant
+    × R.
+  - `test_lift_fixture_lifts_clean` — the Q8 fixture, 0 unmatched legs,
+    correct netlist (1 source → 1 sink, no phantom nodes).
+  - `test_crossing_nets_route_on_two_floors` — net A pinned west→east, net B
+    pinned north→south, paths topologically must cross; assert success with
+    ≥ 1 lift pair, lift-back isomorphic. (This exact case is WP-I's documented
+    failure mode; it flips here.)
+  - `test_lift_emit_roundtrip` — emitted lift entities decode through the
+    shared table.
+- **Done when:** the crossing test is green and the corpus sweep still passes.
+
+#### WP-K — launcher/catcher hops *(crossing capacity, part 2)*
+
+- **Goal:** same-floor crossings via flight. Entities identified:
+  `BeltPortSenderVariant` (launcher) / `BeltPortReceiverVariant` (catcher) —
+  the placeable siblings of the platform-edge port slots (`*InternalVariant`).
+- **Blocked on calibration (Q7 — needs a user fixture export):** pairing rule
+  (first receiver in the facing line?), max range, whether flight crosses
+  machine cells, how many flights stack over one ground cell.
+- **Lift side first, router second** (I4 requires the tracer to understand
+  hops before the router may emit them):
+  1. Q7 fixture: one launcher→catcher hop flying over a perpendicular belt,
+     closed with ports.
+  2. Tracer: resolve sender→receiver pairing by scanning along the sender's
+     facing direction (≤ calibrated max range); the pair becomes one belt edge
+     in the netlist. Fixture lifts at 0 unmatched legs.
+  3. Router: enumerate hop edges from every passable cell × 4 directions ×
+     distances 2..R (`HOP_COST = 2.0 + 0.05·d`). Endpoint cells occupy
+     normally; flight cells occupy nothing — unless Q7 says lanes are limited,
+     then add `flight_occ` with the calibrated per-cell lane cap to the
+     negotiation (same overuse pricing).
+- **Tests first:** `test_hop_pairing_traced` (unit, pairing rule),
+  `test_hop_fixture_lifts_clean`, `test_hop_resolves_crossing`
+  (the WP-J crossing test variant constrained to one floor; assert a hop is
+  used), `test_hop_emit_roundtrip`.
+- **Done when:** a single-floor topological crossing routes via hop and
+  round-trips.
+
+#### WP-L — lane assignment + symmetry quotient *(shrink the instance first)*
+
+Pure software, no fixtures, independent of I/J/K. Every crossing removed here
+is one the router never negotiates.
+
+- **Monotone assignment (build first, covers all current specs):** when a
+  spec's machine instances are interchangeable (synth *created* them, so it
+  knows), assign the k-th leftmost input lane group to the k-th leftmost
+  machine slot, and the k-th machine to the k-th output port group. Monotone
+  assignment minimizes pairwise inversions for uniform specs — most "insane"
+  crossings never come into existence. Implementation: a deterministic sort in
+  `synth._lower` before placement; no solver.
+- **General case (defer until a real need):** interchangeable-instance groups
+  on *lifted* netlists + pairwise-crossing minimization via CP-SAT (bool
+  `x[i][s]` = instance i in slot s; crossing bools reified from order
+  inversions; minimize the sum). Do not build speculatively.
+- **Symmetry quotient:** for lane-uniform specs, route **one** lane group on a
+  one-unit-wide strip and stamp at pitch 20 — `generator.py` already stamps
+  exactly this way for the rotator family; promote stamping into
+  `synth._lower` as a fast path. A 48-lane spec with 4-fold uniformity is a
+  12-lane routing problem.
+- **Tests first:** `test_monotone_assignment_no_inversions` (uniform spec ⇒
+  zero crossing count, counted as order inversions between input and machine
+  x-orders); `test_reversed_pins_minimized` (outputs pinned in reverse ⇒
+  assignment achieves the theoretical minimum inversion count, not more);
+  `test_quotient_isomorphic_to_direct` (quotient+stamp lift ≅ direct route
+  lift on a small lane-uniform case, and belt counts are equal).
+- **Done when:** synth uses monotone ordering and the quotient fast path, and
+  the existing synth suite stays green.
+
+#### WP-M — channel-capacity placement *(replaces hand constraints; consumes router feedback)*
+
+Build **after** WP-I (it consumes PathFinder's overuse output as feedback).
+
+- **Row template:** machines snap to horizontal rows. CP-SAT vars: integer
+  `row[m]`, `x[m]` per machine; integer channel heights `h[c] ≥ 2` between
+  rows; `Σ row_heights + Σ h[c] ≤ interior_height`. Dense human builds are
+  already row-organized; this is not a loss of generality worth fighting yet.
+- **Density constraint (the heart):** per channel, per x-bucket of width 4:
+  `(number of nets whose horizontal interval covers the bucket) ≤ h[c] ×
+  floors_available`. A net's interval ends are reified from its endpoints'
+  placement vars. Buckets stay coarse to bound model size. This is classic
+  channel-routing density, and it is what "the placer reserves routing room"
+  concretely means.
+- **Delete the hand constraints** (y-stagger, 2-cell inter-group gap, port-row
+  margin) once density lands — their effects must become *emergent*. Keep only
+  tests that assert outcomes (round-trip, validation), never constraint
+  presence.
+- **Feedback loop:** WP-I failure returns overused cells → map to (channel,
+  bucket) → subtract from that bucket's capacity → re-place → re-route. Cap at
+  3 iterations, then fail with the congestion map in the error.
+- **Crossing budget check (§2a):** before solving, compare the pinned
+  permutation's inversion count against total crossing capacity
+  (floors + hops + channel slack); reject infeasible specs with a counting
+  message.
+- **Tests first:** `test_half_destroy_throughput_3` (the known tight 1→3
+  failure synthesizes; §0's limitation note flips); the
+  `test_series_with_throughput` xfail goes green (or moves to a larger
+  platform with a comment saying why); `test_diagonal_4pair_2x2_still_green`
+  (regression); **north-star gates:** `test_synth_diagonal_full_belt_2x4` — the
+  48-in/96-out full-belt diagonal extractor validates + interprets correctly —
+  and `test_synth_half_splitter_2x4` — the Half Splitter (§2a: 48 in south,
+  cut, west halves to the 4 western faces, east halves to the 4 eastern faces)
+  validates + interprets correctly. Record belts vs the human oracle where one
+  exists (I7, tracked metric, soft target ≤ 2×).
+- **Done when:** the north-star gates pass end-to-end (spec → assign → place
+  → route → emit → lift → interpret).
+
 ### 7.3 Sequencing & dependencies
 - **Critical path:** A → B → C → D → E, each gated by the prior's invariant.
 - A and B are cheap and unblock everything — done.
@@ -717,6 +1122,11 @@ widens the spec space but blocks nothing on the diagonal extractor.
 - F / G / H run in parallel whenever a stacker / painter / confidence need
   arises; none block the diagonal-extractor north star.
 - New deps (§6): A/H add `networkx`; D adds `OR-Tools`. Nothing else.
+- **Scaling arc (2026-06-09): I → {J, K, L, in any order} → M → north star**
+  (the 48→96 full-belt diagonal extractor). WP-I first: no new calibration
+  needed, and its gate is the two existing xfails. J blocks on a lift fixture
+  (Q8); K blocks on a launcher fixture (Q7); L is pure software. M comes last —
+  it consumes WP-I's congestion feedback and deletes the hand constraints.
 
 ### 7.4 Test infrastructure to build first
 - `tests/conftest.py`: fixture loaders + the `CLOSED_FIXTURES` / `OPEN_FIXTURES`
