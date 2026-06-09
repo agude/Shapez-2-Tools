@@ -426,17 +426,34 @@ the demand signal and the partial oracle. Functional spec, as stated:
     west-most north faces**.
   - **East halves** (48 belts) → the **remaining four faces** (east side +
     east-most north faces).
-- **Port arithmetic (to be confirmed against the blueprint):** 96 output belts
-  need 8 faces; a Foundation_2x4 provides exactly 8 non-south faces (4 north +
-  2 west + 2 east), so the platform is presumably 2×4. Confirm the platform
-  type, the exact face assignment, and floor usage by lifting the unfinished
-  blueprint before encoding the spec in `synth`.
-- **Why it is hard:** every cutter emits two streams with *opposite* target
-  sides, so ~half of all output belts must cross the other half's territory —
-  exactly the massive-crossing regime §2a exists for. Expect heavy use of
-  floors (WP-J) and launcher hops (WP-K); the unfinished hand build should be
-  mined for which crossing mechanism the human reached for (that is oracle
-  data for the cost model).
+- **Port arithmetic — CONFIRMED (2026-06-09, mined from the blueprint):**
+  platform is `Foundation_2x4` (8 non-south faces = 4 north + 2 west + 2
+  east). The build is **entirely on layer 0** (all 1562 entities): 16 input
+  lanes (S faces) → 32 output lanes per floor; the evident plan is the
+  tile-replication convention — duplicate the floor ×3 for 48→96. **This is a
+  floor quotient** (route one floor, stamp three), the same instance-shrinking
+  move as WP-L's lane quotient.
+- **Machine arithmetic (complete in the build):** per input lane: 1→4
+  splitter tree (3 × `Splitter1To2L`) → **4 cutters** (cutter rate = ¼ belt)
+  → two 4→1 merger trees (6 × `Merger2To1L`, 3 per half). 16 lanes ⇒ 48
+  splitters + 64 cutters + 96 mergers, all present and all locally routed
+  (every cutter has its input and reaches an output).
+- **The human's crossing mechanism — hops, not floors:** zero lifts; **145
+  launcher→catcher pairs on one floor** (`BeltPortSenderInternalVariant` →
+  `BeltPortReceiverInternalVariant`, the same types as edge port slots —
+  interior position is what distinguishes a hop endpoint from platform IO).
+  Mined hop physics (feeds Q7): pairing is **first receiver along the
+  sender's facing ray with the same rotation** (all 145 pairs resolve);
+  flight distances observed 1–5 cells; flights pass over belts and over other
+  hop endpoints but **never over machine cells** (0 of 280 flight cells);
+  up to **3 flights stack** over one ground cell. Hops are clearly cheap —
+  the synthesizer's `HOP_COST` should not penalize them much.
+- **What is unfinished (the demand signal):** 17 of 32 outputs are fed. All
+  eastern-lane **west halves** — which must traverse ~60 cells across the
+  whole platform over everything else — are unrouted, plus parts of the
+  north-face fan-in. The human completed every local route and stopped at
+  exactly the maximal-crossing hauls. That is the regime WP-I + WP-K must
+  win at.
 - **Role in the plan:** this is the acceptance instance for the full scaling
   arc — WP-M's north-star gate (`test_synth_half_splitter_2x4`, alongside the
   diagonal extractor). Lifting the unfinished build (even partially routed) is

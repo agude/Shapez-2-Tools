@@ -56,17 +56,26 @@ launched belts can even share a lane (2–3 flights over the same ground cell).
 **Entity types identified** (2026-06-09, from `identifiers.json`):
 `BeltPortSenderVariant` (launcher) and `BeltPortReceiverVariant` (catcher) —
 the placeable siblings of the platform-edge port slots (`*InternalVariant`).
-Remaining calibration questions:
-- How is the pair encoded — is it positional (sender throws along its facing
-  direction to the first receiver in line), or is there a pairing field?
-- What is the maximum flight distance? Is it fixed or variable?
-- Can a launcher/catcher pair cross a machine cell, or only belt cells?
-- How many flight lanes can stack over one ground cell (2? 3?)?
+**Empirical answers mined from `UNFINISHED Half Splitter.spz2bp`
+(2026-06-09, 145 interior hop pairs analyzed):**
+- Pairing is **positional**: each sender pairs with the first receiver along
+  its facing ray **with the same rotation** — no pairing field. All 145 pairs
+  resolve under direction convention R=0→+X, R=1→+Y, R=2→−X, R=3→−Y.
+- Interior hop endpoints use the **same entity types as platform-edge port
+  slots** (`BeltPortSenderInternalVariant`/`BeltPortReceiverInternalVariant`);
+  position (border ring vs interior) is the only distinguisher. The lifter
+  must learn this — it currently classifies all 338 as platform IO.
+- Flight distances observed: 1–5 cells.
+- Flights pass over belts and over other hop endpoints; **never over machine
+  cells** (0 of 280 flight cells in the sample).
+- Up to **3 flights** stack over one ground cell.
 
-**Requested fixture:** a small *closed* blueprint (ports on every lane) with
-one launcher→catcher hop flying over a perpendicular belt — ideally two
-variants at different flight distances. That calibrates pairing + range and
-gives the lift-side test (`test_hop_fixture_lifts_clean`, WP-K).
+**Still open (in-game checks, no fixture needed for the rest):**
+- Is 5 the hard max flight distance, or just the largest the build used?
+- Is flying over a machine cell actually illegal, or merely unused here?
+- Is 3 the flight-lane cap, or just the observed max?
+- Must the catcher's rotation equal the sender's (all 145 match here), or is
+  that a builder habit?
 
 ## 8. Lift calibration  *(blocks WP-J)*
 Lift entities move items between floors; the router needs them as inter-layer
