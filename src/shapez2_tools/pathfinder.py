@@ -31,6 +31,7 @@ PRES_FAC_MULT = 1.8
 HIST_GAIN = 1.0
 MAX_ITERS = 60
 HOP_PENALTY = 2.0
+LIFT_COST = 3.0
 
 LEGAL_LEG_PATTERNS: set[tuple[int, int]] = {
     (1, 1),
@@ -59,12 +60,14 @@ class Net:
     tree_cells: set[Cell] = field(default_factory=set)
     tree_edges: list[tuple[Cell, Cell]] = field(default_factory=list)
     hop_edges: set[tuple[Cell, Cell]] = field(default_factory=set)
+    lift_edges: set[tuple[Cell, Cell]] = field(default_factory=set)
 
 
 @dataclass
 class RoutingGraph:
     passable: set[Cell]
     hop_range: int = 0
+    lift_enabled: bool = False
     base: dict[Cell, float] = field(default_factory=dict)
     hist: dict[Cell, float] = field(default_factory=dict)
     occ: dict[Cell, set[int]] = field(default_factory=lambda: defaultdict(set))
@@ -113,6 +116,7 @@ def _grow_tree(
     cell_in: dict[Cell, int] = defaultdict(int)
     cell_out: dict[Cell, int] = defaultdict(int)
     hop_cells: set[Cell] = set()
+    lift_cells: set[Cell] = set()
 
     # When the root was offset from its port cell, a boundary edge will be
     # appended after routing. Pre-seed the incoming count so the root can
@@ -131,7 +135,7 @@ def _grow_tree(
         pq: list[tuple[float, int, int, int, Cell]] = []
 
         for seed in tree_cells:
-            if seed in hop_cells:
+            if seed in hop_cells or seed in lift_cells:
                 continue
             # Check if seed can still emit another edge
             outs = cell_out[seed]
@@ -199,6 +203,27 @@ def _grow_tree(
                                 pq, (new_cost, nb[1], nb[0], nb[2], nb)
                             )
 
+            if graph.lift_enabled:
+                cx, cy, cl = cell
+                for dl in (1, -1):
+                    nb = (cx, cy, cl + dl)
+                    if nb not in graph.passable:
+                        continue
+                    if nb in tree_cells and nb != terminal:
+                        continue
+                    occ_set = graph.occ.get(nb, set())
+                    overuse = max(0, len(occ_set - {net.net_id}) + 1 - 1)
+                    enter = (LIFT_COST + graph.hist.get(nb, 0.0)) * (
+                        1 + pres_fac * overuse
+                    )
+                    new_cost = cost + enter
+                    if new_cost < dist.get(nb, float("inf")):
+                        dist[nb] = new_cost
+                        prev[nb] = cell
+                        heapq.heappush(
+                            pq, (new_cost, nb[1], nb[0], nb[2], nb)
+                        )
+
         if not found:
             raise RoutingError(
                 f"net {net.net_id} ({net.kind}): terminal {terminal} "
@@ -219,7 +244,10 @@ def _grow_tree(
         prev_cell = seed_cell
         for pc in path:
             tree_edges.append((prev_cell, pc))
-            if abs(pc[0] - prev_cell[0]) + abs(pc[1] - prev_cell[1]) > 1:
+            if pc[2] != prev_cell[2]:
+                lift_cells.add(prev_cell)
+                lift_cells.add(pc)
+            elif abs(pc[0] - prev_cell[0]) + abs(pc[1] - prev_cell[1]) > 1:
                 hop_cells.add(prev_cell)
                 hop_cells.add(pc)
             cell_out[prev_cell] += 1
@@ -236,7 +264,10 @@ def _grow_tree(
     net.hop_edges = {
         (s, d)
         for s, d in tree_edges
-        if abs(d[0] - s[0]) + abs(d[1] - s[1]) > 1
+        if s[2] == d[2] and abs(d[0] - s[0]) + abs(d[1] - s[1]) > 1
+    }
+    net.lift_edges = {
+        (s, d) for s, d in tree_edges if s[2] != d[2]
     }
 
 
@@ -333,11 +364,48 @@ def _get_emit_table() -> dict[tuple[frozenset, frozenset], tuple[str, int]]:
     return _EMIT_TABLE
 
 
+def _lift_emit_table() -> dict[
+    tuple[frozenset, frozenset, int], tuple[str, int]
+]:
+    """Build (ins, outs, delta) → (type, rotation) from lift.lift_inout."""
+    bases = ["Forward", "Backward", "Left"]
+    table: dict[tuple[frozenset, frozenset, int], tuple[str, int]] = {}
+    for prefix in ["Lift1", "Lift2"]:
+        for direction in ["Up", "Down"]:
+            for exit_dir in bases:
+                for suffix in ["InternalVariant", "InternalVariantMirrored"]:
+                    if exit_dir != "Left" and suffix == "InternalVariantMirrored":
+                        continue
+                    variant = f"{prefix}{direction}{exit_dir}{suffix}"
+                    info = lift.lift_inout(variant, 0)
+                    if info is None:
+                        continue
+                    for r in range(4):
+                        ins, outs, delta = lift.lift_inout(variant, r)
+                        key = (ins, outs, delta)
+                        if key not in table:
+                            table[key] = (variant, r)
+    return table
+
+
+_LIFT_EMIT: dict[tuple[frozenset, frozenset, int], tuple[str, int]] | None = None
+
+
+def _get_lift_emit_table() -> dict[
+    tuple[frozenset, frozenset, int], tuple[str, int]
+]:
+    global _LIFT_EMIT
+    if _LIFT_EMIT is None:
+        _LIFT_EMIT = _lift_emit_table()
+    return _LIFT_EMIT
+
+
 def _cell_to_entity(
     cell: Cell,
     tree_edges: list[tuple[Cell, Cell]],
     layer: int,
     hop_edges: set[tuple[Cell, Cell]] | None = None,
+    lift_edges: set[tuple[Cell, Cell]] | None = None,
 ) -> Entity | None:
     """Convert a tree cell to a belt Entity using the emit table.
 
@@ -346,6 +414,34 @@ def _cell_to_entity(
     Raises ``RoutingError`` if a routing cell has a leg pattern with no
     matching belt variant — that indicates a bug in tree growth.
     """
+    if lift_edges:
+        for src, dst in lift_edges:
+            if src == cell:
+                # This cell is the entry side of a lift.
+                # Find horizontal in-direction and out-direction.
+                in_dir = None
+                out_dir = None
+                for s2, d2 in tree_edges:
+                    if d2 == cell and s2[2] == cell[2]:
+                        in_dir = _direction(cell, s2)
+                    if s2 == dst:
+                        if d2[2] == dst[2]:
+                            out_dir = _direction(dst, d2)
+                delta = dst[2] - src[2]
+                if in_dir is not None and out_dir is not None:
+                    key = (frozenset({in_dir}), frozenset({out_dir}), delta)
+                    table = _get_lift_emit_table()
+                    entry = table.get(key)
+                    if entry is not None:
+                        variant, r = entry
+                        return Entity(
+                            x=cell[0], y=cell[1], type=variant,
+                            rotation=r, layer=cell[2],
+                        )
+                return None
+            if dst == cell:
+                return None
+
     if hop_edges:
         for src, dst in hop_edges:
             dx, dy = dst[0] - src[0], dst[1] - src[1]
@@ -369,6 +465,8 @@ def _cell_to_entity(
     out_dirs: set[tuple[int, int]] = set()
 
     for src, dst in tree_edges:
+        if src[2] != dst[2]:
+            continue
         if dst == cell:
             in_dirs.add(_direction(cell, src))
         if src == cell:
@@ -399,7 +497,9 @@ def emit_entities(
     for net in nets:
         for cell in net.tree_cells:
             ent = _cell_to_entity(
-                cell, net.tree_edges, layer, hop_edges=net.hop_edges
+                cell, net.tree_edges, layer,
+                hop_edges=net.hop_edges,
+                lift_edges=net.lift_edges,
             )
             if ent is not None:
                 entities.append(ent)
@@ -655,7 +755,9 @@ def strip_and_reroute(
     for net in routable:
         for cell in sorted(net.tree_cells, key=lambda c: (c[1], c[0], c[2])):
             ent = _cell_to_entity(
-                cell, net.tree_edges, layer, hop_edges=net.hop_edges
+                cell, net.tree_edges, layer,
+                hop_edges=net.hop_edges,
+                lift_edges=net.lift_edges,
             )
             if ent is not None:
                 belt_entities.append(ent)

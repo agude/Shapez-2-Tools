@@ -1,9 +1,11 @@
 # Blueprint Synthesis — Plan
 
-**Status:** Draft, updated 2026-06-10. **WP-K done (hop tracer + router — full
-crossing capacity via launcher/catcher). WP-L landed (monotone assignment +
-quotient stamping). WP-H landed. Scaling plan added: §2a (architecture) +
-WP-I…WP-M (§7.2) — negotiated-congestion routing for dense platforms.**
+**Status:** Draft, updated 2026-06-10. **WP-J done (lift calibration + 3-D
+tracing + lift edges in PathFinder — cross-floor routing via lifts). WP-K done
+(hop tracer + router — full crossing capacity via launcher/catcher). WP-L
+landed (monotone assignment + quotient stamping). WP-H landed. Scaling plan
+added: §2a (architecture) + WP-I…WP-M (§7.2) — negotiated-congestion routing
+for dense platforms.**
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -17,9 +19,9 @@ regression floor. The hard target is intra-platform **place-and-route**.
 
 ---
 
-## 0. Status & handoff (2026-06-09)
+## 0. Status & handoff (2026-06-10)
 
-**Built and green** (209 tests pass, 1 xfail, `just test`, ruff clean):
+**Built and green** (241 tests pass, 1 xfail, `just test`, ruff clean):
 - `blueprint.py` — faithful `.spz2bp` codec.
 - `generator.py` — tile-replication generator: builds the rotator family
   (180/cw/ccw × 1×1/1×4) from one lifted tile. `Entity`, lift/stamp/build,
@@ -43,6 +45,16 @@ regression floor. The hard target is intra-platform **place-and-route**.
   occupancy; verified on a synthetic closed fixture (2 inputs, 1 output per
   stacker) and both open stacker fixtures (4 straight, 8 bent).
   Includes `isomorphic(a, b)` for structural netlist comparison (WP-A done).
+  **WP-J lift calibration:** `lift_inout(type, r)` returns `(ins, outs, delta)`
+  for all 16 lift variants (Lift1/Lift2 × Up/Down × Forward/Backward/Left/
+  LeftMirrored), calibrated empirically from 20+ existing blueprints.
+  `_lift_footprint` expands lifts to multi-floor cells (input at entity layer,
+  output at target layer, blockers in between). `_occupancy` and `_occupancy_3d`
+  handle lift cells; `_Cell.out_layer_delta` enables `trace()` to follow
+  cross-floor output. `kind()` returns `"lift"` for lift entities (excluded from
+  nodes, contracted like belts). Verified: **12-to-12 Balancer** (pure routing +
+  46 lifts, 3 floors) lifts at **0 unmatched legs** on all floors; 3-D trace
+  recovers 32 port nodes (16 in, 16 out) + 148 edges, all platform_in→platform_out.
   **WP-K hop tracing:** `_resolve_hops` pairs interior launcher/catcher entities
   by scanning along the sender's facing direction (first receiver with same
   rotation wins). `trace_layer(..., contract_hops=True)` threads belt contraction
@@ -87,6 +99,13 @@ regression floor. The hard target is intra-platform **place-and-route**.
   more expensive than walking — only congestion tips the balance). Hop
   endpoint cells emit `BeltPortSender/ReceiverInternalVariant`; flight cells
   are free. Single-floor topological crossings now route and round-trip.
+  **WP-J lift routing:** `RoutingGraph(lift_enabled=True)` enables vertical
+  lift edges in Dijkstra (cost = `LIFT_COST = 3.0`, both cells occupied).
+  `_lift_emit_table` inverts `lift.lift_inout` for all 16 variants × 4
+  rotations. `_cell_to_entity` detects lift edges and emits the correct lift
+  variant based on entry direction, exit direction, and layer delta.
+  `Net.lift_edges` tracks cross-floor tree edges. Verified: two crossing nets
+  on a 5×5×2 grid route successfully with lifts; fails without.
   **All failure paths raise `RoutingError`** (carrying overused cells for
   WP-M feedback): non-convergence at `MAX_ITERS`, unreachable terminals, leg patterns
   with no emit-table entry, and a root stuck on its port cell. Roots
@@ -183,10 +202,11 @@ produce `{S}` and throughput-merged sinks produce `{S, CW(S)}` — 17 + 9 = 26
 sinks verified. `classify_sources(nl)` partitions the 26 sources into two swapper
 feed groups (9 + 8) plus 9 pass-throughs via 2-coloring the constraint graph.
 
-**Critical path — complete through WP-E + WP-I + WP-L.** ~~WP-A~~ ✓ → ~~WP-B~~ ✓ →
-~~WP-C~~ ✓ (single-cell + cell-level multi-cell ports + spacious wide fans) →
-~~**WP-D placement**~~ ✓ (rotator quarter 16/16) → ~~**WP-E synthesize**~~ ✓
-(single-op platforms) → ~~**WP-I PathFinder**~~ ✓ (negotiated congestion) →
+**Critical path — complete through WP-E + WP-I + WP-J + WP-L.** ~~WP-A~~ ✓ →
+~~WP-B~~ ✓ → ~~WP-C~~ ✓ (single-cell + cell-level multi-cell ports + spacious
+wide fans) → ~~**WP-D placement**~~ ✓ (rotator quarter 16/16) → ~~**WP-E
+synthesize**~~ ✓ (single-op platforms) → ~~**WP-I PathFinder**~~ ✓ (negotiated
+congestion) → ~~**WP-J lifts**~~ ✓ (cross-floor routing via lift entities) →
 ~~**WP-L assignment**~~ ✓ (monotone sort + quotient stamping).
 `synth.py` runs the full pipeline from a `Spec(op,
 platform, throughput)`: spec → abstract netlist → monotone sort → place → route → blueprint.
@@ -1024,37 +1044,30 @@ start here.
     port cells are endpoints with fixed directions.
   - Throughput-aware parallel lanes stay deferred (one belt per edge).
 
-#### WP-J — third dimension: floors + lifts *(crossing capacity, part 1)*
+#### WP-J — third dimension: floors + lifts *(crossing capacity, part 1)* — DONE
 
 - **Goal:** routes change floors through lift entities; the router decides
   when going up-and-over beats detouring.
-- **Blocked on calibration (Q8 — needs a user fixture export).** The variants
-  exist in `identifiers.json`: `Lift1{Up,Down}{Forward,Backward,Left}
-  InternalVariant` (+ `LeftMirrored`), and `Lift2*` two-layer versions.
-  Working hypothesis to verify: a `Lift1UpForward` at `(x, y, L)` takes input
-  from its back at layer L and outputs at layer L+1 (Forward = exit continues
-  in the facing direction; Backward/Left = the exit turns), occupying the cell
-  on both layers. **Do not guess: calibrate.** Order of work:
-  1. User exports a small *closed* fixture (Q8): one belt lane that goes up
-     one floor, runs, and comes back down, with ports on every lane.
-  2. Extend the calibration table (`routing_inout`-style entries per lift
-     variant × R, with a layer-delta component) and `_occupancy_3d`.
-  3. The fixture lifts at 0 unmatched legs (flavour 2 test).
-  4. Only then add lift edges to `RoutingGraph` (`LIFT_COST = 3.0`, claims
-     both cells) and let WP-I's loop use them — no router code changes beyond
-     edge generation, which is the entire point of the unified graph.
-- **Tests first:**
-  - `test_lift_variant_inout` — unit: in/out sides + layer delta per variant
-    × R.
-  - `test_lift_fixture_lifts_clean` — the Q8 fixture, 0 unmatched legs,
-    correct netlist (1 source → 1 sink, no phantom nodes).
-  - `test_crossing_nets_route_on_two_floors` — net A pinned west→east, net B
-    pinned north→south, paths topologically must cross; assert success with
-    ≥ 1 lift pair, lift-back isomorphic. (This exact case is WP-I's documented
-    failure mode; it flips here.)
-  - `test_lift_emit_roundtrip` — emitted lift entities decode through the
-    shared table.
-- **Done when:** the crossing test is green and the corpus sweep still passes.
+- **Calibration (Q8) bypassed** — same approach as WP-K: mined empirical
+  data from the 12-to-12 Balancer (`data/reference/balancer_12_to_12.spz2bp`,
+  46 lifts, 3 floors). No user fixture needed.
+- **lift.py:** `lift_inout(type, r)` → `(ins, outs, delta)` for all 16 lift
+  variants. `_lift_footprint(type, r)` → multi-floor cell expansion. Input
+  always from back at entity's own layer; output at L±delta in the named exit
+  direction. `_Cell.out_layer_delta` enables cross-floor output in 3-D trace.
+  `_occupancy` and `_occupancy_3d` handle lift multi-floor cells (input cell
+  at entity floor, output cell at target floor, blockers between).
+- **pathfinder.py:** `RoutingGraph(lift_enabled=True)` enables vertical
+  neighbor expansion in `_grow_tree`. `LIFT_COST = 3.0`. `_lift_emit_table()`
+  inverts `lift_inout` to map `(ins, outs, delta)` → `(variant, r)`.
+  `_cell_to_entity` emits lift entities at cross-floor edge sources.
+- **Tests (30 new in `tests/test_lift_3d.py`):** `TestLiftInout` (12
+  parametrized R=0 variants + rotation + non-lift → None + all-16 sweep),
+  `TestLiftFootprint` (Lift1 2-cell, Lift2 3-cell, input/output split),
+  `TestBalancer` (0 unmatched legs all floors, 3-D trace ports, edges,
+  all 3 floors used), `TestLiftEmitTable` (all 16 in table, roundtrip),
+  `TestCrossingNets` (fails without lift, succeeds with, uses lift edges,
+  emits valid lift entities).
 
 #### WP-K — launcher/catcher hops *(crossing capacity, part 2)*
 
@@ -1201,12 +1214,13 @@ Build **after** WP-I (it consumes PathFinder's overuse output as feedback).
 - F / G / H run in parallel whenever a stacker / painter / confidence need
   arises; none block the diagonal-extractor north star.
 - New deps (§6): A/H add `networkx`; D adds `OR-Tools`. Nothing else.
-- **Scaling arc (2026-06-10): ~~I~~ ✓ → {J, ~~K~~ ✓, ~~L~~ ✓, in any order} → M → north star**
+- **Scaling arc (2026-06-10): ~~I~~ ✓ → {~~J~~ ✓, ~~K~~ ✓, ~~L~~ ✓} → M → north star**
   (the Half Splitter + the 48→96 full-belt diagonal extractor). WP-I done
-  (negotiated congestion); WP-L done (monotone sort + quotient stamping);
-  WP-K done (hop tracer + router — crossing capacity via launcher/catcher).
-  J blocks on a lift fixture (Q8) and is on the Half Splitter's critical path
-  (full 3-D routing sanctioned, §2a spec relaxation). M comes last — it
+  (negotiated congestion); WP-J done (lift calibration + 3-D tracing + lift
+  edges in PathFinder — Q8 bypassed by mining calibration from existing
+  blueprints, same approach as WP-K); WP-K done (hop tracer + router —
+  crossing capacity via launcher/catcher); WP-L done (monotone sort + quotient
+  stamping). **All three crossing-capacity WPs complete.** M comes last — it
   consumes WP-I's congestion feedback and deletes the hand constraints.
 
 ### 7.4 Test infrastructure to build first

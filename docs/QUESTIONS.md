@@ -77,22 +77,10 @@ the placeable siblings of the platform-edge port slots (`*InternalVariant`).
 - Must the catcher's rotation equal the sender's (all 145 match here), or is
   that a builder habit?
 
-## 8. Lift calibration  *(blocks WP-J)*
-Lift entities move items between floors; the router needs them as inter-layer
-edges. Variants exist in `identifiers.json`:
-`Lift1{Up,Down}{Forward,Backward,Left}InternalVariant` (+ `LeftMirrored`),
-plus `Lift2*` two-layer versions. Unknowns:
-- In/out sides per variant × R, and which cell(s) a lift occupies — hypothesis:
-  a `Lift1UpForward` at `(x, y, L)` takes input from its back at layer L and
-  outputs at layer L+1 in its facing direction, occupying the cell on both
-  layers (Forward/Backward/Left name the exit direction relative to entry).
-- Does `Lift2*` span L0→L2 directly through one cell on all three layers?
-
-**Requested fixture:** a small *closed* blueprint where one belt lane goes up
-one floor via a lift, runs a few cells, and comes back down — one copy using
-Forward variants, one using Left/Backward if convenient. That calibrates the
-in/out table and gives the lift-side test (`test_lift_fixture_lifts_clean`,
-WP-J).
+## 8. Lift calibration — RESOLVED (no fixture needed; see Resolved)
+Calibrated empirically from the 12-to-12 Balancer (46 lifts, 3 floors) — same
+approach that bypassed Q7 for WP-K. All 16 variants verified at 0 unmatched
+legs.
 
 ---
 
@@ -120,3 +108,11 @@ WP-J).
   `Swap Diagonal` blueprint; the winning model lifts it at 0 unmatched legs (32
   swappers × in-2/out-2), so the diagonal extractor's topology is lifted. Modeled
   in `lift._machine_footprint`; fixture `data/reference/swap_diagonal.spz2bp`.
+- **Lift calibration (Q8):** all 16 lift variants (`Lift{1,2}{Up,Down}
+  {Forward,Backward,Left}[Mirrored]InternalVariant`) calibrated empirically from
+  the 12-to-12 Balancer (`data/reference/balancer_12_to_12.spz2bp`, 46 lifts, 3
+  floors). Input always from back at entity's own layer; output at L±delta in the
+  named exit direction (delta = 1 for Lift1, 2 for Lift2; positive for Up,
+  negative for Down). Exit directions at R=0: Forward→E, Backward→W, Left→S,
+  LeftMirrored→N. `Lift2*` spans 3 layers (input + blocker + output). All floors
+  at 0 unmatched legs. No user fixture export was needed.

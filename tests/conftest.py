@@ -19,6 +19,7 @@ CLOSED_FIXTURES = [
     "quarter_destroy_west_half.spz2bp",
     "cutter_12_to_24.spz2bp",
     "swap_diagonal.spz2bp",
+    "balancer_12_to_12.spz2bp",
 ]
 
 # Open fixtures: dangling edges by design (pinwheel exports, machine demos).
