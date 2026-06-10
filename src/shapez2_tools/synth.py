@@ -211,22 +211,40 @@ def _monotone_sort(abstract: dict, platform: str) -> dict:
     return {"nodes": sources + machines + sinks, "edges": abstract["edges"]}
 
 
+_MAX_RETRIES = 3
+
+
 def _lower(abstract: dict, platform: str, layer: int = 0) -> Blueprint:
-    """Lower an abstract netlist to a blueprint: sort → place → route → blueprint."""
+    """Lower an abstract netlist to a blueprint: sort → place → route → blueprint.
+
+    On routing failure, feeds overused cells back to the placer as forbidden
+    positions and retries (WP-M feedback loop, capped at 3 iterations).
+    """
+    from shapez2_tools.pathfinder import RoutingError
+
     abstract = _monotone_sort(abstract, platform)
-    placed = place(abstract, platform)
-    entities = [
-        Entity(
-            type=node.type,
-            x=node.x,
-            y=node.y,
-            rotation=node.rotation,
-            layer=layer,
-        )
-        for node in placed.nodes.values()
-    ]
-    stripped = entities_to_blueprint(entities, platform=platform)
-    return reroute_with_junctions(stripped, placed, layer=layer)
+
+    forbidden: set[tuple[int, int]] = set()
+    for attempt in range(_MAX_RETRIES + 1):
+        placed = place(abstract, platform, forbidden=forbidden)
+        entities = [
+            Entity(
+                type=node.type,
+                x=node.x,
+                y=node.y,
+                rotation=node.rotation,
+                layer=layer,
+            )
+            for node in placed.nodes.values()
+        ]
+        stripped = entities_to_blueprint(entities, platform=platform)
+        try:
+            return reroute_with_junctions(stripped, placed, layer=layer)
+        except RoutingError as err:
+            if attempt == _MAX_RETRIES:
+                raise
+            for x, y, _l in err.overused:
+                forbidden.add((x, y))
 
 
 def synthesize(spec: Spec, layer: int = 0) -> Blueprint:

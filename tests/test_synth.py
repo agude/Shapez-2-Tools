@@ -251,7 +251,6 @@ class TestSeriesChain:
         expected = Shape.parse("WuRuCuSu")
         assert all(s == expected for s in outputs.values())
 
-    @pytest.mark.xfail(reason="16 machines + fan patterns on 1x1 exceeds router capacity")
     def test_series_with_throughput(self):
         """Series chain with throughput=2: fan-out at src, fan-in at sink."""
         from shapez2_tools import interpret
@@ -659,3 +658,92 @@ class TestQuotient:
         direct_count = len(functional_entities(direct))
         quotient_count = len(functional_entities(quotient))
         assert quotient_count == direct_count * 3
+
+
+# ---------------------------------------------------------------------------
+# WP-M: row-based placement + feedback loop
+# ---------------------------------------------------------------------------
+
+
+class TestRowPlacement:
+    """WP-M: machines snap to stage rows."""
+
+    def test_stage_computation(self):
+        """_compute_stages assigns correct depth from sources."""
+        from shapez2_tools.place import _compute_stages
+
+        abstract = netlist_from_spec(
+            Spec(op=("rotate_cw", "rotate_cw"), platform="Foundation_1x1", throughput=2)
+        )
+        stages = _compute_stages(abstract)
+        for nid, s in stages.items():
+            if "_s0" in nid:
+                assert s == 0, f"{nid} expected stage 0, got {s}"
+            elif "_s1" in nid:
+                assert s == 1, f"{nid} expected stage 1, got {s}"
+
+    def test_same_stage_same_y(self):
+        """2-stage spec ⇒ exactly 2 distinct machine y-values."""
+        from shapez2_tools.place import _compute_stages, place
+
+        spec = Spec(
+            op=("rotate_cw", "rotate_cw"),
+            platform="Foundation_1x1",
+            throughput=2,
+        )
+        abstract = netlist_from_spec(spec)
+        stages = _compute_stages(abstract)
+        n_stages = max(stages.values()) + 1
+        assert n_stages == 2
+
+        abstract = _monotone_sort(abstract, spec.platform)
+        nl = place(abstract, spec.platform)
+
+        machine_ys = {pos[1] for pos, n in nl.nodes.items() if n.kind == "machine"}
+        assert len(machine_ys) == n_stages, (
+            f"expected {n_stages} distinct y-values, got {machine_ys}"
+        )
+
+    def test_half_destroy_throughput_3(self):
+        """Half-destroy with throughput=3 synthesizes (the WP-D blocker)."""
+        from shapez2_tools import interpret
+
+        spec = Spec(op="half_destroy", platform="Foundation_1x1", throughput=3)
+        result = synthesize(spec)
+        assert lift.validate(result) == []
+
+        nl = lift.trace_layer(result, 0)
+        inputs = {
+            p: Shape.parse("RuCuSuWu")
+            for p, n in nl.nodes.items()
+            if n.kind == "platform_in"
+        }
+        outputs = interpret.interpret(nl, inputs)
+        expected = Shape.parse("RuCu----")
+        assert all(s == expected for s in outputs.values())
+
+    def test_diagonal_4pair_2x2_still_green(self):
+        """Regression: 4-pair diagonal on 2×2 still synthesizes correctly."""
+        from shapez2_tools import interpret
+
+        spec = DiagonalSpec(pairs=4, platform="Foundation_2x2")
+        result = synthesize_diagonal(spec)
+        assert lift.validate(result) == []
+
+        nl = lift.trace_layer(result, 0)
+        assert len(nl.edges) == 16
+
+        srcs = sorted(
+            [(p, n) for p, n in nl.nodes.items() if n.kind == "platform_in"],
+            key=lambda pn: pn[0][0],
+        )
+        north = Shape.parse("Ru----Ru")
+        south = Shape.parse("--RuRu--")
+        inputs = {}
+        for i, (pos, _) in enumerate(srcs):
+            inputs[pos] = north if i % 2 == 0 else south
+
+        outputs = interpret.interpret(nl, inputs)
+        out_shapes = {str(s) for s in outputs.values()}
+        assert "Ru--Ru--" in out_shapes
+        assert "--Ru--Ru" in out_shapes

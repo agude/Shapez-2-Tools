@@ -1,9 +1,14 @@
-"""Machine placement via OR-Tools CP-SAT (WP-D).
+"""Machine placement via OR-Tools CP-SAT (WP-D + WP-M row model).
 
 Given an abstract netlist (node types/kinds + edges, no coordinates) and a
 platform, assigns (x, y, rotation) to each node using constraint programming.
 Sources and sinks are fixed at platform-edge positions; machines are placed
 in the interior with no-overlap and wire-length minimization.
+
+Machines are assigned to **stage rows**: each stage (depth from sources) maps
+to a single y-coordinate shared by all machines at that depth. Routing channels
+between rows have a minimum height of 2 cells, replacing the hand-tuned
+y-stagger and port-row margin constraints from WP-D.
 
 Multi-cell machines (cutters, swappers) occupy a second cell whose position
 depends on rotation. The solver tracks both cells for overlap avoidance and
@@ -40,6 +45,39 @@ def _second_cell_tables(type_: str) -> tuple[list[int], list[int]]:
     return [0, 1, 0, -1], [-1, 0, 1, 0]
 
 
+def _compute_stages(abstract: dict) -> dict[str, int]:
+    """Assign each machine a stage index by BFS depth from sources.
+
+    Stage increments at each machine-to-machine hop.  Machines directly fed
+    by sources are stage 0, machines fed by stage-0 machines are stage 1, etc.
+    """
+    node_by_id = {n["id"]: n for n in abstract["nodes"]}
+    edge_out: dict[str, list[str]] = defaultdict(list)
+    for sid, did in abstract["edges"]:
+        edge_out[sid].append(did)
+
+    stage: dict[str, int] = {}
+    # BFS queue: (node_id, current_machine_depth).
+    # Sources start at depth -1; the first machine hop bumps to 0.
+    queue: list[tuple[str, int]] = [
+        (n["id"], -1) for n in abstract["nodes"] if n["kind"] == "platform_in"
+    ]
+    visited: set[str] = set()
+    while queue:
+        nid, s = queue.pop(0)
+        if nid in visited:
+            continue
+        visited.add(nid)
+        node = node_by_id[nid]
+        if node["kind"] == "machine":
+            s += 1
+            stage[nid] = s
+        for child in edge_out.get(nid, []):
+            queue.append((child, s))
+
+    return stage
+
+
 def abstract_netlist(nl: lift.Netlist) -> dict:
     """Strip coordinates from a concrete netlist, keeping only the graph.
 
@@ -74,12 +112,18 @@ def _edge_ports(plat: dict, rotation: int) -> list[tuple[int, int]]:
     return sorted((x, y) for x, y, r in plat["ports"] if r == rotation)
 
 
-def place(abstract: dict, platform: str) -> lift.Netlist:
+def place(
+    abstract: dict,
+    platform: str,
+    *,
+    forbidden: set[tuple[int, int]] | None = None,
+) -> lift.Netlist:
     """Place an abstract netlist on a platform via CP-SAT.
 
     Args:
         abstract: dict with "nodes" and "edges" (see ``abstract_netlist``).
         platform: platform name from platforms.json (e.g. "Foundation_1x1").
+        forbidden: cells where machines must not be placed (WP-M feedback).
 
     Returns:
         A concrete ``Netlist`` with solver-chosen positions and rotations.
@@ -164,28 +208,42 @@ def place(abstract: dict, platform: str) -> lift.Netlist:
     if not machines:
         return _build_netlist(abstract, src_positions, sink_positions, {}, port_rotation)
 
+    # --- Stage computation (WP-M row model) ---
+    stages = _compute_stages(abstract)
+    n_stages = max(stages.values()) + 1
+
     # --- CP-SAT model ---
     model = cp_model.CpModel()
 
-    # Machine variables: (x, y, r) per machine.
+    # Row y-positions: one variable per stage.  All machines at the same
+    # stage share a single y.  Routing channels between rows (and between
+    # ports and the nearest row) must be at least 2 cells tall.
+    row_y: list[cp_model.IntVar] = [
+        model.new_int_var(y_min, y_max, f"row_y_{r}") for r in range(n_stages)
+    ]
+
+    if input_y > output_y:
+        # South flow (common case): row 0 nearest sources, last row nearest sinks.
+        model.add(row_y[0] <= input_y - 3)
+        model.add(row_y[-1] >= output_y + 3)
+        for r in range(n_stages - 1):
+            model.add(row_y[r] >= row_y[r + 1] + 3)
+    else:
+        model.add(row_y[0] >= input_y + 3)
+        model.add(row_y[-1] <= output_y - 3)
+        for r in range(n_stages - 1):
+            model.add(row_y[r + 1] >= row_y[r] + 3)
+
+    # Machine variables: x is free within interior, y is the stage row,
+    # r is rotation 0–3.
     m_x: dict[str, cp_model.IntVar] = {}
     m_y: dict[str, cp_model.IntVar] = {}
     m_r: dict[str, cp_model.IntVar] = {}
 
-    # Keep machines away from port rows so fan-out splitters and belt
-    # trunks have room.  A margin of 1 lets the solver place machines
-    # adjacent to the source row; the router then puts a splitter ON
-    # the source row, whose trunk end cell collides with a source port.
-    machine_y_min = min(input_y, output_y) + 2
-    machine_y_max = max(input_y, output_y) - 2
-    # Clamp to interior.
-    machine_y_min = max(machine_y_min, y_min)
-    machine_y_max = min(machine_y_max, y_max)
-
     for m in machines:
         mid = m["id"]
         m_x[mid] = model.new_int_var(x_min, x_max, f"x_{mid}")
-        m_y[mid] = model.new_int_var(machine_y_min, machine_y_max, f"y_{mid}")
+        m_y[mid] = row_y[stages[mid]]
         m_r[mid] = model.new_int_var(0, 3, f"r_{mid}")
 
     # No overlap: all occupied cells must be distinct.
@@ -230,6 +288,13 @@ def place(abstract: dict, platform: str) -> lift.Netlist:
 
     if len(flat_positions) >= 2:
         model.add_all_different(flat_positions)
+
+    # Forbidden cells (WP-M feedback): machines must not occupy these positions.
+    if forbidden:
+        for fx, fy in forbidden:
+            ff = fx * h + fy
+            for fp in flat_positions:
+                model.add(fp != ff)
 
     # Rotation constraints: a machine's output must face *toward* its
     # downstream neighbour (positive dot product between output direction and
@@ -287,16 +352,14 @@ def place(abstract: dict, platform: str) -> lift.Netlist:
                 f"ein_{ei}",
             )
 
-    # Fan-group structure: machines sharing a source (fan-out) or sink
-    # (fan-in) form a group. Within a group, machines must be at adjacent
-    # x-coordinates and the same y — the pattern the router's splitter/merger
-    # heuristics expect. Between groups, x-ranges must not overlap so routes
+    # Fan-group structure: machines sharing a source (fan-out) form a group.
+    # Within a group, machines must be at adjacent x-coordinates.  Same-y
+    # is now enforced by the row model (all machines at the same stage share
+    # a row variable).  Between groups, x-ranges must not overlap so routes
     # don't cross through other groups' machines.
     fan_out_groups: defaultdict[str, list[str]] = defaultdict(list)
-    fan_in_groups: defaultdict[str, list[str]] = defaultdict(list)
     for sid, did in abstract["edges"]:
         fan_out_groups[sid].append(did)
-        fan_in_groups[did].append(sid)
 
     fanout_groups: list[list[str]] = []
     for group_id, members in fan_out_groups.items():
@@ -304,28 +367,12 @@ def place(abstract: dict, platform: str) -> lift.Netlist:
         if len(machine_members) >= 2:
             fanout_groups.append(machine_members)
 
-    for group_id, members in fan_in_groups.items():
-        machine_members = [m for m in members if node_by_id[m]["kind"] == "machine"]
-        if len(machine_members) >= 2:
-            # Same y within fan-in group too.
-            for i in range(1, len(machine_members)):
-                model.add(m_y[machine_members[0]] == m_y[machine_members[i]])
-
     for machine_members in fanout_groups:
-        # Same y for all machines in the fan-out group.
-        for i in range(1, len(machine_members)):
-            model.add(m_y[machine_members[0]] == m_y[machine_members[i]])
-        # Adjacent x: pair must differ by exactly 1.
         if len(machine_members) == 2:
             a, b = machine_members
             abs_dx = model.new_int_var(0, grid_w, f"grp_dx_{a}_{b}")
             model.add_abs_equality(abs_dx, m_x[a] - m_x[b])
             model.add(abs_dx == 1)
-
-    # Per-group same-y already keeps each fan-in / fan-out group on one
-    # row; wire-length minimization keeps different groups nearby.  A
-    # hard global y-band forces all groups to the same row, preventing
-    # the staggered two-row layouts that route cleanly.
 
     # Cross-group ordering: fan-out groups ordered by their source's
     # x-position so routes don't cross. A source at lower x should feed
@@ -404,23 +451,6 @@ def place(abstract: dict, platform: str) -> lift.Netlist:
             model.add_abs_equality(a2dy, second_y[src_id] - dy)
             total_wire.append(a2dx)
             total_wire.append(a2dy)
-
-    # Y-stagger: the y-component of wire length is invariant
-    # (|src_y - y| + |y - sink_y| = const), so the solver is indifferent
-    # among y-assignments.  Edge groups (first/last in x-order) have
-    # trunks that extend horizontally across inner groups' territory at
-    # y = source_y - 1.  Placing edge groups one row CLOSER to the
-    # source than their inner neighbours gives the inner trunks a
-    # clear vertical lane at a different y-level.
-    if len(sorted_src_ids) >= 2:
-        group_ys = [m_y[fanout_by_src[sid][0]] for sid in sorted_src_ids]
-        for i in range(len(group_ys) - 1):
-            abs_dy = model.new_int_var(0, grid_h, f"ydiv_{i}")
-            model.add_abs_equality(abs_dy, group_ys[i] - group_ys[i + 1])
-            model.add(abs_dy <= 1)
-        model.add(group_ys[0] > group_ys[1])
-        if len(group_ys) >= 3:
-            model.add(group_ys[-1] > group_ys[-2])
 
     model.minimize(sum(total_wire))
 

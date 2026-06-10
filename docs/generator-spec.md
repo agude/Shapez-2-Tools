@@ -1,11 +1,10 @@
 # Blueprint Synthesis — Plan
 
-**Status:** Draft, updated 2026-06-10. **WP-J done (lift calibration + 3-D
-tracing + lift edges in PathFinder — cross-floor routing via lifts). WP-K done
-(hop tracer + router — full crossing capacity via launcher/catcher). WP-L
-landed (monotone assignment + quotient stamping). WP-H landed. Scaling plan
-added: §2a (architecture) + WP-I…WP-M (§7.2) — negotiated-congestion routing
-for dense platforms.**
+**Status:** Draft, updated 2026-06-10. **WP-M in progress (row-based placement
+model + feedback loop landed — hand constraints deleted, series-with-throughput
+xfail goes green, half-destroy throughput=3 synthesizes). WP-J done. WP-K done.
+WP-L landed. WP-H landed. Scaling plan: §2a (architecture) + WP-I…WP-M (§7.2)
+— negotiated-congestion routing for dense platforms.**
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -119,26 +118,31 @@ regression floor. The hard target is intra-platform **place-and-route**.
   machines). OR-Tools CP-SAT solver assigns `(x, y, rotation)` to machines given
   an abstract netlist (graph structure only, no coordinates) and a platform.
   Constraints: no overlap, interior bounds, rotation facing toward connected
-  nodes, fan-out groups at same y / adjacent x / ordered by source x, sink port
-  ordering matched to source flow, **2-cell port-row margin**, **2-cell
-  inter-group x-gap**, **y-stagger** (edge groups in x-order placed one row
-  closer to sources than inner neighbours, ≤ 1 row apart). **Multi-cell
-  machines** (swapper, cutter): second-cell position via `add_element` on
-  rotation-indexed offset tables; both cells in AllDifferent + bounds; second-cell
-  wire length in objective (keeps both cells near connected ports); proximity-based
-  port assignment in `_build_netlist` (`_assign_ports`); BFS-based sink ordering
-  (`_trace_all_sinks`) handles multi-input machines correctly. Routes **16/16**
-  rotator edges and **8/8** swapper edges (4 srcs → 2 swappers → 4 sinks).
-  `abstract_netlist(nl)` strips coordinates from a lifted netlist for the solver.
+  nodes, fan-out groups at adjacent x / ordered by source x, sink port
+  ordering matched to source flow. **WP-M row model:** `_compute_stages()`
+  assigns each machine a BFS depth from sources; all machines at the same
+  stage share a single `row_y` variable. Routing channels between rows
+  (and between ports and the nearest row) have minimum height 2 cells.
+  The hand-tuned y-stagger, 2-cell port-row margin, and per-group same-y
+  constraints are **deleted** — their effects emerge from the row model.
+  **Multi-cell machines** (swapper, cutter): second-cell position via
+  `add_element` on rotation-indexed offset tables; both cells in AllDifferent
+  + bounds; second-cell wire length in objective; proximity-based port
+  assignment in `_build_netlist` (`_assign_ports`); BFS-based sink ordering
+  (`_trace_all_sinks`) handles multi-input machines correctly. Routes
+  **16/16** rotator edges and **8/8** swapper edges.
+  `abstract_netlist(nl)` strips coordinates from a lifted netlist for the
+  solver. Accepts `forbidden` cells for WP-M feedback loop.
   **The placer is scaffolding** — machine placement is often a human design
-  decision; the product is the router. The placer validates the full pipeline
-  (abstract → place → route → verify) and will improve as the router matures.
-- `synth.py` — spec-driven synthesis (WP-E + WP-L). `Spec(op, platform,
+  decision; the product is the router.
+- `synth.py` — spec-driven synthesis (WP-E + WP-L + WP-M). `Spec(op, platform,
   throughput)` where `op` is a single operation or a tuple of operations forming
   a **series chain**: each lane's source feeds `throughput` parallel paths, each
   path passing through every stage in order, then fan-in to the sink.
   `_lower(abstract, platform)` runs the generic pipeline (any abstract netlist →
-  **monotone sort** → place → route → blueprint). **WP-L monotone assignment:**
+  **monotone sort** → place → route → blueprint). **WP-M feedback loop:**
+  `_lower` catches `RoutingError`, adds the overused cells to a `forbidden` set,
+  and retries placement up to 3 times. **WP-L monotone assignment:**
   `_monotone_sort` reorders source/sink nodes by ascending x so the placer
   assigns leftmost sources to leftmost ports, eliminating route crossings for
   uniform specs. `abstract_netlist()` now carries `orig_x` on port nodes so
@@ -146,8 +150,10 @@ regression floor. The hard target is intra-platform **place-and-route**.
   `synthesize_quotient(spec)` synthesizes one floor and stamps it across all
   three floors via `generator.stamp` — belt counts scale exactly 3×, each floor
   isomorphic. Verified: single-op rotate-180/cw/ccw on 1×1 quarter (isomorphic
-  to oracles, 16/16 edges); half-destroy (validates + interprets at throughput=2);
-  series chains (2×CW = 180°, 3×CCW = CW, both validate + interpret correctly).
+  to oracles, 16/16 edges); half-destroy (validates + interprets at throughput=2
+  **and throughput=3**); series chains (2×CW = 180°, 3×CCW = CW, both validate
+  + interpret correctly); **series with throughput=2** (4×2×2 = 16 machines,
+  validates + interprets correctly — the WP-D xfail now passes).
   Multi-cell: 2-swapper abstract netlists lower to valid blueprints that interpret
   correctly (placement + routing + port assignment verified end-to-end).
   **Diagonal trick synthesis:** `DiagonalSpec(pairs, platform)` generates the
@@ -156,7 +162,7 @@ regression floor. The hard target is intra-platform **place-and-route**.
   **and on 2×2 with 4 pairs** (16/16 edges, validates, interprets to the correct
   diagonals on all 8 lanes). CLI: `synth swap_diagonal [--pairs N] [--platform P]`.
   Reference: `data/reference/swap_diagonal_4pair_2x2.spz2bp`.
-  **33 synth tests green, 1 xfail (201 total, 1 xfail).**
+  **40 synth tests green, 0 xfail (246 total, 0 xfail).**
 - CLI: `gen`, `diff`, `show`, `lift`, `viz`, `place`, `synth`. `synth` synthesizes
   a blueprint from a spec (e.g. `synth rotate_180` or `synth rotate_cw,rotate_cw`).
   `viz` renders a blueprint as HTML/SVG (belts as directional lines,
@@ -202,19 +208,17 @@ produce `{S}` and throughput-merged sinks produce `{S, CW(S)}` — 17 + 9 = 26
 sinks verified. `classify_sources(nl)` partitions the 26 sources into two swapper
 feed groups (9 + 8) plus 9 pass-throughs via 2-coloring the constraint graph.
 
-**Critical path — complete through WP-E + WP-I + WP-J + WP-L.** ~~WP-A~~ ✓ →
-~~WP-B~~ ✓ → ~~WP-C~~ ✓ (single-cell + cell-level multi-cell ports + spacious
-wide fans) → ~~**WP-D placement**~~ ✓ (rotator quarter 16/16) → ~~**WP-E
-synthesize**~~ ✓ (single-op platforms) → ~~**WP-I PathFinder**~~ ✓ (negotiated
-congestion) → ~~**WP-J lifts**~~ ✓ (cross-floor routing via lift entities) →
-~~**WP-L assignment**~~ ✓ (monotone sort + quotient stamping).
-`synth.py` runs the full pipeline from a `Spec(op,
-platform, throughput)`: spec → abstract netlist → monotone sort → place → route → blueprint.
+**Critical path — complete through WP-E + WP-I + WP-J + WP-L; WP-M in progress.**
+~~WP-A~~ ✓ → ~~WP-B~~ ✓ → ~~WP-C~~ ✓ → ~~**WP-D placement**~~ ✓ →
+~~**WP-E synthesize**~~ ✓ → ~~**WP-I PathFinder**~~ ✓ → ~~**WP-J lifts**~~ ✓ →
+~~**WP-L assignment**~~ ✓ → **WP-M row placement** (row model + feedback loop
+landed; density constraints + crossing budget remaining).
+`synth.py` runs the full pipeline: spec → abstract netlist → monotone sort →
+place → route → blueprint, with a feedback retry loop on routing failure.
 Verified: rotate-180/cw/ccw on 1×1 quarter (**isomorphic to oracles**, 16/16
-edges each), half-destroy on 1×1 (validates + interprets correctly at
-throughput=2). Limitation: the router can't handle 1→3 fan-out in tight space
-(the half-destroyer oracle uses throughput=3; the synthesizer works at
-throughput=2). CLI: `just run synth rotate_180 -o out.spz2bp`.
+edges each), half-destroy on 1×1 (validates + interprets at throughput=2
+**and throughput=3**), series chains with throughput=2 (**16 machines on 1×1,
+the former xfail**). CLI: `just run synth rotate_180 -o out.spz2bp`.
 
 **Remaining gaps:**
 - ~~The tight 2D merger packing (cutter/swapper xfails)~~ — **resolved by WP-I**
@@ -1167,23 +1171,25 @@ is one the router never negotiates.
 
 Build **after** WP-I (it consumes PathFinder's overuse output as feedback).
 
-- **Row template:** machines snap to horizontal rows. CP-SAT vars: integer
-  `row[m]`, `x[m]` per machine; integer channel heights `h[c] ≥ 2` between
-  rows; `Σ row_heights + Σ h[c] ≤ interior_height`. Dense human builds are
-  already row-organized; this is not a loss of generality worth fighting yet.
+- ✅ **Row template:** `_compute_stages(abstract)` assigns each machine a BFS
+  depth from sources. All machines at the same stage share a single `row_y`
+  CP-SAT variable. Routing channels between rows (and between ports and the
+  nearest row) have height ≥ 2 cells, enforced as `row_y[r] - row_y[r+1] >= 3`
+  (1 row + 2 channel). This replaces the individual per-machine y-variables.
 - **Density constraint (the heart):** per channel, per x-bucket of width 4:
   `(number of nets whose horizontal interval covers the bucket) ≤ h[c] ×
   floors_available`. A net's interval ends are reified from its endpoints'
   placement vars. Buckets stay coarse to bound model size. This is classic
   channel-routing density, and it is what "the placer reserves routing room"
-  concretely means.
-- **Delete the hand constraints** (y-stagger, 2-cell inter-group gap, port-row
-  margin) once density lands — their effects must become *emergent*. Keep only
-  tests that assert outcomes (round-trip, validation), never constraint
-  presence.
-- **Feedback loop:** WP-I failure returns overused cells → map to (channel,
-  bucket) → subtract from that bucket's capacity → re-place → re-route. Cap at
-  3 iterations, then fail with the congestion map in the error.
+  concretely means. **(Not yet implemented.)**
+- ✅ **Delete the hand constraints** (y-stagger, 2-cell inter-group gap, port-row
+  margin) — their effects emerge from the row model. Tests assert outcomes
+  (round-trip, validation), never constraint presence.
+- ✅ **Feedback loop:** `_lower()` catches `RoutingError`, adds overused cells
+  to a `forbidden` set, and retries `place()` up to 3 times. `place()` accepts
+  `forbidden: set[tuple[int, int]]` and excludes those cells from all machine
+  flat positions.
+  **(Future: map overused cells to channel/bucket for density feedback.)**
 - **Crossing budget check (§2a):** before solving, compare the pinned
   permutation's inversion count against total crossing capacity
   (floors + hops + channel slack); reject infeasible specs with a counting
@@ -1217,11 +1223,10 @@ Build **after** WP-I (it consumes PathFinder's overuse output as feedback).
 - **Scaling arc (2026-06-10): ~~I~~ ✓ → {~~J~~ ✓, ~~K~~ ✓, ~~L~~ ✓} → M → north star**
   (the Half Splitter + the 48→96 full-belt diagonal extractor). WP-I done
   (negotiated congestion); WP-J done (lift calibration + 3-D tracing + lift
-  edges in PathFinder — Q8 bypassed by mining calibration from existing
-  blueprints, same approach as WP-K); WP-K done (hop tracer + router —
-  crossing capacity via launcher/catcher); WP-L done (monotone sort + quotient
-  stamping). **All three crossing-capacity WPs complete.** M comes last — it
-  consumes WP-I's congestion feedback and deletes the hand constraints.
+  edges in PathFinder); WP-K done (hop tracer + router); WP-L done (monotone
+  sort + quotient stamping). **WP-M in progress:** row model + feedback loop
+  landed (hand constraints deleted, xfails resolved); density constraints
+  and crossing budget check remain. North-star gates next.
 
 ### 7.4 Test infrastructure to build first
 - `tests/conftest.py`: fixture loaders + the `CLOSED_FIXTURES` / `OPEN_FIXTURES`
