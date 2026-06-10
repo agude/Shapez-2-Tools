@@ -27,13 +27,20 @@ painter (needs a pipe routing layer).
 
 from __future__ import annotations
 
+import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import networkx as nx
 
 from shapez2_tools.blueprint import Blueprint
 from shapez2_tools.generator import DECORATION_TYPES, all_entities
+
+_DATA = Path(__file__).resolve().parent.parent.parent / "data"
+
+# Direction vectors: R=0→+X(E), R=1→+Y(N), R=2→-X(W), R=3→-Y(S).
+_DIR_VEC = {0: (1, 0), 1: (0, 1), 2: (-1, 0), 3: (0, -1)}
 
 # Directions, +Y north. A +1 step in R rotates a cell 90 degrees CCW.
 N, S, E, W = (0, 1), (0, -1), (1, 0), (-1, 0)
@@ -107,6 +114,66 @@ def _inout(type_: str, r: int):
     return _rot({W}, r), _rot({E}, r)
 
 
+def _platform_port_positions(bp: Blueprint) -> set[tuple[int, int]]:
+    """Known platform-edge port positions from platforms.json."""
+    platform_type = bp.entries[0]["T"] if bp.entries else None
+    if not platform_type:
+        return set()
+    with open(_DATA / "platforms.json") as f:
+        platforms = json.load(f)
+    plat = platforms.get(platform_type)
+    if not plat or "ports" not in plat:
+        return set()
+    return {(x, y) for x, y, _r in plat["ports"]}
+
+
+def _is_interior_hop(
+    type_: str, pos: tuple[int, int], port_positions: set[tuple[int, int]]
+) -> bool:
+    """True if an entity is an interior hop endpoint (not a platform-edge port)."""
+    return ("PortSender" in type_ or "PortReceiver" in type_) and pos not in port_positions
+
+
+def _resolve_hops(
+    bp: Blueprint, layer: int, port_positions: set[tuple[int, int]]
+) -> list[tuple[tuple[int, int], tuple[int, int]]]:
+    """Pair interior hop senders with receivers and return directed edges.
+
+    Pairing rule (mined from the Half Splitter, 145/145 pairs): scan along
+    the sender's facing direction; the first receiver with the same rotation
+    is its partner.  Returns ``(sender_pos, receiver_pos)`` pairs — each acts
+    as a long straight belt in the netlist.
+    """
+    senders = []
+    receivers_by_pos: dict[tuple[int, int], tuple[int, int]] = {}
+    receiver_rotations: dict[tuple[int, int], int] = {}
+
+    for e in all_entities(bp):
+        if e.layer != layer:
+            continue
+        pos = (e.x, e.y)
+        if _is_interior_hop(e.type, pos, port_positions):
+            if "Sender" in e.type:
+                senders.append(e)
+            else:
+                receivers_by_pos[pos] = pos
+                receiver_rotations[pos] = e.rotation
+
+    pairs: list[tuple[tuple[int, int], tuple[int, int]]] = []
+    used_receivers: set[tuple[int, int]] = set()
+    for s in senders:
+        dx, dy = _DIR_VEC[s.rotation]
+        for dist in range(1, 30):
+            rx, ry = s.x + dx * dist, s.y + dy * dist
+            rpos = (rx, ry)
+            if rpos in receivers_by_pos and rpos not in used_receivers:
+                if receiver_rotations[rpos] == s.rotation:
+                    pairs.append(((s.x, s.y), rpos))
+                    used_receivers.add(rpos)
+                    break
+    return pairs
+
+
 def _machine_footprint(
     type_: str, r: int
 ) -> dict[tuple[int, int, int], tuple[frozenset, frozenset]]:
@@ -178,7 +245,11 @@ class Netlist:
     port_edges: list[tuple[Cell, Cell]] = field(default_factory=list)
 
 
-def _occupancy(bp: Blueprint, layer: int) -> dict[tuple[int, int], _Cell]:
+def _occupancy(
+    bp: Blueprint,
+    layer: int,
+    skip_positions: set[tuple[int, int]] | None = None,
+) -> dict[tuple[int, int], _Cell]:
     """Map every occupied tile on a floor to its ports and owning entity.
 
     Routing cells and ports occupy their own tile; a machine is expanded into
@@ -186,12 +257,17 @@ def _occupancy(bp: Blueprint, layer: int) -> dict[tuple[int, int], _Cell]:
     contribute one tile per cell, all owned by the entity's anchor. Decoration
     is excluded -- the rotator-family assumption (trash = signage); in the Trash
     family it is functional, so this filter must become family-aware.
+
+    ``skip_positions`` (optional): cells to exclude from the occupancy map —
+    used for interior hop endpoints which are paired separately.
     """
     occ: dict[tuple[int, int], _Cell] = {}
     for e in all_entities(bp):
         if e.layer != layer or e.type in DECORATION_TYPES:
             continue
         anchor = (e.x, e.y)
+        if skip_positions and anchor in skip_positions:
+            continue
         if kind(e.type) == "machine":
             for (dx, dy, dl), (ins, outs) in _machine_footprint(e.type, e.rotation).items():
                 if dl != 0:
@@ -219,15 +295,46 @@ def unmatched_legs(bp: Blueprint, layer: int) -> int:
     return bad
 
 
-def trace_layer(bp: Blueprint, layer: int) -> Netlist:
-    """Recover the machine/port-level netlist for one floor."""
+def trace_layer(bp: Blueprint, layer: int, *, contract_hops: bool = False) -> Netlist:
+    """Recover the machine/port-level netlist for one floor.
+
+    When ``contract_hops`` is True, interior hop endpoints (launcher/catcher
+    pairs at non-port positions) are resolved and contracted: each hop acts as
+    a transparent belt connecting the sender's upstream to the receiver's
+    downstream.  When False (default), hop endpoints are treated as regular
+    platform_in/platform_out nodes — backward-compatible with existing corpus
+    tests that were calibrated before hop support.
+    """
+    hop_send_to_recv: dict[tuple[int, int], tuple[int, int]] = {}
+    hop_senders: set[tuple[int, int]] = set()
+    hop_receivers: set[tuple[int, int]] = set()
+
+    if contract_hops:
+        port_positions = _platform_port_positions(bp)
+        hop_pairs = _resolve_hops(bp, layer, port_positions)
+        hop_send_to_recv = dict(hop_pairs)
+        hop_senders = set(hop_send_to_recv)
+        hop_receivers = set(hop_send_to_recv.values())
+
     occ = _occupancy(bp, layer)
+
+    if contract_hops:
+        for pos in hop_senders | hop_receivers:
+            if pos in occ:
+                c = occ[pos]
+                occ[pos] = _Cell(c.ins, c.outs, c.anchor, is_belt=True)
+
     anchor_cells: dict[tuple[int, int], list[tuple[int, int]]] = defaultdict(list)
     for cell, c in occ.items():
         anchor_cells[c.anchor].append(cell)
 
     def down(cell):
         result = []
+        if cell in hop_senders:
+            recv = hop_send_to_recv[cell]
+            if recv in occ:
+                result.append(recv)
+            return result
         for d in occ[cell].outs:
             n = (cell[0] + d[0], cell[1] + d[1])
             nc = occ.get(n)
@@ -253,8 +360,11 @@ def trace_layer(bp: Blueprint, layer: int) -> Netlist:
     for e in all_entities(bp):
         if e.layer != layer or e.type in DECORATION_TYPES:
             continue
+        pos = (e.x, e.y)
+        if pos in hop_senders or pos in hop_receivers:
+            continue
         if kind(e.type) != "belt":
-            nodes[(e.x, e.y)] = Node(e.x, e.y, layer, e.type, kind(e.type), e.rotation)
+            nodes[pos] = Node(e.x, e.y, layer, e.type, kind(e.type), e.rotation)
 
     # Port edges: a specific output cell -> the input cell it lands on downstream.
     port_edges = [

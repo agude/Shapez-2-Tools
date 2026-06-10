@@ -1,12 +1,16 @@
-"""Tests for the netlist lifter (Rung 1)."""
+"""Tests for the netlist lifter (Rung 1) + hop tracing (WP-K)."""
 
 from collections import Counter
 from pathlib import Path
+
+import pytest
 
 from shapez2_tools import lift
 from shapez2_tools.blueprint import Blueprint
 
 REF = Path(__file__).resolve().parent.parent / "data" / "reference"
+BLUEPRINTS = Path.home() / "Projects" / "shapez_2_blueprints"
+HALF_SPLITTER = BLUEPRINTS / "UNFINISHED Half Splitter.spz2bp"
 QUARTER = REF / "quarter_rotate_180.spz2bp"
 FULL = REF / "full_belt_rotate_180.spz2bp"
 DESTROY = REF / "quarter_destroy_west_half.spz2bp"
@@ -190,3 +194,58 @@ class TestStacker:
             nl = lift.trace(bp)
             stackers = {p for p, n in nl.nodes.items() if "Stacker" in n.type}
             assert len(stackers) == count, f"{name}: expected {count}, got {len(stackers)}"
+
+
+# ---------------------------------------------------------------------------
+# WP-K: hop tracing (launcher/catcher pairs)
+# ---------------------------------------------------------------------------
+
+
+class TestHopPairing:
+    """Interior hop endpoint detection and pairing."""
+
+    @pytest.mark.skipif(not HALF_SPLITTER.exists(), reason="Half Splitter not found")
+    def test_hop_pairing_half_splitter(self):
+        """All 145 interior hop pairs in the Half Splitter resolve."""
+        bp = Blueprint.from_file(HALF_SPLITTER)
+        port_positions = lift._platform_port_positions(bp)
+        pairs = lift._resolve_hops(bp, 0, port_positions)
+        assert len(pairs) == 145
+
+    @pytest.mark.skipif(not HALF_SPLITTER.exists(), reason="Half Splitter not found")
+    def test_hop_contraction_half_splitter(self):
+        """Hop-contracted Half Splitter: 16 sources, 64 cutters, 32 sinks."""
+        bp = Blueprint.from_file(HALF_SPLITTER)
+        nl = lift.trace_layer(bp, 0, contract_hops=True)
+
+        by_kind = Counter(n.kind for n in nl.nodes.values())
+        assert by_kind["platform_in"] == 16
+        assert by_kind["machine"] == 64
+        assert by_kind["platform_out"] == 32
+
+    def test_hop_contraction_swap_diagonal(self):
+        """Hop-contracted swap_diagonal: 8 sources, 80 machines, 8 sinks."""
+        bp = Blueprint.from_file(SWAP)
+        nl = lift.trace_layer(bp, 0, contract_hops=True)
+
+        by_kind = Counter(n.kind for n in nl.nodes.values())
+        assert by_kind["platform_in"] == 8
+        assert by_kind["machine"] == 80
+        assert by_kind["platform_out"] == 8
+
+    def test_hop_contraction_no_hops_unchanged(self):
+        """contract_hops=True on a blueprint without hops gives the same result."""
+        bp = Blueprint.from_file(QUARTER)
+        nl_default = lift.trace_layer(bp, 0)
+        nl_hops = lift.trace_layer(bp, 0, contract_hops=True)
+
+        assert len(nl_default.nodes) == len(nl_hops.nodes)
+        assert len(nl_default.edges) == len(nl_hops.edges)
+        assert lift.isomorphic(nl_default, nl_hops)
+
+    def test_swap_diagonal_hop_pairs(self):
+        """swap_diagonal has 18 interior hop pairs (36 endpoints)."""
+        bp = Blueprint.from_file(SWAP)
+        port_positions = lift._platform_port_positions(bp)
+        pairs = lift._resolve_hops(bp, 0, port_positions)
+        assert len(pairs) == 18
