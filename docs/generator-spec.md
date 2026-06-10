@@ -1,9 +1,9 @@
 # Blueprint Synthesis — Plan
 
-**Status:** Draft, updated 2026-06-09. **WP-K tracer landed (hop pairing for
-launcher/catcher). WP-L landed (monotone assignment + quotient stamping).
-WP-H landed. Scaling plan added: §2a (architecture) + WP-I…WP-M (§7.2) —
-negotiated-congestion routing for dense platforms.**
+**Status:** Draft, updated 2026-06-10. **WP-K done (hop tracer + router — full
+crossing capacity via launcher/catcher). WP-L landed (monotone assignment +
+quotient stamping). WP-H landed. Scaling plan added: §2a (architecture) +
+WP-I…WP-M (§7.2) — negotiated-congestion routing for dense platforms.**
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -19,7 +19,7 @@ regression floor. The hard target is intra-platform **place-and-route**.
 
 ## 0. Status & handoff (2026-06-09)
 
-**Built and green** (206 tests pass, 1 xfail, `just test`, ruff clean):
+**Built and green** (209 tests pass, 1 xfail, `just test`, ruff clean):
 - `blueprint.py` — faithful `.spz2bp` codec.
 - `generator.py` — tile-replication generator: builds the rotator family
   (180/cw/ccw × 1×1/1×4) from one lifted tile. `Entity`, lift/stamp/build,
@@ -82,9 +82,13 @@ regression floor. The hard target is intra-platform **place-and-route**.
   calibration table, both directions). **Gate flipped:** `cutter_12_to_24`
   (66/66 edges) and `swap_diagonal` (162/162 edges) both round-trip through
   lift as isomorphic; single-cell corpus parity holds (all 7 fixtures).
+  **WP-K hop routing:** `RoutingGraph(hop_range=N)` enables launcher/catcher
+  hop edges in Dijkstra expansion (cost = `d·BASE + HOP_PENALTY`, strictly
+  more expensive than walking — only congestion tips the balance). Hop
+  endpoint cells emit `BeltPortSender/ReceiverInternalVariant`; flight cells
+  are free. Single-floor topological crossings now route and round-trip.
   **All failure paths raise `RoutingError`** (carrying overused cells for
-  WP-M feedback): non-convergence at `MAX_ITERS` (e.g. one-floor topological
-  crossings — correct until WP-J/WP-K), unreachable terminals, leg patterns
+  WP-M feedback): non-convergence at `MAX_ITERS`, unreachable terminals, leg patterns
   with no emit-table entry, and a root stuck on its port cell. Roots
   offset from a port are pre-seeded with the pending boundary in-leg so
   splitters/mergers can sit directly adjacent to ports (tight-fan regime).
@@ -1067,13 +1071,17 @@ start here.
   endpoints as belt cells and jumps from sender to receiver in `down()`, so
   the belt contraction threads through hops transparently. Default is
   `contract_hops=False` (backward-compatible — existing corpus tests
-  unaffected). 5 new tests in `tests/test_lift.py` (206 total, 1 xfail).
-- **Remaining (router side):** add hop edges to the PathFinder routing graph
-  and teach the emitter to produce sender/receiver entities. Blocked on the
-  remaining Q7 edge-case questions (max range, machine flyover legality,
-  flight-lane cap); the working model from the Half Splitter (5-cell max,
-  no machine flyover, 3-flight cap, rotation must match) suffices to
-  prototype.
+  unaffected). 5 new tests in `tests/test_lift.py` (209 total, 1 xfail).
+- **Router side: DONE.** `RoutingGraph(hop_range=N)` enables hop expansion in
+  Dijkstra: from every cell × 4 directions × distances 2..N. Hop cost =
+  `distance * BASE + HOP_PENALTY` (strictly more expensive than walking; only
+  congestion tips the balance). Hop endpoint cells occupy normally; flight
+  cells are free. `_cell_to_entity` emits `BeltPortSenderInternalVariant` /
+  `BeltPortReceiverInternalVariant` at hop endpoints with rotation matching
+  the flight direction. `strip_and_reroute(..., hop_range=N)` passes the
+  parameter through. `Net.hop_edges` tracks non-adjacent tree edges for
+  emission. Hop cells are excluded from further seed growth (no splitter/hop
+  hybrid entities). 3 new tests in `tests/test_pathfinder.py`.
 - **Lift side first, router second** (I4 requires the tracer to understand
   hops before the router may emit them):
   1. ~~Q7 fixture~~ — **bypassed**: mined pairing rules empirically from the
@@ -1081,21 +1089,20 @@ start here.
      limits) are edge cases for the router, not the tracer.
   2. ✓ Tracer: resolve sender→receiver pairing by scanning along the sender's
      facing direction; the pair becomes a transparent belt connection.
-  3. Router: enumerate hop edges from every passable cell × 4 directions ×
-     distances 2..R (`HOP_COST = 2.0 + 0.05·d`). Endpoint cells occupy
-     normally; flight cells occupy nothing — unless Q7 says lanes are limited,
-     then add `flight_occ` with the calibrated per-cell lane cap to the
-     negotiation (same overuse pricing).
+  3. ✓ Router: hop edges in Dijkstra with congestion-gated cost. Endpoint
+     cells occupy normally; flight cells free. Sender/receiver entities
+     emitted with correct rotation. Round-trip verified via
+     `contract_hops=True` re-lift.
 - **Tests:**
   - ✓ `test_hop_pairing_half_splitter` — 145/145 pairs on the Half Splitter.
   - ✓ `test_hop_contraction_half_splitter` — 16 src, 64 cutters, 32 sinks.
   - ✓ `test_hop_contraction_swap_diagonal` — 8 src, 80 machines, 8 sinks.
   - ✓ `test_hop_contraction_no_hops_unchanged` — no-hop corpus = same result.
   - ✓ `test_swap_diagonal_hop_pairs` — 18 pairs resolved.
-  - TODO: `test_hop_resolves_crossing` (router emits hop to resolve a crossing).
-  - TODO: `test_hop_emit_roundtrip` (emitted hops decode through the table).
-- **Done when:** a single-floor topological crossing routes via hop and
-  round-trips.
+  - ✓ `test_hop_resolves_crossing` — two crossing 1→1 nets routed via hop.
+  - ✓ `test_hop_emit_roundtrip` — route → emit → re-lift ≅ original.
+  - ✓ `test_no_hop_when_unnecessary` — hops not used without congestion.
+- **Done:** single-floor topological crossing routes via hop and round-trips.
 
 #### WP-L — lane assignment + symmetry quotient *(shrink the instance first)* — **DONE**
 
@@ -1194,14 +1201,13 @@ Build **after** WP-I (it consumes PathFinder's overuse output as feedback).
 - F / G / H run in parallel whenever a stacker / painter / confidence need
   arises; none block the diagonal-extractor north star.
 - New deps (§6): A/H add `networkx`; D adds `OR-Tools`. Nothing else.
-- **Scaling arc (2026-06-09): ~~I~~ ✓ → {J, ~~K~~ (tracer ✓), ~~L~~ ✓, in any order} → M → north star**
+- **Scaling arc (2026-06-10): ~~I~~ ✓ → {J, ~~K~~ ✓, ~~L~~ ✓, in any order} → M → north star**
   (the Half Splitter + the 48→96 full-belt diagonal extractor). WP-I done
   (negotiated congestion); WP-L done (monotone sort + quotient stamping);
-  WP-K tracer done (hop pairing verified on Half Splitter + swap_diagonal;
-  router side remains). J blocks on a lift fixture (Q8) and is on the Half
-  Splitter's critical path (full 3-D routing sanctioned, §2a spec relaxation);
-  K router side needs hop edges in PathFinder. M comes last — it consumes
-  WP-I's congestion feedback and deletes the hand constraints.
+  WP-K done (hop tracer + router — crossing capacity via launcher/catcher).
+  J blocks on a lift fixture (Q8) and is on the Half Splitter's critical path
+  (full 3-D routing sanctioned, §2a spec relaxation). M comes last — it
+  consumes WP-I's congestion feedback and deletes the hand constraints.
 
 ### 7.4 Test infrastructure to build first
 - `tests/conftest.py`: fixture loaders + the `CLOSED_FIXTURES` / `OPEN_FIXTURES`

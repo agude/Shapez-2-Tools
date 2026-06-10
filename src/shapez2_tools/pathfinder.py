@@ -30,6 +30,7 @@ PRES_FAC_INIT = 0.5
 PRES_FAC_MULT = 1.8
 HIST_GAIN = 1.0
 MAX_ITERS = 60
+HOP_PENALTY = 2.0
 
 LEGAL_LEG_PATTERNS: set[tuple[int, int]] = {
     (1, 1),
@@ -57,11 +58,13 @@ class Net:
     root_offset: bool = False
     tree_cells: set[Cell] = field(default_factory=set)
     tree_edges: list[tuple[Cell, Cell]] = field(default_factory=list)
+    hop_edges: set[tuple[Cell, Cell]] = field(default_factory=set)
 
 
 @dataclass
 class RoutingGraph:
     passable: set[Cell]
+    hop_range: int = 0
     base: dict[Cell, float] = field(default_factory=dict)
     hist: dict[Cell, float] = field(default_factory=dict)
     occ: dict[Cell, set[int]] = field(default_factory=lambda: defaultdict(set))
@@ -79,6 +82,9 @@ def _neighbors(cell: Cell) -> list[Cell]:
 
 def _direction(src: Cell, dst: Cell) -> tuple[int, int]:
     return (dst[0] - src[0], dst[1] - src[1])
+
+
+_DIR_TO_ROT: dict[tuple[int, int], int] = {E: 0, S: 1, W: 2, N: 3}
 
 
 def _grow_tree(
@@ -106,6 +112,7 @@ def _grow_tree(
     # Track legs per cell for legality checks
     cell_in: dict[Cell, int] = defaultdict(int)
     cell_out: dict[Cell, int] = defaultdict(int)
+    hop_cells: set[Cell] = set()
 
     # When the root was offset from its port cell, a boundary edge will be
     # appended after routing. Pre-seed the incoming count so the root can
@@ -124,6 +131,8 @@ def _grow_tree(
         pq: list[tuple[float, int, int, int, Cell]] = []
 
         for seed in tree_cells:
+            if seed in hop_cells:
+                continue
             # Check if seed can still emit another edge
             outs = cell_out[seed]
             ins = cell_in[seed]
@@ -167,6 +176,29 @@ def _grow_tree(
                     prev[nb] = cell
                     heapq.heappush(pq, (new_cost, nb[1], nb[0], nb[2], nb))
 
+            if graph.hop_range > 0:
+                cx, cy, cl = cell
+                for dx, dy in ((1, 0), (0, 1), (-1, 0), (0, -1)):
+                    for hdist in range(2, graph.hop_range + 1):
+                        nb = (cx + dx * hdist, cy + dy * hdist, cl)
+                        if nb not in graph.passable:
+                            continue
+                        if nb in tree_cells and nb != terminal:
+                            continue
+                        occ_set = graph.occ.get(nb, set())
+                        overuse = max(0, len(occ_set - {net.net_id}) + 1 - 1)
+                        hop_base = hdist * BASE + HOP_PENALTY
+                        enter = (hop_base + graph.hist.get(nb, 0.0)) * (
+                            1 + pres_fac * overuse
+                        )
+                        new_cost = cost + enter
+                        if new_cost < dist.get(nb, float("inf")):
+                            dist[nb] = new_cost
+                            prev[nb] = cell
+                            heapq.heappush(
+                                pq, (new_cost, nb[1], nb[0], nb[2], nb)
+                            )
+
         if not found:
             raise RoutingError(
                 f"net {net.net_id} ({net.kind}): terminal {terminal} "
@@ -187,6 +219,9 @@ def _grow_tree(
         prev_cell = seed_cell
         for pc in path:
             tree_edges.append((prev_cell, pc))
+            if abs(pc[0] - prev_cell[0]) + abs(pc[1] - prev_cell[1]) > 1:
+                hop_cells.add(prev_cell)
+                hop_cells.add(pc)
             cell_out[prev_cell] += 1
             cell_in[pc] += 1
             tree_cells.add(pc)
@@ -198,6 +233,11 @@ def _grow_tree(
 
     net.tree_cells = tree_cells
     net.tree_edges = tree_edges
+    net.hop_edges = {
+        (s, d)
+        for s, d in tree_edges
+        if abs(d[0] - s[0]) + abs(d[1] - s[1]) > 1
+    }
 
 
 def pathfinder_route(
@@ -297,6 +337,7 @@ def _cell_to_entity(
     cell: Cell,
     tree_edges: list[tuple[Cell, Cell]],
     layer: int,
+    hop_edges: set[tuple[Cell, Cell]] | None = None,
 ) -> Entity | None:
     """Convert a tree cell to a belt Entity using the emit table.
 
@@ -305,6 +346,25 @@ def _cell_to_entity(
     Raises ``RoutingError`` if a routing cell has a leg pattern with no
     matching belt variant — that indicates a bug in tree growth.
     """
+    if hop_edges:
+        for src, dst in hop_edges:
+            dx, dy = dst[0] - src[0], dst[1] - src[1]
+            ux = (1 if dx > 0 else -1) if dx else 0
+            uy = (1 if dy > 0 else -1) if dy else 0
+            r = _DIR_TO_ROT[(ux, uy)]
+            if src == cell:
+                return Entity(
+                    x=cell[0], y=cell[1],
+                    type="BeltPortSenderInternalVariant",
+                    rotation=r, layer=layer,
+                )
+            if dst == cell:
+                return Entity(
+                    x=cell[0], y=cell[1],
+                    type="BeltPortReceiverInternalVariant",
+                    rotation=r, layer=layer,
+                )
+
     in_dirs: set[tuple[int, int]] = set()
     out_dirs: set[tuple[int, int]] = set()
 
@@ -338,7 +398,9 @@ def emit_entities(
     entities: list[Entity] = []
     for net in nets:
         for cell in net.tree_cells:
-            ent = _cell_to_entity(cell, net.tree_edges, layer)
+            ent = _cell_to_entity(
+                cell, net.tree_edges, layer, hop_edges=net.hop_edges
+            )
             if ent is not None:
                 entities.append(ent)
     return entities
@@ -460,6 +522,8 @@ def strip_and_reroute(
     bp: Blueprint,
     netlist: lift.Netlist,
     layer: int = 0,
+    *,
+    hop_range: int = 0,
 ) -> Blueprint:
     """Strip belts and re-route via PathFinder.
 
@@ -566,7 +630,7 @@ def strip_and_reroute(
             )
         routable.append(net)
 
-    graph = RoutingGraph(passable=passable)
+    graph = RoutingGraph(passable=passable, hop_range=hop_range)
     pathfinder_route(routable, graph)
 
     # Add boundary edges connecting port cells to the tree's root/terminal
@@ -590,7 +654,9 @@ def strip_and_reroute(
     belt_entities: list[Entity] = []
     for net in routable:
         for cell in sorted(net.tree_cells, key=lambda c: (c[1], c[0], c[2])):
-            ent = _cell_to_entity(cell, net.tree_edges, layer)
+            ent = _cell_to_entity(
+                cell, net.tree_edges, layer, hop_edges=net.hop_edges
+            )
             if ent is not None:
                 belt_entities.append(ent)
 

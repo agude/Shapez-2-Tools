@@ -391,6 +391,86 @@ class TestEmit:
         assert ents1 == ents2
 
 
+class TestHop:
+    """WP-K router side: hop edges resolve single-floor crossings."""
+
+    def test_hop_resolves_crossing(self):
+        """Two crossing nets that fail without hops succeed with hop_range > 0.
+
+        Same layout as test_impossible_crossing_raises: net A (0,2)→(4,2),
+        net B (2,0)→(2,4) in a 5×5 grid. With hops enabled, one net hops
+        over the other.
+        """
+        passable = {(x, y, 0) for x in range(5) for y in range(5)}
+
+        net_a = Net(net_id=0, kind="fanout", root=(0, 2, 0), terminals=[(4, 2, 0)])
+        net_b = Net(net_id=1, kind="fanout", root=(2, 0, 0), terminals=[(2, 4, 0)])
+
+        graph = RoutingGraph(passable=passable, hop_range=5)
+        success = pathfinder_route([net_a, net_b], graph)
+
+        assert success
+        assert not (net_a.tree_cells & net_b.tree_cells)
+        assert net_a.hop_edges or net_b.hop_edges
+
+    def test_hop_emit_roundtrip(self):
+        """Route a crossing with hops, emit entities, re-lift → isomorphic."""
+        from shapez2_tools.pathfinder import strip_and_reroute
+
+        src_a = Entity(
+            type="BeltPortReceiverInternalVariant", x=0, y=3, rotation=0, layer=0
+        )
+        sink_a = Entity(
+            type="BeltPortSenderInternalVariant", x=8, y=3, rotation=0, layer=0
+        )
+        src_b = Entity(
+            type="BeltPortReceiverInternalVariant", x=4, y=0, rotation=1, layer=0
+        )
+        sink_b = Entity(
+            type="BeltPortSenderInternalVariant", x=4, y=8, rotation=1, layer=0
+        )
+
+        bp = _make_bp([src_a, sink_a, src_b, sink_b])
+        nl = lift.Netlist(
+            nodes={
+                (0, 3): lift.Node(
+                    x=0, y=3, layer=0, type=src_a.type,
+                    kind="platform_in", rotation=0,
+                ),
+                (8, 3): lift.Node(
+                    x=8, y=3, layer=0, type=sink_a.type,
+                    kind="platform_out", rotation=0,
+                ),
+                (4, 0): lift.Node(
+                    x=4, y=0, layer=0, type=src_b.type,
+                    kind="platform_in", rotation=1,
+                ),
+                (4, 8): lift.Node(
+                    x=4, y=8, layer=0, type=sink_b.type,
+                    kind="platform_out", rotation=1,
+                ),
+            },
+            edges=[((0, 3), (8, 3)), ((4, 0), (4, 8))],
+            port_edges=[((0, 3), (8, 3)), ((4, 0), (4, 8))],
+        )
+
+        result_bp = strip_and_reroute(bp, nl, layer=0, hop_range=5)
+        result_nl = lift.trace_layer(result_bp, 0, contract_hops=True)
+        assert lift.isomorphic(nl, result_nl)
+
+    def test_no_hop_when_unnecessary(self):
+        """Hops enabled but not needed: straight route uses no hops."""
+        passable = {(x, 0, 0) for x in range(8)}
+
+        net = Net(net_id=0, kind="fanout", root=(0, 0, 0), terminals=[(7, 0, 0)])
+
+        graph = RoutingGraph(passable=passable, hop_range=5)
+        success = pathfinder_route([net], graph)
+
+        assert success
+        assert not net.hop_edges
+
+
 class TestCorpusParity:
     """PathFinder must match the old router on single-cell fixtures."""
 
