@@ -1,6 +1,6 @@
-"""Synthesize blueprints from a functional spec (WP-E).
+"""Synthesize blueprints from a functional spec (WP-E + WP-L).
 
-Spec → abstract netlist → place (CP-SAT) → route (A*) → blueprint.
+Spec → abstract netlist → monotone sort → place (CP-SAT) → route → blueprint.
 
 The ``Spec.op`` field accepts either a single operation name (the common case)
 or a tuple of operations forming a **series chain**: each lane's source feeds
@@ -9,6 +9,9 @@ and the last stage fans in to the lane's sink.
 
 ``DiagonalSpec`` synthesizes the **diagonal trick** topology: paired
 north/south sources feed swappers that extract shape diagonals.
+
+``synthesize_quotient`` is the lane-uniform fast path: synthesize one floor on
+one platform unit, stamp across floors (and units for multi-unit platforms).
 
 Examples::
 
@@ -25,11 +28,12 @@ Examples::
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 from shapez2_tools.blueprint import Blueprint
-from shapez2_tools.generator import Entity
+from shapez2_tools.generator import FLOORS, Entity, functional_entities, stamp
 from shapez2_tools.place import place
 from shapez2_tools.route import entities_to_blueprint, reroute_with_junctions
 
@@ -179,8 +183,37 @@ def synthesize_diagonal(spec: DiagonalSpec, layer: int = 0) -> Blueprint:
     return _lower(netlist_from_diagonal_spec(spec), spec.platform, layer)
 
 
+def _sort_key(n: dict) -> tuple:
+    """Sort key for monotone ordering: orig_x if available, else numeric ID suffix."""
+    if "orig_x" in n:
+        return (n["orig_x"], n["id"])
+    m = re.search(r"\d+", n["id"])
+    return (int(m.group()), n["id"]) if m else (0, n["id"])
+
+
+def _monotone_sort(abstract: dict, platform: str) -> dict:
+    """Sort source and sink nodes for monotone port assignment (WP-L).
+
+    The placer assigns the i-th source in the node list to the i-th source
+    port (sorted by x).  Sorting sources by ascending x (orig_x from a
+    lifted netlist, or lane index from a synthesized one) ensures leftmost
+    sources feed leftmost machines and sinks.
+    """
+    sources = sorted(
+        [n for n in abstract["nodes"] if n["kind"] == "platform_in"],
+        key=_sort_key,
+    )
+    sinks = sorted(
+        [n for n in abstract["nodes"] if n["kind"] == "platform_out"],
+        key=_sort_key,
+    )
+    machines = [n for n in abstract["nodes"] if n["kind"] == "machine"]
+    return {"nodes": sources + machines + sinks, "edges": abstract["edges"]}
+
+
 def _lower(abstract: dict, platform: str, layer: int = 0) -> Blueprint:
-    """Lower an abstract netlist to a blueprint: place → route → blueprint."""
+    """Lower an abstract netlist to a blueprint: sort → place → route → blueprint."""
+    abstract = _monotone_sort(abstract, platform)
     placed = place(abstract, platform)
     entities = [
         Entity(
@@ -199,3 +232,15 @@ def _lower(abstract: dict, platform: str, layer: int = 0) -> Blueprint:
 def synthesize(spec: Spec, layer: int = 0) -> Blueprint:
     """Synthesize a blueprint from a spec."""
     return _lower(netlist_from_spec(spec), spec.platform, layer)
+
+
+def synthesize_quotient(spec: Spec) -> Blueprint:
+    """Synthesize via quotient: route one floor, stamp across three floors.
+
+    For lane-uniform specs every floor is identical, so we synthesize a
+    single floor and replicate it.  Belt counts scale exactly 3×.
+    """
+    one_floor = synthesize(spec, layer=0)
+    tile = [e for e in functional_entities(one_floor) if e.layer == 0]
+    all_entities = stamp(tile, (0,), FLOORS)
+    return entities_to_blueprint(all_entities, platform=spec.platform)

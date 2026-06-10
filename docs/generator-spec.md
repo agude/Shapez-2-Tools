@@ -1,8 +1,8 @@
 # Blueprint Synthesis — Plan
 
-**Status:** Draft, updated 2026-06-09. **WP-H landed. Scaling plan added:
-§2a (architecture) + WP-I…WP-M (§7.2) — negotiated-congestion routing for
-dense platforms.**
+**Status:** Draft, updated 2026-06-09. **WP-L landed (monotone assignment +
+quotient stamping). WP-H landed. Scaling plan added: §2a (architecture) +
+WP-I…WP-M (§7.2) — negotiated-congestion routing for dense platforms.**
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -18,7 +18,7 @@ regression floor. The hard target is intra-platform **place-and-route**.
 
 ## 0. Status & handoff (2026-06-09)
 
-**Built and green** (198 tests pass, 1 xfail, `just test`, ruff clean):
+**Built and green** (201 tests pass, 1 xfail, `just test`, ruff clean):
 - `blueprint.py` — faithful `.spz2bp` codec.
 - `generator.py` — tile-replication generator: builds the rotator family
   (180/cw/ccw × 1×1/1×4) from one lifted tile. `Entity`, lift/stamp/build,
@@ -104,12 +104,19 @@ regression floor. The hard target is intra-platform **place-and-route**.
   **The placer is scaffolding** — machine placement is often a human design
   decision; the product is the router. The placer validates the full pipeline
   (abstract → place → route → verify) and will improve as the router matures.
-- `synth.py` — spec-driven synthesis (WP-E). `Spec(op, platform, throughput)`
-  where `op` is a single operation or a tuple of operations forming a **series
-  chain**: each lane's source feeds `throughput` parallel paths, each path passing
-  through every stage in order, then fan-in to the sink. `_lower(abstract,
-  platform)` runs the generic pipeline (any abstract netlist → place → route →
-  blueprint). Verified: single-op rotate-180/cw/ccw on 1×1 quarter (isomorphic
+- `synth.py` — spec-driven synthesis (WP-E + WP-L). `Spec(op, platform,
+  throughput)` where `op` is a single operation or a tuple of operations forming
+  a **series chain**: each lane's source feeds `throughput` parallel paths, each
+  path passing through every stage in order, then fan-in to the sink.
+  `_lower(abstract, platform)` runs the generic pipeline (any abstract netlist →
+  **monotone sort** → place → route → blueprint). **WP-L monotone assignment:**
+  `_monotone_sort` reorders source/sink nodes by ascending x so the placer
+  assigns leftmost sources to leftmost ports, eliminating route crossings for
+  uniform specs. `abstract_netlist()` now carries `orig_x` on port nodes so
+  lifted netlists sort correctly. **WP-L quotient fast path:**
+  `synthesize_quotient(spec)` synthesizes one floor and stamps it across all
+  three floors via `generator.stamp` — belt counts scale exactly 3×, each floor
+  isomorphic. Verified: single-op rotate-180/cw/ccw on 1×1 quarter (isomorphic
   to oracles, 16/16 edges); half-destroy (validates + interprets at throughput=2);
   series chains (2×CW = 180°, 3×CCW = CW, both validate + interpret correctly).
   Multi-cell: 2-swapper abstract netlists lower to valid blueprints that interpret
@@ -120,7 +127,7 @@ regression floor. The hard target is intra-platform **place-and-route**.
   **and on 2×2 with 4 pairs** (16/16 edges, validates, interprets to the correct
   diagonals on all 8 lanes). CLI: `synth swap_diagonal [--pairs N] [--platform P]`.
   Reference: `data/reference/swap_diagonal_4pair_2x2.spz2bp`.
-  **30 synth tests green, 1 xfail (156 total, 3 xfail).**
+  **33 synth tests green, 1 xfail (201 total, 1 xfail).**
 - CLI: `gen`, `diff`, `show`, `lift`, `viz`, `place`, `synth`. `synth` synthesizes
   a blueprint from a spec (e.g. `synth rotate_180` or `synth rotate_cw,rotate_cw`).
   `viz` renders a blueprint as HTML/SVG (belts as directional lines,
@@ -166,11 +173,13 @@ produce `{S}` and throughput-merged sinks produce `{S, CW(S)}` — 17 + 9 = 26
 sinks verified. `classify_sources(nl)` partitions the 26 sources into two swapper
 feed groups (9 + 8) plus 9 pass-throughs via 2-coloring the constraint graph.
 
-**Critical path — complete through WP-E.** ~~WP-A~~ ✓ → ~~WP-B~~ ✓ →
+**Critical path — complete through WP-E + WP-I + WP-L.** ~~WP-A~~ ✓ → ~~WP-B~~ ✓ →
 ~~WP-C~~ ✓ (single-cell + cell-level multi-cell ports + spacious wide fans) →
 ~~**WP-D placement**~~ ✓ (rotator quarter 16/16) → ~~**WP-E synthesize**~~ ✓
-(single-op platforms). `synth.py` runs the full pipeline from a `Spec(op,
-platform, throughput)`: spec → abstract netlist → place → route → blueprint.
+(single-op platforms) → ~~**WP-I PathFinder**~~ ✓ (negotiated congestion) →
+~~**WP-L assignment**~~ ✓ (monotone sort + quotient stamping).
+`synth.py` runs the full pipeline from a `Spec(op,
+platform, throughput)`: spec → abstract netlist → monotone sort → place → route → blueprint.
 Verified: rotate-180/cw/ccw on 1×1 quarter (**isomorphic to oracles**, 16/16
 edges each), half-destroy on 1×1 (validates + interprets correctly at
 throughput=2). Limitation: the router can't handle 1→3 fan-out in tight space
@@ -1064,11 +1073,17 @@ start here.
 - **Done when:** a single-floor topological crossing routes via hop and
   round-trips.
 
-#### WP-L — lane assignment + symmetry quotient *(shrink the instance first)*
+#### WP-L — lane assignment + symmetry quotient *(shrink the instance first)* — **DONE**
 
 Pure software, no fixtures, independent of I/J/K. Every crossing removed here
 is one the router never negotiates.
 
+- **Status: DONE.** `_monotone_sort` in `synth.py` sorts source/sink nodes
+  by ascending x before placement (by `orig_x` from lifted netlists, or
+  numeric ID suffix from synthesized ones). `abstract_netlist()` in `place.py`
+  now carries `orig_x` on port nodes. `synthesize_quotient(spec)` synthesizes
+  one floor and stamps across three floors via `generator.stamp`. 3 new tests
+  (201 total, 1 xfail).
 - **Monotone assignment (build first, covers all current specs):** when a
   spec's machine instances are interchangeable (synth *created* them, so it
   knows), assign the k-th leftmost input lane group to the k-th leftmost
@@ -1095,14 +1110,14 @@ is one the router never negotiates.
   exactly this way for the rotator family; promote stamping into
   `synth._lower` as a fast path. A 48-lane spec with 4-fold uniformity is a
   12-lane routing problem.
-- **Tests first:** `test_monotone_assignment_no_inversions` (uniform spec ⇒
-  zero crossing count, counted as order inversions between input and machine
-  x-orders); `test_reversed_pins_minimized` (outputs pinned in reverse ⇒
-  assignment achieves the theoretical minimum inversion count, not more);
-  `test_quotient_isomorphic_to_direct` (quotient+stamp lift ≅ direct route
-  lift on a small lane-uniform case, and belt counts are equal).
+- **Tests:**
+  - ✓ `test_monotone_assignment_no_inversions` — uniform spec, 0 inversions.
+  - ✓ `test_reversed_pins_minimized` — reversed source list order, monotone
+    sort reorders to natural order, 0 inversions after placement.
+  - ✓ `test_quotient_isomorphic_to_direct` — quotient+stamp lift ≅ direct
+    route lift per floor, belt counts exactly 3×.
 - **Done when:** synth uses monotone ordering and the quotient fast path, and
-  the existing synth suite stays green.
+  the existing synth suite stays green. ✓
 
 #### WP-M — channel-capacity placement *(replaces hand constraints; consumes router feedback)*
 
@@ -1155,13 +1170,13 @@ Build **after** WP-I (it consumes PathFinder's overuse output as feedback).
 - F / G / H run in parallel whenever a stacker / painter / confidence need
   arises; none block the diagonal-extractor north star.
 - New deps (§6): A/H add `networkx`; D adds `OR-Tools`. Nothing else.
-- **Scaling arc (2026-06-09): I → {J, K, L, in any order} → M → north star**
-  (the Half Splitter + the 48→96 full-belt diagonal extractor). WP-I first: no
-  new calibration needed, and its gate is the two existing xfails. J blocks on
-  a lift fixture (Q8) and is on the Half Splitter's critical path (full 3-D
-  routing sanctioned, §2a spec relaxation); K blocks on a launcher fixture
-  (Q7); L is pure software. M comes last — it consumes WP-I's congestion
-  feedback and deletes the hand constraints.
+- **Scaling arc (2026-06-09): ~~I~~ ✓ → {J, K, ~~L~~ ✓, in any order} → M → north star**
+  (the Half Splitter + the 48→96 full-belt diagonal extractor). WP-I done
+  (negotiated congestion); WP-L done (monotone sort + quotient stamping).
+  J blocks on a lift fixture (Q8) and is on the Half Splitter's critical path
+  (full 3-D routing sanctioned, §2a spec relaxation); K blocks on a launcher
+  fixture (Q7). M comes last — it consumes WP-I's congestion feedback and
+  deletes the hand constraints.
 
 ### 7.4 Test infrastructure to build first
 - `tests/conftest.py`: fixture loaders + the `CLOSED_FIXTURES` / `OPEN_FIXTURES`

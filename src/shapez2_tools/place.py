@@ -55,7 +55,10 @@ def abstract_netlist(nl: lift.Netlist) -> dict:
     for i, (pos, node) in enumerate(nl.nodes.items()):
         nid = f"{node.kind}{i}"
         id_for_pos[tuple(pos)] = nid
-        nodes.append({"id": nid, "type": node.type, "kind": node.kind})
+        n: dict = {"id": nid, "type": node.type, "kind": node.kind}
+        if node.kind in ("platform_in", "platform_out"):
+            n["orig_x"] = pos[0]
+        nodes.append(n)
 
     edges = []
     for src, dst in nl.edges:

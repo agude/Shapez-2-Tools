@@ -1,17 +1,22 @@
-"""WP-E: synthesis tests."""
+"""WP-E + WP-L: synthesis and lane assignment tests."""
 
 import pytest
 
 from shapez2_tools import lift
 from shapez2_tools.blueprint import Blueprint
+from shapez2_tools.generator import functional_entities
 from shapez2_tools.shapes import Shape
 from shapez2_tools.synth import (
+    SINK_TYPE,
+    SRC_TYPE,
     DiagonalSpec,
     Spec,
+    _monotone_sort,
     netlist_from_diagonal_spec,
     netlist_from_spec,
     synthesize,
     synthesize_diagonal,
+    synthesize_quotient,
 )
 from tests.conftest import REF
 
@@ -528,3 +533,129 @@ class TestDiagonalSynthesize4Pair:
         out_shapes = {str(s) for s in outputs.values()}
         assert "Ru--Ru--" in out_shapes
         assert "--Ru--Ru" in out_shapes
+
+
+# ---------------------------------------------------------------------------
+# WP-L: monotone lane assignment + symmetry quotient
+# ---------------------------------------------------------------------------
+
+
+def _count_inversions(nl: lift.Netlist) -> int:
+    """Count source→sink x-order inversions in a placed netlist.
+
+    For each source (sorted by x), trace through edges to find reachable
+    sinks.  An inversion is a pair (i, j) where source i is left of source j
+    but source i's mean sink x is right of source j's.
+    """
+    srcs = sorted(
+        [p for p, n in nl.nodes.items() if n.kind == "platform_in"],
+        key=lambda p: p[0],
+    )
+    edge_out: dict[tuple, list[tuple]] = {}
+    for s, d in nl.edges:
+        edge_out.setdefault(s, []).append(d)
+
+    def _reachable_sinks(start):
+        visited: set[tuple] = set()
+        queue = [start]
+        sinks: list[tuple] = []
+        while queue:
+            pos = queue.pop(0)
+            if pos in visited:
+                continue
+            visited.add(pos)
+            node = nl.nodes.get(pos)
+            if node and node.kind == "platform_out":
+                sinks.append(pos)
+                continue
+            queue.extend(edge_out.get(pos, []))
+        return sinks
+
+    sink_xs: list[float] = []
+    for src_pos in srcs:
+        sinks = _reachable_sinks(src_pos)
+        sink_xs.append(sum(p[0] for p in sinks) / len(sinks) if sinks else 0.0)
+
+    return sum(
+        1
+        for i in range(len(sink_xs))
+        for j in range(i + 1, len(sink_xs))
+        if sink_xs[i] > sink_xs[j]
+    )
+
+
+class TestMonotoneAssignment:
+    """WP-L: monotone lane assignment minimizes route crossings."""
+
+    def test_monotone_assignment_no_inversions(self):
+        """Uniform spec ⇒ zero inversions between source and sink x-orders."""
+        from shapez2_tools.place import place
+
+        spec = Spec(op="rotate_180", platform="Foundation_1x1", throughput=2)
+        abstract = netlist_from_spec(spec)
+        abstract = _monotone_sort(abstract, "Foundation_1x1")
+        nl = place(abstract, "Foundation_1x1")
+        assert _count_inversions(nl) == 0
+
+    def test_reversed_pins_minimized(self):
+        """Reversed source-to-sink wiring ⇒ monotone sort + placer achieve 0 inversions.
+
+        Machines are interchangeable (same type), so the placer reassigns
+        them to eliminate the crossings that the reversed edges would cause.
+        """
+        from shapez2_tools.place import place
+
+        abstract = {
+            "nodes": [
+                {"id": "src3", "type": SRC_TYPE, "kind": "platform_in"},
+                {"id": "src2", "type": SRC_TYPE, "kind": "platform_in"},
+                {"id": "src1", "type": SRC_TYPE, "kind": "platform_in"},
+                {"id": "src0", "type": SRC_TYPE, "kind": "platform_in"},
+                {"id": "m0", "type": "RotatorHalfInternalVariant", "kind": "machine"},
+                {"id": "m1", "type": "RotatorHalfInternalVariant", "kind": "machine"},
+                {"id": "m2", "type": "RotatorHalfInternalVariant", "kind": "machine"},
+                {"id": "m3", "type": "RotatorHalfInternalVariant", "kind": "machine"},
+                {"id": "sink3", "type": SINK_TYPE, "kind": "platform_out"},
+                {"id": "sink2", "type": SINK_TYPE, "kind": "platform_out"},
+                {"id": "sink1", "type": SINK_TYPE, "kind": "platform_out"},
+                {"id": "sink0", "type": SINK_TYPE, "kind": "platform_out"},
+            ],
+            "edges": [
+                ("src0", "m0"),
+                ("m0", "sink0"),
+                ("src1", "m1"),
+                ("m1", "sink1"),
+                ("src2", "m2"),
+                ("m2", "sink2"),
+                ("src3", "m3"),
+                ("m3", "sink3"),
+            ],
+        }
+        abstract = _monotone_sort(abstract, "Foundation_1x1")
+
+        sources = [n for n in abstract["nodes"] if n["kind"] == "platform_in"]
+        assert [n["id"] for n in sources] == ["src0", "src1", "src2", "src3"]
+
+        nl = place(abstract, "Foundation_1x1")
+        assert _count_inversions(nl) == 0
+
+
+class TestQuotient:
+    """WP-L: quotient + stamp for lane-uniform specs."""
+
+    def test_quotient_isomorphic_to_direct(self):
+        """Quotient+stamp lift ≅ direct route lift per floor; belt counts 3×."""
+        spec = Spec(op="rotate_180", platform="Foundation_1x1", throughput=2)
+
+        direct = synthesize(spec, layer=0)
+        direct_nl = lift.trace_layer(direct, 0)
+
+        quotient = synthesize_quotient(spec)
+
+        for floor in range(3):
+            floor_nl = lift.trace_layer(quotient, floor)
+            assert lift.isomorphic(direct_nl, floor_nl), f"floor {floor} not isomorphic"
+
+        direct_count = len(functional_entities(direct))
+        quotient_count = len(functional_entities(quotient))
+        assert quotient_count == direct_count * 3
