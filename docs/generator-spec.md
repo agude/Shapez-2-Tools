@@ -421,11 +421,12 @@ the demand signal and the partial oracle. Functional spec, as stated:
   (4 faces × 4 slots × 3 floors = 48 lanes).
 - **Operation:** cut every shape into its west half and east half (the
   absolute-halves cutter — `CutterDefault`, 1-in/2-out).
-- **Output routing (the hard part):** 48 west-half belts and 48 east-half
-  belts must exit on the 8 non-south faces. The hand build pinned them (west
-  halves → west faces + the two west-most north faces; east halves → the
-  rest), but that pinning is **relaxed — see "Spec relaxation" below**: the
-  optimizer assigns output ports.
+- **Output routing (the hard part):** 48 west-half belts must exit on the
+  **western faces** (the 2 W-edge faces + the two west-most north faces) and
+  48 east-half belts on the **eastern faces** (the 2 E-edge faces + the two
+  east-most north faces). That side semantics is part of the spec. What is
+  relaxed — see "Spec relaxation" below — is the slot-level assignment
+  *within* each side, which the optimizer owns.
 - **Port arithmetic — CONFIRMED (2026-06-09, mined from the blueprint):**
   platform is `Foundation_2x4` (8 non-south faces = 4 north + 2 west + 2
   east). The build is **entirely on layer 0** (all 1562 entities): 16 input
@@ -457,14 +458,15 @@ the demand signal and the partial oracle. Functional spec, as stated:
 - **Spec relaxation (2026-06-09, user decision).** Two properties of the hand
   build are *artifacts of hand design*, not requirements — do not imitate
   them:
-  1. **Output ports are not pinned.** The user hand-assigned which half-kind
-     exits which face and considers that a weakness, not a spec. The
-     synthesizer's contract is only: 48 west-half belts out, 48 east-half
-     belts out, with **face purity** (a face carries one half-kind only, so
-     the platform is usable in a factory). *Which* faces carry which kind is
-     the optimizer's choice (WP-L assigns; wirelength should naturally group
-     west halves toward the west). Hard pinning remains available as an
-     optional per-sink constraint for factory-integration cases.
+  1. **Output ports are Region-constrained, not slot-pinned** (corrected
+     2026-06-09 — an earlier draft of this item said `Free`, which
+     over-relaxed: the side semantics *is* the spec). West-half sinks carry
+     `Region(western_faces)`, east-half sinks `Region(eastern_faces)` (§5
+     pinning levels); face purity follows from the regions being disjoint.
+     What the hand build over-specified — and what the optimizer now owns —
+     is the **slot-level assignment within each region**: which lane lands
+     on which face/slot/floor of its side. Hard `Pinned` remains available
+     for factory-integration cases.
   2. **Single-floor + copy-paste layers is a hand convenience.** Humans build
      one floor and duplicate it because hand-routing in 3-D is miserable; the
      optimizer has no such excuse. Full 3-D routing — lifts, non-identical
@@ -540,10 +542,12 @@ spec library and the measuring stick.
 - Decoration detection: family/position-aware, not type-based.
 - Output-port pinning — **DECIDED (2026-06-09):** pinning is per-sink and
   optional, three levels: `Pinned` (exact port), `Region` (any port on a
-  given face set), `Free` (any port). Default for synthesized platforms is
-  `Free` + **face purity** (one result kind per face); the assignment stage
-  (WP-L) chooses ports. Hand pinning stays available for factory integration.
-  Remaining sub-question: the concrete encoding on netlist sink nodes.
+  given face set), `Free` (any port, with **face purity** — one result kind
+  per face). The level is part of each spec's semantics — e.g. the Half
+  Splitter uses `Region` (west halves → western faces, east → eastern; the
+  side matters), not `Free`. The assignment stage (WP-L) chooses slots within
+  whatever freedom the level leaves. Remaining sub-question: the concrete
+  encoding on netlist sink nodes.
 - Routing objective: fit-first, then compactness; how to measure vs human.
 - Icon convention mismatch (`icon:Platforms` used for both quarter and full belt);
   `BinaryVersion` meaning.
@@ -1097,15 +1101,16 @@ is one the router never negotiates.
   assignment minimizes pairwise inversions for uniform specs — most "insane"
   crossings never come into existence. Implementation: a deterministic sort in
   `synth._lower` before placement; no solver.
-- **Output-port assignment (scope added 2026-06-09):** sinks default to
-  `Free` with face purity (§5 pinning decision) — the assignment stage also
-  chooses **which physical port each sink uses**, not just the ordering
-  within pinned groups. Monotone rule extends naturally: sort each result
-  kind's sinks and the candidate ports in flow order, assign k-th to k-th;
-  face purity is enforced by assigning whole faces to one kind before slot
-  assignment. Which faces get which kind: minimize total Manhattan distance
-  from the kind's machine outputs to the face (a tiny assignment problem —
-  8 faces × 2 kinds; brute force is fine).
+- **Output-port assignment (scope added 2026-06-09):** for `Region` and
+  `Free` sinks (§5 pinning decision) the assignment stage also chooses
+  **which physical port each sink uses**, not just the ordering within
+  pinned groups. Monotone rule extends naturally: sort each result kind's
+  sinks and its candidate ports in flow order, assign k-th to k-th. For
+  `Region` sinks (the Half Splitter case) the candidate set is the region's
+  ports — nothing else to decide. Only `Free` sinks need the extra
+  kind→face step: assign whole faces to one kind (face purity) minimizing
+  total Manhattan distance from the kind's machine outputs to the face (a
+  tiny assignment problem; brute force is fine).
 - **General case (defer until a real need):** interchangeable-instance groups
   on *lifted* netlists + pairwise-crossing minimization via CP-SAT (bool
   `x[i][s]` = instance i in slot s; crossing bools reified from order
@@ -1156,13 +1161,12 @@ Build **after** WP-I (it consumes PathFinder's overuse output as feedback).
   (regression); **north-star gates:** `test_synth_diagonal_full_belt_2x4` — the
   48-in/96-out full-belt diagonal extractor validates + interprets correctly —
   and `test_synth_half_splitter_2x4` — the Half Splitter (§2a: 48 in south,
-  cut, 48 west-half + 48 east-half belts out on `Free` ports with face
-  purity; full 3-D allowed) validates + interprets correctly, asserting only
-  the relaxed contract — per-kind belt counts and face purity, **not** any
-  specific face assignment. Record belts vs the human oracle where one
-  exists (I7, tracked metric, soft target ≤ 2×), and record which faces the
-  optimizer chose per kind (expect west halves to gravitate west via
-  wirelength; if they don't, that is cost-model signal, not a failure).
+  cut, west halves out on `Region(western_faces)`, east halves on
+  `Region(eastern_faces)`; full 3-D allowed) validates + interprets
+  correctly, asserting per-kind belt counts and **region membership** of
+  every output port — but **not** any specific slot assignment within a
+  region. Record belts vs the human oracle where one exists (I7, tracked
+  metric, soft target ≤ 2×).
 - **Done when:** the north-star gates pass end-to-end (spec → assign → place
   → route → emit → lift → interpret).
 
