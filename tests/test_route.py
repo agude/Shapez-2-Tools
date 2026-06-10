@@ -450,20 +450,16 @@ class TestAStarReroute:
         rerouted = lift.trace_layer(rerouted_bp, 0)
         assert lift.isomorphic(original, rerouted)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="WP-C: corpus fan-ins pack mergers in 2D in space the linear "
-        "staircase lacks; needs space-aware routing/placement",
-    )
     @pytest.mark.parametrize("name", MULTI_CELL_FIXTURES)
     def test_reroute_roundtrip_multi_cell(self, name):
-        """Strip and re-route multi-cell fixture → isomorphic lift."""
+        """Strip and re-route multi-cell fixture → isomorphic lift (WP-I PathFinder)."""
         from shapez2_tools import route
+        from shapez2_tools.pathfinder import strip_and_reroute
 
         bp = Blueprint.from_file(REF / name)
         original = lift.trace_layer(bp, 0)
         stripped = route.strip_belts(bp, layer=0)
-        rerouted_bp = route.reroute_with_junctions(stripped, original, layer=0)
+        rerouted_bp = strip_and_reroute(stripped, original, layer=0)
         rerouted = lift.trace_layer(rerouted_bp, 0)
         assert lift.isomorphic(original, rerouted)
 
@@ -521,75 +517,3 @@ class TestMultiCellRouting:
         assert ((5, 5), (8, 5)) in edge_set
         assert ((5, 5), (8, 4)) in edge_set
 
-    def test_reroute_fanin_four_way(self):
-        """Four same-direction sources merge into one sink via chained mergers.
-
-        A single merger cell can take at most 3 inputs, so a 4-way merge needs
-        more than one junction. After re-routing, lifting must recover all four
-        source→sink edges.
-        """
-        from shapez2_tools import route
-        from shapez2_tools.generator import Entity
-
-        # Four receivers in a column, all R=0 (output E); one sink to the east.
-        srcs = [
-            Entity(type="BeltPortReceiverInternalVariant", x=2, y=y, rotation=0, layer=0)
-            for y in (2, 3, 4, 5)
-        ]
-        sink = Entity(type="BeltPortSenderInternalVariant", x=12, y=3, rotation=0, layer=0)
-
-        nodes = {
-            (e.x, e.y): lift.Node(
-                x=e.x, y=e.y, layer=0, type=e.type, kind="platform_in", rotation=0
-            )
-            for e in srcs
-        }
-        nodes[(12, 3)] = lift.Node(
-            x=12, y=3, layer=0, type=sink.type, kind="platform_out", rotation=0
-        )
-        port_edges = [((e.x, e.y), (12, 3)) for e in srcs]
-        nl = lift.Netlist(nodes=nodes, edges=list(port_edges), port_edges=port_edges)
-
-        stripped = route.entities_to_blueprint([*srcs, sink], platform="Foundation_1x4")
-        rerouted_bp = route.reroute_with_junctions(stripped, nl, layer=0)
-        rerouted = lift.trace_layer(rerouted_bp, 0)
-
-        edge_set = {(tuple(a), tuple(b)) for a, b in rerouted.edges}
-        for e in srcs:
-            assert ((e.x, e.y), (12, 3)) in edge_set, f"missing edge from {(e.x, e.y)}"
-
-    def test_reroute_fanout_four_way(self):
-        """One source splits to four sinks via a comb of chained splitters.
-
-        Mirrors the corpus pattern: the source's trunk runs east and the sinks
-        are spread *along* that flow axis, one row north of it, each tapped off
-        by its own splitter (the farthest by a terminal turn). Sinks accept from
-        the south (R=1), i.e. from the trunk.
-        """
-        from shapez2_tools import route
-        from shapez2_tools.generator import Entity
-
-        src = Entity(type="BeltPortReceiverInternalVariant", x=2, y=3, rotation=0, layer=0)
-        # Sinks one row north of the trunk (y=4), spread along x; R=1 accepts from S.
-        sinks = [
-            Entity(type="BeltPortSenderInternalVariant", x=x, y=4, rotation=1, layer=0)
-            for x in (6, 8, 10, 12)
-        ]
-
-        nodes = {
-            (s.x, s.y): lift.Node(
-                x=s.x, y=s.y, layer=0, type=s.type, kind="platform_out", rotation=1
-            )
-            for s in sinks
-        }
-        nodes[(2, 3)] = lift.Node(x=2, y=3, layer=0, type=src.type, kind="platform_in", rotation=0)
-        port_edges = [((2, 3), (s.x, s.y)) for s in sinks]
-        nl = lift.Netlist(nodes=nodes, edges=list(port_edges), port_edges=port_edges)
-
-        stripped = route.entities_to_blueprint([src, *sinks], platform="Foundation_1x4")
-        rerouted_bp = route.reroute_with_junctions(stripped, nl, layer=0)
-        rerouted = lift.trace_layer(rerouted_bp, 0)
-
-        edge_set = {(tuple(a), tuple(b)) for a, b in rerouted.edges}
-        for s in sinks:
-            assert ((2, 3), (s.x, s.y)) in edge_set, f"missing edge to {(s.x, s.y)}"

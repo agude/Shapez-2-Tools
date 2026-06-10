@@ -18,7 +18,7 @@ regression floor. The hard target is intra-platform **place-and-route**.
 
 ## 0. Status & handoff (2026-06-09)
 
-**Built and green** (180 tests pass, 3 xfail, `just test`, ruff clean):
+**Built and green** (198 tests pass, 1 xfail, `just test`, ruff clean):
 - `blueprint.py` — faithful `.spz2bp` codec.
 - `generator.py` — tile-replication generator: builds the rotator family
   (180/cw/ccw × 1×1/1×4) from one lifted tile. `Entity`, lift/stamp/build,
@@ -59,36 +59,33 @@ regression floor. The hard target is intra-platform **place-and-route**.
   single-shape + 9 multi-shape (throughput mergers), all verified.
 - `validate.py` — physical validator (WP-B done). Checks overlap, dangling legs,
   off-grid placement. Corpus sweep passes on all closed fixtures.
-- `route.py` — junction-aware A* router (WP-C done for single-cell machines).
-  `reroute_with_junctions` strips belts from a blueprint and re-routes via
-  sequential A* with obstacle marking. Round-trips through lift for all
-  single-cell fixtures (rotator family × 6, half-destroyer). Handles 1→2, 1→3,
-  2→1, 3→1 fan patterns with correct junction placement near machine clusters.
-  Now routes at **cell granularity** off `netlist.port_edges` (was anchor-level),
-  so a multi-cell machine's several ports route as distinct ports — a cutter's
-  two outputs are two 1→1 routes, not a bogus 1→2 splitter (`_node_cell_ports`).
-  **≥4-way fans** chain (one junction cell holds ≤3 legs): fan-out uses a
-  deterministic splitter comb (`_route_split_chain`, dsts spread along the flow
-  axis); fan-in uses a collision-free merger staircase (`_route_merge_chain`,
-  perpendicular-spread sources folded nearest-trunk-first). Both are covered by
-  spacious synthetic tests (`TestMultiCellRouting`). **Multi-cell corpus
-  round-trip (cutter, swapper) is the remaining gap** (2 xfail), and the blocker
-  is now precisely understood: the corpus packs mergers in **2D in tight space**
-  (a sink can sit ~2 cells from its four sources), where a linear staircase has
-  no room and bails, and greedy sequential A* congests. Closing it needs
-  **space-aware routing that co-decides merger placement** — i.e. WP-C routing
-  blended with WP-D placement, not a deterministic comb. Cutter lifts back to
-  ~38/66 edges; the missing ones are the tight 4-way fan-ins/outs. Adjacent-skip
-  fix: when a splitter/merger is adjacent to its source/sink, the trunk/tail A*
-  is skipped (the junction connects directly; the start cell would coincide with
-  the already-placed obstacle). **Conditional outside-in fan-out ordering**
-  (`_perp_reach`): when max source→destination Manhattan ≤ 5, fan-out groups are
-  processed widest-perpendicular-reach first so inner fans' branch belts don't
-  block outer fans' trunks; when machines are far (long trunks), the default
-  dict order is kept because outer trunks would cross inner territory.
-  **`route_astar` overlap fix**: the `start == end` shortcut now checks the
-  obstacle set before placing a belt, preventing entity overlaps that previously
-  corrupted the lift.
+- `route.py` — **now a thin shell over `pathfinder.py`** (WP-I).
+  `reroute_with_junctions` delegates to `pathfinder.strip_and_reroute`; the
+  WP-C-era sequential-A\* fan machinery (`_route_split_chain` splitter comb,
+  `_route_merge_chain` merger staircase, junction-placement heuristics,
+  `_perp_reach` ordering) is **deleted** — PathFinder tree growth subsumes
+  all of it. What remains: `strip_belts`, the A\* core (`route_astar`,
+  `route_edge(s)`, `reroute_astar`), simple `route_fanout`/`route_fanin`,
+  entity plumbing (`_all_entities`, `_rebuild_blueprint`,
+  `entities_to_blueprint`), and the WP-C history in §7.2.
+- `pathfinder.py` — **WP-I done.** PathFinder negotiated-congestion router
+  (McMurchie & Ebeling 1995). Routes multi-terminal nets as Steiner trees
+  (farthest-first growth, per-cell leg-legality, junctions emerge from tree
+  branching) under iterative congestion pricing with rip-up-and-reroute.
+  Emit table is the programmatic inverse of `lift.routing_inout` (one shared
+  calibration table, both directions). **Gate flipped:** `cutter_12_to_24`
+  (66/66 edges) and `swap_diagonal` (162/162 edges) both round-trip through
+  lift as isomorphic; single-cell corpus parity holds (all 7 fixtures).
+  **All failure paths raise `RoutingError`** (carrying overused cells for
+  WP-M feedback): non-convergence at `MAX_ITERS` (e.g. one-floor topological
+  crossings — correct until WP-J/WP-K), unreachable terminals, leg patterns
+  with no emit-table entry, and a root stuck on its port cell. Roots
+  offset from a port are pre-seeded with the pending boundary in-leg so
+  splitters/mergers can sit directly adjacent to ports (tight-fan regime).
+  **Direct machine-to-machine couplings** (terminal still on a machine cell,
+  e.g. rotator→adjacent swapper) are filtered out before routing — physical
+  adjacency realizes those edges, lift re-derives them. N→M net components
+  raise `NotImplementedError` loudly. 18 tests in `tests/test_pathfinder.py`.
 - `place.py` — CP-SAT placement (WP-D done for rotator quarter + multi-cell
   machines). OR-Tools CP-SAT solver assigns `(x, y, rotation)` to machines given
   an abstract netlist (graph structure only, no coordinates) and a platform.
@@ -136,34 +133,15 @@ regression floor. The hard target is intra-platform **place-and-route**.
 **WP-A and WP-B: DONE.** Netlist isomorphism via networkx graph comparison; physical
 validator with corpus sweep. Both green.
 
-**WP-C (routing): DONE for single-cell machines + isolated wide fans; corpus
-multi-cell round-trip still xfail.** The router now works at **cell granularity**
-off `netlist.port_edges`, so a multi-cell machine's ports route independently
-(`_node_cell_ports`). Junction placement rules (≤3-way fans, single junction
-cell):
-- **Fan-in (N→1):** merger one cell from the "straight" source; turned sources
-  approach from perpendicular via A*.
-- **Fan-out (1→N):** splitter one cell from the "straight" destination; trunk
-  routes from source via A*.
-- **2-way fans:** pick the endpoint closest to the far side on the perpendicular
-  axis (keeps trunk along the flow axis, avoids trunk/branch conflicts).
-- **3-way fans:** pick the median endpoint so branches spread to both sides
-  (`Splitter1To3` / `Merger3To1`).
-- **≥4-way fans** chain (a junction cell holds ≤3 legs): fan-out = a splitter
-  comb (`_route_split_chain`, dsts spread along the flow axis); fan-in = a
-  collision-free merger staircase (`_route_merge_chain`, perpendicular-spread
-  sources folded nearest-trunk-first). Covered by `TestMultiCellRouting`.
-
-Verified: parametrized round-trip over 7 single-cell fixtures (strip → reroute →
-lift ≅ original) + the wide-fan unit tests. **The 2 multi-cell fixtures
-(cutter_12_to_24, swap_diagonal) remain xfail.** The blocker, now precise: the
-multi-cell *port* problem is solved (cutter outputs route as distinct ports), but
-the corpus packs mergers in **2D in tight space** — a sink can sit ~2 cells from
-its four sources, where a linear staircase has no room (it bails) and greedy
-sequential A* congests. The chains handle *spacious* wide fans (the synthetic
-tests); the *tight* corpus fans need **space-aware routing that co-decides merger
-placement** (WP-C routing blended with WP-D placement). Cutter currently lifts
-back to ~38/66 edges.
+**WP-C (routing): SUPERSEDED BY WP-I.** WP-C's sequential A\* with junction
+placement heuristics carried the project to cell-granularity multi-cell ports
+(`_node_cell_ports`) and spacious wide fans, but its precisely-diagnosed
+blocker — tight 2D fan packing, where greedy obstacle-marking A\* congests —
+is exactly what WP-I's negotiated congestion solves. The WP-C fan machinery
+(combs, staircases, placement heuristics) is deleted; `reroute_with_junctions`
+delegates to `pathfinder.strip_and_reroute`. **All 9 corpus fixtures (7
+single-cell + cutter_12_to_24 + swap_diagonal) round-trip isomorphic.** The
+WP-C section in §7.2 is kept as the historical record.
 
 **Cutter + swapper: SOLVED (the cutter was the blocker).** Machines now expand to
 footprints (`_machine_footprint`); each is one entity + a second cell to the
@@ -200,13 +178,9 @@ throughput=2). Limitation: the router can't handle 1→3 fan-out in tight space
 throughput=2). CLI: `just run synth rotate_180 -o out.spz2bp`.
 
 **Remaining gaps:**
-- The tight 2D merger packing from WP-C (cutter/swapper xfails) and the 1→3
-  fan-out limit are **one disease: greedy sequential routing with hard
-  obstacles cannot negotiate congestion**. The fix is not more placer
-  constraints — it is replacing the routing algorithm. See §2a (architecture)
-  and WP-I…WP-M (§7.2). **WP-I (PathFinder router) is the next unit of work**:
-  it needs no new calibration, and its acceptance gate is exactly these two
-  xfails.
+- ~~The tight 2D merger packing (cutter/swapper xfails)~~ — **resolved by WP-I**
+  (PathFinder negotiated-congestion router). Both multi-cell corpus fixtures
+  now round-trip at full edge count.
 - **The diagonal extractor** (north-star demo): `DiagonalSpec` +
   `synthesize_diagonal()` landed for 2 pairs on 1×1 (8/8 edges, validates,
   interprets to correct diagonals). Scaling to 4 pairs (the full-belt target)
@@ -710,10 +684,10 @@ widens the spec space but blocks nothing on the diagonal extractor.
 #### WP-C — Rung 3: re-route at fixed placement *(the router core; critical path)*
 - **Goal:** I4. Given a netlist + the machines' existing cells, regenerate belts
   realizing every edge; lifting the result reproduces the netlist.
-- **Status: DONE for single-cell machines, cell-level multi-cell ports, and
-  *spacious* wide fans. Corpus multi-cell round-trip still xfail (tight 2D fan
-  packing).** Round-trip verified on 7 single-cell fixtures (rotator family × 6,
-  half-destroyer). 2 multi-cell fixtures xfail (cutter, swapper).
+- **Status: SUPERSEDED BY WP-I** (this section is the historical record; the
+  fan machinery described below is deleted). At hand-off: round-trip verified
+  on 7 single-cell fixtures; the 2 multi-cell fixtures xfailed on tight 2D
+  fan packing — resolved by WP-I's negotiated congestion.
 - **Tests** (`tests/test_route.py`; flavours 4 + 5):
   1. ✓ `test_route_straight` — one src → one dst in a line ⇒ Forward belts.
   2. ✓ `test_route_one_turn` — offset on both axes ⇒ Forward + Left turn.
@@ -733,8 +707,9 @@ widens the spec space but blocks nothing on the diagonal extractor.
   11. ✓ `TestMultiCellRouting::test_reroute_fanin_four_way` /
       `test_reroute_fanout_four_way` — ≥4-way fans on *spacious* synthetic
       layouts ⇒ all edges recovered (chained junctions).
-  12. ✗ `test_reroute_roundtrip_multi_cell` — parametrized over 2 multi-cell
-      fixtures (cutter_12_to_24, swap_diagonal). **xfail (tight 2D packing).**
+  12. ✓ `test_reroute_roundtrip_multi_cell` — parametrized over 2 multi-cell
+      fixtures (cutter_12_to_24, swap_diagonal). **Was xfail (tight 2D
+      packing); flipped by WP-I.**
 - **Implementation:**
   - `reroute_with_junctions(stripped, netlist)` — the main entry point. Strips
     belts, analyzes fan patterns at **cell granularity** off `netlist.port_edges`
@@ -904,7 +879,7 @@ widens the spec space but blocks nothing on the diagonal extractor.
 - **Tests:** `TestFullBlueprintDrive` — `test_swap_diagonal_computes_diagonals`,
   `test_swap_diagonal_sink_counts`, `test_classify_sources_partitions`.
 
-#### WP-I — PathFinder detailed router *(critical path; replaces sequential A\*)*
+#### WP-I — PathFinder detailed router *(critical path; replaces sequential A\*)* — **DONE**
 
 Read §2a first. This WP needs **no new calibration** and **no new fixtures** —
 start here.
