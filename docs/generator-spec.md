@@ -17,6 +17,12 @@ check, the 16-lane gate-2 test, and a `_grow_tree` routing-unreachability fix
 crossed west/east-half assignments when both halves land on the same
 platform face). Working tree: 268/268 pass. Remaining: crossing budget check
 (capacity side), WP-L's region-internal flow ordering (not gate-blocking).
+**New blockers found 2026-06-11 via gate-2 viz review (§2a "Gate-2
+blockers")**: (1) gate 2's `hop_range=8` exceeds the in-game launcher/catcher
+limit (1–4 blank tiles between ⇒ `hop_range` ≤ 5); (2) gate 2 uses 1 cutter
+per lane vs. the real Half Splitter's 4 (1→4 split → 4 cutters → 4→1 merge
+×2). Both block treating gate 2 as representative of the real design — fix
+before further north-star work.
 Scaling plan: §2a (architecture) + WP-I…WP-M (§7.2) — negotiated-congestion
 routing for dense platforms.**
 
@@ -573,6 +579,40 @@ the demand signal and the partial oracle. Functional spec, as stated:
   diagonal extractor). Lifting the unfinished build (even partially routed) is
   also a corpus stress test for WP-I: its completed regions are tight-packed
   fan trees.
+
+### Gate-2 blockers found via viz review (2026-06-11)
+
+Visualizing gate 2's output (`CutterSpec(lanes=16, "Foundation_2x4")`,
+`hop_range=8`) surfaced two problems. Gate 2 still passes I4/I5/I6
+(round-trip, validation, region+half correctness) — neither problem is
+caught by the structural tests — but both **block treating gate 2 as
+representative of the real Half Splitter**, as opposed to a topology/
+region-pinning proof.
+
+1. **Hop range exceeds the in-game limit.** Launcher→catcher hops are capped
+   at **1–4 blank (flight) tiles between** sender and receiver (QUESTIONS.md
+   Q7). In `pathfinder.py` terms, `hdist` (sender-cell to receiver-cell
+   distance, the loop in `_grow_tree` is `range(2, hop_range + 1)`) equals
+   `blank_tiles + 1`, so the legal range is `hdist ∈ [2, 5]` ⇒ **`hop_range`
+   must be ≤ 5**, not the `8` gate 2 uses. Lift/interpret/validate enforce no
+   hop-distance limit, so gate 2 can emit hops that would not place in-game.
+   **Action:** add a named constant for the legal hop span (shared by
+   `pathfinder.py` and `lift.py`'s `_resolve_hops`), clamp gate 2 to it, and
+   re-run — if 16 lanes no longer route at the lower cap, that is a real
+   feasibility finding, not a test tweak.
+2. **Gate 2 has 4× too few cutters.** The "Machine arithmetic" above
+   (confirmed from the human build) requires **4 cutters per input lane**
+   (cutter throughput = ¼ belt) via a 1→4 splitter tree and two 4→1 merger
+   trees (one per half) — 16 lanes ⇒ 64 cutters/floor, 192 across the 3-floor
+   design. `CutterSpec`/`netlist_from_cutter_spec` currently synthesizes
+   **1 cutter per lane** (`src_i -> cut_i -> {sink_i_w, sink_i_e}`, 4
+   nodes/lane) — this proved region pinning and multi-face ports but is not
+   throughput-correct. The real per-lane topology is `src_i -> [1→4 split
+   tree] -> 4×cut -> [4→1 merge tree]×2 -> {sink_i_w, sink_i_e}` — 16
+   nodes/lane, 256 nodes at 16 lanes (vs. 64 today). Routing/placement
+   feasibility at this scale, especially combined with blocker 1's tighter
+   hop cap, is **unverified** and is the real remaining work before gate 2
+   can stand in for the Half Splitter.
 
 ### Crossing budget (cheap infeasibility check)
 

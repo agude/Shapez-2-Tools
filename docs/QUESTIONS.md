@@ -70,8 +70,17 @@ the placeable siblings of the platform-edge port slots (`*InternalVariant`).
   cells** (0 of 280 flight cells in the sample).
 - Up to **3 flights** stack over one ground cell.
 
+**Confirmed (2026-06-11, user) — BLOCKING, see generator-spec.md §2a "Gate-2
+blockers":** the in-game launcher/catcher range is **1–4 blank (flight) tiles
+between** sender and receiver. In `pathfinder.py` terms (`hdist` = sender-cell
+to receiver-cell distance, `range(2, hop_range + 1)`), `blank_tiles =
+hdist - 1`, so the legal range is `hdist ∈ [2, 5]` ⇒ **`hop_range` must be ≤
+5**. Gate 2 (`test_synth_half_splitter_2x4`) uses `hop_range=8`, which
+violates this — resolves the "is 5 the hard max" question below (yes, modulo
+reconciling the gap-vs-span off-by-one against the "1–5 cells" empirical
+figure above).
+
 **Still open (in-game checks, no fixture needed for the rest):**
-- Is 5 the hard max flight distance, or just the largest the build used?
 - Is flying over a machine cell actually illegal, or merely unused here?
 - Is 3 the flight-lane cap, or just the observed max?
 - Must the catcher's rotation equal the sender's (all 145 match here), or is
