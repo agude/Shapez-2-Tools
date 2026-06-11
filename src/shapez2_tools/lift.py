@@ -45,6 +45,12 @@ _DIR_VEC = {0: (1, 0), 1: (0, 1), 2: (-1, 0), 3: (0, -1)}
 # Directions, +Y north. A +1 step in R rotates a cell 90 degrees CCW.
 N, S, E, W = (0, 1), (0, -1), (1, 0), (-1, 0)
 
+# In-game launcher/catcher hop limit (QUESTIONS.md Q7): 1-4 blank flight
+# tiles between sender and receiver, i.e. sender-to-receiver cell distance
+# hdist = blank_tiles + 1 in [2, 5]. Shared by pathfinder.py's RoutingGraph
+# and _resolve_hops below.
+MAX_HOP_RANGE = 5
+
 
 def _ccw(d: tuple[int, int]) -> tuple[int, int]:
     return (-d[1], d[0])
@@ -235,7 +241,7 @@ def _resolve_hops(
     used_receivers: set[tuple[int, int]] = set()
     for s in senders:
         dx, dy = _DIR_VEC[s.rotation]
-        for dist in range(1, 30):
+        for dist in range(1, MAX_HOP_RANGE + 1):
             rx, ry = s.x + dx * dist, s.y + dy * dist
             rpos = (rx, ry)
             if rpos in receivers_by_pos and rpos not in used_receivers:

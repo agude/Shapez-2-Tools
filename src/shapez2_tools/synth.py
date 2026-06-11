@@ -196,16 +196,20 @@ def synthesize_diagonal(
 class CutterSpec:
     """Cutter fan: south-face sources, each split into west/east halves.
 
-    Each lane: one south-face source (``SOURCE_FACE``) feeds a
-    ``CutterDefault`` (1-in/2-out). The west-half output is ``Region``-pinned
-    to the platform's western faces and the east-half output to the eastern
-    faces (§2a `side_regions`) — the Half Splitter's side semantics.
-    ``lanes=16`` on ``Foundation_2x4`` is the Half Splitter (north-star
-    gate 2).
+    Each lane: one south-face source (``SOURCE_FACE``) feeds
+    ``cutters_per_lane`` parallel ``CutterDefault`` machines (1-in/2-out,
+    each fed the same source — a 1->N split tree, real Half Splitter
+    arithmetic uses 4: cutter throughput = 1/4 belt). Every cutter's
+    west-half output is ``Region``-pinned to the platform's western faces
+    and its east-half output to the eastern faces (§2a `side_regions`),
+    merging into one sink per side per lane (an N->1 merge tree) — the Half
+    Splitter's side semantics. ``lanes=16, cutters_per_lane=4`` on
+    ``Foundation_2x4`` is the Half Splitter (north-star gate 2).
     """
 
     lanes: int
     platform: str
+    cutters_per_lane: int = 1
 
     def validate(self) -> None:
         with open(_DATA / "platforms.json") as f:
@@ -234,9 +238,14 @@ class CutterSpec:
 def netlist_from_cutter_spec(spec: CutterSpec) -> dict:
     """Build an abstract netlist for the cutter fan (§2a Half Splitter).
 
-    Topology per lane i:
-      src_i -> cut_i -> sink_i_w (Region: western faces)
-                      -> sink_i_e (Region: eastern faces)
+    Topology per lane i, with j ranging over ``cutters_per_lane``:
+      src_i -> cut_i_j -> sink_i_w (Region: western faces)
+                        -> sink_i_e (Region: eastern faces)
+
+    Each cutter independently splits the lane's input and feeds both side
+    sinks — a 1->N split (src fan-out) and two N->1 merges (sink fan-in per
+    side), all expressed as plain edges sharing a node (§2a: split/merge are
+    routing-layer junctions, not netlist nodes).
     """
     spec.validate()
     with open(_DATA / "platforms.json") as f:
@@ -248,12 +257,10 @@ def netlist_from_cutter_spec(spec: CutterSpec) -> dict:
 
     for i in range(spec.lanes):
         src = f"src{i}"
-        cut = f"cut{i}"
         sink_w = f"sink{i}_w"
         sink_e = f"sink{i}_e"
 
         nodes.append({"id": src, "type": SRC_TYPE, "kind": "platform_in"})
-        nodes.append({"id": cut, "type": CUTTER_FAN_TYPE, "kind": "machine"})
         nodes.append({
             "id": sink_w, "type": SINK_TYPE, "kind": "platform_out",
             "pin": "region", "target": western,
@@ -263,9 +270,12 @@ def netlist_from_cutter_spec(spec: CutterSpec) -> dict:
             "pin": "region", "target": eastern,
         })
 
-        edges.append((src, cut))
-        edges.append((cut, sink_w))
-        edges.append((cut, sink_e))
+        for j in range(spec.cutters_per_lane):
+            cut = f"cut{i}_{j}"
+            nodes.append({"id": cut, "type": CUTTER_FAN_TYPE, "kind": "machine"})
+            edges.append((src, cut))
+            edges.append((cut, sink_w))
+            edges.append((cut, sink_e))
 
     return {"nodes": nodes, "edges": edges}
 

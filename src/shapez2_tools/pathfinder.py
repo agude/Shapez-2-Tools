@@ -75,6 +75,11 @@ class RoutingGraph:
     occ: dict[Cell, set[int]] = field(default_factory=lambda: defaultdict(set))
 
     def __post_init__(self):
+        if self.hop_range > lift.MAX_HOP_RANGE:
+            raise ValueError(
+                f"hop_range={self.hop_range} exceeds the in-game launcher/catcher "
+                f"limit of {lift.MAX_HOP_RANGE} (QUESTIONS.md Q7)"
+            )
         for c in self.passable:
             self.base.setdefault(c, BASE)
             self.hist.setdefault(c, 0.0)

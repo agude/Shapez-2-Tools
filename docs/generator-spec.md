@@ -23,6 +23,43 @@ limit (1–4 blank tiles between ⇒ `hop_range` ≤ 5); (2) gate 2 uses 1 cutte
 per lane vs. the real Half Splitter's 4 (1→4 split → 4 cutters → 4→1 merge
 ×2). Both block treating gate 2 as representative of the real design — fix
 before further north-star work.
+**Blocker 1 actioned 2026-06-11**: added `lift.MAX_HOP_RANGE = 5` (shared —
+`pathfinder.RoutingGraph` now raises if `hop_range > MAX_HOP_RANGE`,
+`lift._resolve_hops`'s search is bounded by it too) and clamped gate 2 from
+`hop_range=8` to `hop_range=MAX_HOP_RANGE`. **Result is the predicted real
+feasibility finding, not a clean pass**: gate 2 is now **flaky** at the legal
+hop range — 3/4 runs passed (16–93s), 1/4 failed with 3 overused cells after
+`MAX_ITERS=60`. CP-SAT placement (`place.py`) is unseeded, so each run routes
+a differently-shaped instance; at `hop_range=5` the current placeholder
+(1-cutter/lane, 64-node) topology sits right at PathFinder's convergence
+boundary. Blocker 2 (cutter count) is still open and will change the routing
+problem's scale 4× (256 nodes at 16 lanes) — tuning placement-determinism/
+`MAX_ITERS` against today's placeholder topology is likely wasted; resolve
+blocker 2 first, then re-assess gate-2 convergence against the representative
+topology. Gate 1 (`test_synth_diagonal_full_belt_2x4`) is unaffected
+(`hop_range=4`, still passes).
+**Blocker 2 actioned 2026-06-11**: generalized `CutterSpec`/
+`netlist_from_cutter_spec` with `cutters_per_lane` (default 1, unchanged
+behavior); `cutters_per_lane=4` gives the real 1→4 split → 4 cutters → two
+4→1 merges per lane, expressed as plain edges sharing `src_i`/`sink_i_w`/
+`sink_i_e` (no new node kinds — confirmed lift/interpret handle N-way
+fan-out/fan-in with no code changes). **Result: a harder, deterministic
+blocker, not a tuning problem.** `lanes=1` validates end-to-end (`lift.validate
+== []`, `unmatched_legs == 0`, correct halves) — but **CP-SAT placement is
+INFEASIBLE (reproducible, <1s, independent of `PYTHONHASHSEED`/process) for
+any `cutters_per_lane >= 2` combined with `lanes >= 2`**, including the
+4-lane/Foundation_2x4 checkpoint and the 16-lane gate 2. Root cause:
+`place.py`'s fan-out cross-group ordering (~lines 660–690) requires one
+fan-out group's machines to sit entirely left/right of another's, assuming
+each group routes onward in one shared direction — but cutter-fan groups
+route to *both* a west-Region sink and an east-Region sink, so two lanes'
+groups can't be linearly ordered. New tests
+(`test_four_lane_four_cutters_2x4_halves_land_on_correct_sides`,
+`test_synth_half_splitter_2x4`) are marked `xfail(strict=True)` documenting
+this. **Next decision point**: fix `place.py`'s fan-out/fan-in group
+constraints to support groups with bidirectional (west+east) sinks before
+gate 2 can use the representative topology — this is placement-model work,
+not routing retuning, and is follow-up to this change.
 Scaling plan: §2a (architecture) + WP-I…WP-M (§7.2) — negotiated-congestion
 routing for dense platforms.**
 
@@ -596,10 +633,13 @@ region-pinning proof.
    `blank_tiles + 1`, so the legal range is `hdist ∈ [2, 5]` ⇒ **`hop_range`
    must be ≤ 5**, not the `8` gate 2 uses. Lift/interpret/validate enforce no
    hop-distance limit, so gate 2 can emit hops that would not place in-game.
-   **Action:** add a named constant for the legal hop span (shared by
-   `pathfinder.py` and `lift.py`'s `_resolve_hops`), clamp gate 2 to it, and
-   re-run — if 16 lanes no longer route at the lower cap, that is a real
-   feasibility finding, not a test tweak.
+   **Done (2026-06-11):** added `lift.MAX_HOP_RANGE = 5`; `RoutingGraph`
+   raises if `hop_range` exceeds it, `_resolve_hops`'s pairing search is
+   bounded by it, and gate 2 now uses `hop_range=MAX_HOP_RANGE`. **Outcome:**
+   gate 2 is flaky at this legal cap (3/4 runs pass, 1/4 fails with 3
+   overused cells at `MAX_ITERS=60`) — a real feasibility finding at the
+   placeholder topology's scale, deferred until blocker 2 below is fixed
+   (see §0 status).
 2. **Gate 2 has 4× too few cutters.** The "Machine arithmetic" above
    (confirmed from the human build) requires **4 cutters per input lane**
    (cutter throughput = ¼ belt) via a 1→4 splitter tree and two 4→1 merger
@@ -613,6 +653,49 @@ region-pinning proof.
    feasibility at this scale, especially combined with blocker 1's tighter
    hop cap, is **unverified** and is the real remaining work before gate 2
    can stand in for the Half Splitter.
+   **Done (2026-06-11):** added `CutterSpec.cutters_per_lane` (default 1);
+   `cutters_per_lane=4` emits `src_i -> cut{i}_{j} -> {sink_i_w, sink_i_e}`
+   for `j in 0..3` — a 1→4 split (shared `src_i`, 4 edges) and two 4→1
+   merges (4 edges into each of `sink_i_w`/`sink_i_e`), all as plain edges
+   sharing nodes (no new node kinds). Lift/interpret need **no changes**:
+   `test_single_lane_four_cutters_halves_land_on_correct_sides` (1 lane,
+   `Foundation_1x1`, `hop_range=5`) validates end-to-end with 0 unmatched
+   legs and correct west/east halves. **Outcome: a harder, deterministic
+   blocker, not the predicted tuning problem.** As soon as a *second* lane
+   is added with `cutters_per_lane >= 2`, **CP-SAT placement itself becomes
+   INFEASIBLE** — reproducible in <1s, independent of `PYTHONHASHSEED` and
+   process (i.e. a real model contradiction, not solver flakiness). Checked:
+   `lanes=1` always feasible for `cutters_per_lane` 1, 3, 4 (infeasible only
+   for exactly 2 — a `len(machine_members)==2` adjacency constraint, see
+   below); `lanes>=2` is infeasible for every `cutters_per_lane>=2` tried
+   (2, 3, 4) on both `Foundation_1x1` and `Foundation_2x4`, including the
+   4-lane checkpoint and the 16-lane gate 2.
+
+   **Root cause** (`place.py` ~lines 645–690, "Fan-group structure"): a
+   fan-out group is the set of machines sharing a source (here, one lane's
+   `cutters_per_lane` cutters fed by `src_i`). Two constraints assume each
+   group routes onward in a *single shared direction*:
+   - For exactly 2-member groups, `abs(m_x[a] - m_x[b]) == 1` (adjacent
+     cells) — conflicts with the cutter-fan's per-cutter routes to *both* a
+     west-Region sink and an east-Region sink (`lanes=1, cutters_per_lane=2`
+     fails this way).
+   - For groups with >=2 members, **cross-group ordering** requires lane
+     *i*'s entire group to sit left of lane *i+1*'s entire group (by source
+     x-position) — but every lane's group must route to *both* the
+     west-Region sinks *and* the east-Region sinks, so two lanes' groups
+     cannot be linearly ordered without one lane's west-bound (or
+     east-bound) routes crossing the other's. CP-SAT correctly proves this
+     infeasible.
+
+   New tests `test_four_lane_four_cutters_2x4_halves_land_on_correct_sides`
+   and `test_synth_half_splitter_2x4` (now `cutters_per_lane=4`) are marked
+   `xfail(strict=True)` recording this. **Next decision point**: extend
+   `place.py`'s fan-out/fan-in group constraints to support groups whose
+   machines route to sinks on *both* the west and east Region — e.g. split
+   each multi-cutter group into west-bound/east-bound sub-orderings, or drop
+   the cross-group total order in favor of a per-side ordering. This is
+   placement-model design work, separate from the routing-convergence
+   tuning blocker 1 anticipated.
 
 ### Crossing budget (cheap infeasibility check)
 
