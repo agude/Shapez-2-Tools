@@ -93,7 +93,14 @@ distinction in `strip_belts`/`kind`, exactly the "interior position is
 what distinguishes a hop endpoint from platform IO" rule §2a already
 states) — required for re-routing *any* hop-bearing blueprint, independent
 of WP-N. `strip_and_reroute` also needs multi-layer `passable` +
-`lift_enabled` plumbing (task 3). Details: §7.2 WP-N task 1.
+`lift_enabled` plumbing (task 3). **Viz review of the 2-floor solution
+(2026-06-11) found two more latent bugs and a calibration need** — the
+passable set wrongly includes the ports-only boundary band (56 non-port
+entities emitted there), `_cell_to_entity` emits belts with its `layer`
+argument instead of the cell's floor, and the hop/lift cost model inverts
+human practice (router prefers an empty floor 1 over launcher/catcher
+jumps; floor 1 is not free in the real 48-lane design) — all folded into
+WP-N tasks 3e/3f. Details: §7.2 WP-N task 1.
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -1825,19 +1832,53 @@ genuinely open — that is what task 1 measures.
       `Foundation_2x4` at `hop_range=5`, single floor and with lifts;
       read off what converges. Then gate `place()`: reject with the
       counting-argument message when `group_inversions > capacity`.
-   e. **Routing plumbing surfaced by task 1** (in `route.py`/
-      `pathfinder.py`, small but load-bearing):
+   e. **Routing plumbing surfaced by task 1 + the 2-floor viz review**
+      (in `route.py`/`pathfinder.py`, small but load-bearing):
       - **Interior-hop stripping fix** (the task-1 correction's bug):
         `strip_belts`/`strip_and_reroute` must strip `PortSender/
         Receiver` entities *not on the platform boundary ring* — they are
         hop endpoints (routing), not platform IO. Add a regression test:
         lift + strip the UNFINISHED Half Splitter and assert no interior
         `BeltPort*` entity survives, and none lands in the obstacle set.
+      - **Port-band passability fix:** the passable set from
+        `_platform_bounds` includes the outermost interior ring (the
+        2-cell-band's inner port row, e.g. x ∈ {-18, 57} / y ∈ {2, 37}
+        on `Foundation_2x4`) — but that ring is **ports-only in-game**:
+        the human build has 48 ports and zero belts/machines there
+        (buildable area starts one cell inside; `viz._platform_geometry`'s
+        inset=3 is correct). Exclude the band from `passable` on every
+        floor except the specific port cells serving as net endpoints.
+        Latent until now — no reference fixture routes on the band (the
+        corpus sweep is clean); heavy congestion pushes routes there
+        (the task-1 2-floor run emits 56 non-port entities on the band).
+        Regression test: route, then assert no non-port entity on the
+        band.
+      - **Per-floor belt emission fix:** `_cell_to_entity` emits belts
+        and hop endpoints with its `layer` *argument*, not the cell's own
+        floor (`cell[2]`) — only lift entities use `cell[2]`. Multi-floor
+        routing emits every floor-1 belt onto floor 0 without a caller-
+        side patch. Use `cell[2]` for all entity kinds.
       - **Lift-aware `strip_and_reroute`**: multi-layer `passable` set
         (interior × available floors, minus machine cells per floor) and
         a `lift_enabled` parameter threaded to `RoutingGraph`; lift
         entities emitted into the blueprint (the emit path exists from
         WP-J — `_cell_to_entity` handles lift edges).
+   f. **Hop/lift cost calibration (2-floor viz review, 2026-06-11).**
+      Current constants (`BASE=1.0`, `HOP_PENALTY=2.0`, `LIFT_COST=3.0`)
+      make a hop cost `d + 2` — never cheaper than walking, fires only
+      under congestion — while an up-and-over via costs 6 plus walking
+      on an upper floor modeled as empty with zero congestion history.
+      Result: the router systematically prefers the empty floor over
+      launcher/catcher jumps (the routed 2-floor solution puts ~780
+      entities on floor 1; 21/48 nets use lifts) — the inverse of human
+      practice (145 hops, 0 lifts) and of §2a's mined physics ("hops are
+      clearly cheap — should not penalize them much"). Two corrections:
+      (1) lower `HOP_PENALTY` so short jumps over 1–4 occupied cells
+      prefer hops; (2) upper floors are **not free capacity** in the real
+      48-lane design (each floor hosts its own 16 lanes) — either charge
+      upper-floor occupancy to reserve capacity, or route all floors'
+      lanes jointly on the unified 3-D graph. Without this, gate-2
+      outputs will overuse the empty-floor escape hatch.
 
 4. **De-xfail and re-gate.** Remove `xfail` from
    `test_four_lane_four_cutters_2x4_halves_land_on_correct_sides` and
