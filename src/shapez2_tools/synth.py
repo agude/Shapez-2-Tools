@@ -34,7 +34,7 @@ from pathlib import Path
 
 from shapez2_tools.blueprint import Blueprint
 from shapez2_tools.generator import FLOORS, Entity, functional_entities, stamp
-from shapez2_tools.place import place
+from shapez2_tools.place import SOURCE_FACE, _port_groups, place, side_regions
 from shapez2_tools.route import entities_to_blueprint, reroute_with_junctions
 
 _DATA = Path(__file__).resolve().parent.parent.parent / "data"
@@ -47,6 +47,10 @@ OP_TYPES: dict[str, str] = {
 }
 
 SWAPPER_TYPE = "HalvesSwapperDefaultInternalVariant"
+# Mirrored: second cell sits west of the anchor at R=1 (south source ->
+# north sinks), putting the west-half output on the platform's west side
+# where it can reach a west-face Region sink (§7.2 WP-M2 problem 3).
+CUTTER_FAN_TYPE = "CutterDefaultInternalVariantMirrored"
 
 SRC_TYPE = "BeltPortReceiverInternalVariant"
 SINK_TYPE = "BeltPortSenderInternalVariant"
@@ -184,6 +188,94 @@ def synthesize_diagonal(
     """Synthesize a diagonal-trick blueprint from a spec."""
     return _lower(
         netlist_from_diagonal_spec(spec), spec.platform, layer,
+        hop_range=hop_range,
+    )
+
+
+@dataclass(frozen=True)
+class CutterSpec:
+    """Cutter fan: south-face sources, each split into west/east halves.
+
+    Each lane: one south-face source (``SOURCE_FACE``) feeds a
+    ``CutterDefault`` (1-in/2-out). The west-half output is ``Region``-pinned
+    to the platform's western faces and the east-half output to the eastern
+    faces (§2a `side_regions`) — the Half Splitter's side semantics.
+    ``lanes=16`` on ``Foundation_2x4`` is the Half Splitter (north-star
+    gate 2).
+    """
+
+    lanes: int
+    platform: str
+
+    def validate(self) -> None:
+        with open(_DATA / "platforms.json") as f:
+            platforms = json.load(f)
+        plat = platforms[self.platform]
+        if "ports" in plat:
+            ports = sum(1 for _, _, r in plat["ports"] if r == SOURCE_FACE)
+        else:
+            ports = plat["ports_per_layer"]
+        if self.lanes > ports:
+            raise ValueError(
+                f"{self.lanes} lanes need {self.lanes} source ports on face "
+                f"{SOURCE_FACE}, but {self.platform} has {ports}"
+            )
+
+        western, eastern = side_regions(plat)
+        for name, groups in (("western", western), ("eastern", eastern)):
+            slots = sum(len(_port_groups(plat, face)[gidx]) for face, gidx in groups)
+            if self.lanes > slots:
+                raise ValueError(
+                    f"{self.lanes} lanes need {self.lanes} {name}-region "
+                    f"output slots, but {self.platform} has {slots}"
+                )
+
+
+def netlist_from_cutter_spec(spec: CutterSpec) -> dict:
+    """Build an abstract netlist for the cutter fan (§2a Half Splitter).
+
+    Topology per lane i:
+      src_i -> cut_i -> sink_i_w (Region: western faces)
+                      -> sink_i_e (Region: eastern faces)
+    """
+    spec.validate()
+    with open(_DATA / "platforms.json") as f:
+        platforms = json.load(f)
+    western, eastern = side_regions(platforms[spec.platform])
+
+    nodes: list[dict] = []
+    edges: list[tuple[str, str]] = []
+
+    for i in range(spec.lanes):
+        src = f"src{i}"
+        cut = f"cut{i}"
+        sink_w = f"sink{i}_w"
+        sink_e = f"sink{i}_e"
+
+        nodes.append({"id": src, "type": SRC_TYPE, "kind": "platform_in"})
+        nodes.append({"id": cut, "type": CUTTER_FAN_TYPE, "kind": "machine"})
+        nodes.append({
+            "id": sink_w, "type": SINK_TYPE, "kind": "platform_out",
+            "pin": "region", "target": western,
+        })
+        nodes.append({
+            "id": sink_e, "type": SINK_TYPE, "kind": "platform_out",
+            "pin": "region", "target": eastern,
+        })
+
+        edges.append((src, cut))
+        edges.append((cut, sink_w))
+        edges.append((cut, sink_e))
+
+    return {"nodes": nodes, "edges": edges}
+
+
+def synthesize_cutter(
+    spec: CutterSpec, layer: int = 0, *, hop_range: int = 0,
+) -> Blueprint:
+    """Synthesize a cutter-fan blueprint from a spec (§2a, north-star gate 2)."""
+    return _lower(
+        netlist_from_cutter_spec(spec), spec.platform, layer,
         hop_range=hop_range,
     )
 

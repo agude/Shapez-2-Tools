@@ -139,134 +139,147 @@ def _grow_tree(
         def _h(c: Cell) -> float:
             return (abs(c[0] - tx) + abs(c[1] - ty)) * BASE
 
-        dist: dict[Cell, float] = {}
-        prev: dict[Cell, Cell] = {}
-        pq: list[tuple[float, int, int, int, float, Cell]] = []
+        def _search(allow_hops: bool) -> tuple[bool, dict[Cell, float], dict[Cell, Cell]]:
+            dist: dict[Cell, float] = {}
+            prev: dict[Cell, Cell] = {}
+            pq: list[tuple[float, int, int, int, float, Cell]] = []
 
-        for seed in tree_cells:
-            if seed in hop_cells or seed in lift_cells:
-                continue
-            # Check if seed can still emit another edge
-            outs = cell_out[seed]
-            ins = cell_in[seed]
-            total_legs = ins + outs
-            if total_legs >= 4:
-                continue
-            if outs + 1 > 3:
-                continue
-            candidate = (ins, outs + 1)
-            if candidate not in LEGAL_LEG_PATTERNS and total_legs > 0:
-                continue
-            dist[seed] = 0.0
-            heapq.heappush(pq, (_h(seed), seed[1], seed[0], seed[2], 0.0, seed))
-
-        found = False
-        while pq:
-            _f, _y, _x, _l, cost, cell = heapq.heappop(pq)
-
-            if cost > dist.get(cell, float("inf")):
-                continue
-
-            if cell == terminal:
-                found = True
-                break
-
-            for nb in _neighbors(cell):
-                if nb not in graph.passable:
+            for seed in tree_cells:
+                if seed in hop_cells or seed in lift_cells:
                     continue
-                if nb in tree_cells and nb != terminal:
+                # Check if seed can still emit another edge
+                outs = cell_out[seed]
+                ins = cell_in[seed]
+                total_legs = ins + outs
+                if total_legs >= 4:
                     continue
-                # Hop receiver exit constraint: a cell reached via a hop
-                # must exit in the hop direction (straight through).
-                if cell in prev:
-                    p = prev[cell]
-                    md = abs(cell[0] - p[0]) + abs(cell[1] - p[1])
-                    if md > 1:
-                        ux = (1 if cell[0] > p[0] else -1) if cell[0] != p[0] else 0
-                        uy = (1 if cell[1] > p[1] else -1) if cell[1] != p[1] else 0
-                        if (nb[0] - cell[0], nb[1] - cell[1]) != (ux, uy):
-                            continue
+                if outs + 1 > 3:
+                    continue
+                candidate = (ins, outs + 1)
+                if candidate not in LEGAL_LEG_PATTERNS and total_legs > 0:
+                    continue
+                dist[seed] = 0.0
+                heapq.heappush(pq, (_h(seed), seed[1], seed[0], seed[2], 0.0, seed))
 
-                occ_set = graph.occ.get(nb, set())
-                overuse = max(0, len(occ_set - {net.net_id}) + 1 - 1)
-                enter = (graph.base.get(nb, BASE) + graph.hist.get(nb, 0.0)) * (
-                    1 + pres_fac * overuse
-                )
-                new_cost = cost + enter
+            found = False
+            while pq:
+                _f, _y, _x, _l, cost, cell = heapq.heappop(pq)
 
-                if new_cost < dist.get(nb, float("inf")):
-                    dist[nb] = new_cost
-                    prev[nb] = cell
-                    heapq.heappush(pq, (new_cost + _h(nb), nb[1], nb[0], nb[2], new_cost, nb))
+                if cost > dist.get(cell, float("inf")):
+                    continue
 
-            if graph.hop_range > 0:
-                cx, cy, cl = cell
-                # No hops from cells reached via hops (can't overlay
-                # launcher + catcher on the same cell).
-                _skip_hops = False
-                if cell in prev:
-                    p = prev[cell]
-                    if abs(cx - p[0]) + abs(cy - p[1]) > 1:
-                        _skip_hops = True
-                if _skip_hops:
-                    pass
-                else:
-                    # Sender approach constraint: the hop sender must be
-                    # fed from the direction opposite to the hop, so
-                    # approach_dir must equal the hop direction.
-                    if cell in prev:
-                        p = prev[cell]
-                        _approach = (cx - p[0], cy - p[1])
-                    elif cell in cell_approach:
-                        _approach = cell_approach[cell]
-                    else:
-                        _approach = None
-                    for dx, dy in ((1, 0), (0, 1), (-1, 0), (0, -1)):
-                        if _approach is not None and _approach != (dx, dy):
-                            continue
-                        for hdist in range(2, graph.hop_range + 1):
-                            nb = (cx + dx * hdist, cy + dy * hdist, cl)
-                            if nb not in graph.passable:
-                                continue
-                            if nb in tree_cells and nb != terminal:
-                                continue
-                            te = net.terminal_exit.get(nb)
-                            if te is not None and (dx, dy) != te:
-                                continue
-                            occ_set = graph.occ.get(nb, set())
-                            overuse = max(0, len(occ_set - {net.net_id}) + 1 - 1)
-                            hop_base = hdist * BASE + HOP_PENALTY
-                            enter = (hop_base + graph.hist.get(nb, 0.0)) * (
-                                1 + pres_fac * overuse
-                            )
-                            new_cost = cost + enter
-                            if new_cost < dist.get(nb, float("inf")):
-                                dist[nb] = new_cost
-                                prev[nb] = cell
-                                heapq.heappush(
-                                    pq, (new_cost + _h(nb), nb[1], nb[0], nb[2], new_cost, nb)
-                                )
+                if cell == terminal:
+                    found = True
+                    break
 
-            if graph.lift_enabled:
-                cx, cy, cl = cell
-                for dl in (1, -1):
-                    nb = (cx, cy, cl + dl)
+                for nb in _neighbors(cell):
                     if nb not in graph.passable:
                         continue
                     if nb in tree_cells and nb != terminal:
                         continue
+                    # Hop receiver exit constraint: a cell reached via a hop
+                    # must exit in the hop direction (straight through).
+                    if allow_hops and cell in prev:
+                        p = prev[cell]
+                        md = abs(cell[0] - p[0]) + abs(cell[1] - p[1])
+                        if md > 1:
+                            ux = (1 if cell[0] > p[0] else -1) if cell[0] != p[0] else 0
+                            uy = (1 if cell[1] > p[1] else -1) if cell[1] != p[1] else 0
+                            if (nb[0] - cell[0], nb[1] - cell[1]) != (ux, uy):
+                                continue
+
                     occ_set = graph.occ.get(nb, set())
                     overuse = max(0, len(occ_set - {net.net_id}) + 1 - 1)
-                    enter = (LIFT_COST + graph.hist.get(nb, 0.0)) * (
+                    enter = (graph.base.get(nb, BASE) + graph.hist.get(nb, 0.0)) * (
                         1 + pres_fac * overuse
                     )
                     new_cost = cost + enter
+
                     if new_cost < dist.get(nb, float("inf")):
                         dist[nb] = new_cost
                         prev[nb] = cell
-                        heapq.heappush(
-                            pq, (new_cost + _h(nb), nb[1], nb[0], nb[2], new_cost, nb)
+                        heapq.heappush(pq, (new_cost + _h(nb), nb[1], nb[0], nb[2], new_cost, nb))
+
+                if allow_hops and graph.hop_range > 0:
+                    cx, cy, cl = cell
+                    # No hops from cells reached via hops (can't overlay
+                    # launcher + catcher on the same cell).
+                    _skip_hops = False
+                    if cell in prev:
+                        p = prev[cell]
+                        if abs(cx - p[0]) + abs(cy - p[1]) > 1:
+                            _skip_hops = True
+                    if _skip_hops:
+                        pass
+                    else:
+                        # Sender approach constraint: the hop sender must be
+                        # fed from the direction opposite to the hop, so
+                        # approach_dir must equal the hop direction.
+                        if cell in prev:
+                            p = prev[cell]
+                            _approach = (cx - p[0], cy - p[1])
+                        elif cell in cell_approach:
+                            _approach = cell_approach[cell]
+                        else:
+                            _approach = None
+                        for dx, dy in ((1, 0), (0, 1), (-1, 0), (0, -1)):
+                            if _approach is not None and _approach != (dx, dy):
+                                continue
+                            for hdist in range(2, graph.hop_range + 1):
+                                nb = (cx + dx * hdist, cy + dy * hdist, cl)
+                                if nb not in graph.passable:
+                                    continue
+                                if nb in tree_cells and nb != terminal:
+                                    continue
+                                te = net.terminal_exit.get(nb)
+                                if te is not None and (dx, dy) != te:
+                                    continue
+                                occ_set = graph.occ.get(nb, set())
+                                overuse = max(0, len(occ_set - {net.net_id}) + 1 - 1)
+                                hop_base = hdist * BASE + HOP_PENALTY
+                                enter = (hop_base + graph.hist.get(nb, 0.0)) * (
+                                    1 + pres_fac * overuse
+                                )
+                                new_cost = cost + enter
+                                if new_cost < dist.get(nb, float("inf")):
+                                    dist[nb] = new_cost
+                                    prev[nb] = cell
+                                    heapq.heappush(
+                                        pq, (new_cost + _h(nb), nb[1], nb[0], nb[2], new_cost, nb)
+                                    )
+
+                if allow_hops and graph.lift_enabled:
+                    cx, cy, cl = cell
+                    for dl in (1, -1):
+                        nb = (cx, cy, cl + dl)
+                        if nb not in graph.passable:
+                            continue
+                        if nb in tree_cells and nb != terminal:
+                            continue
+                        occ_set = graph.occ.get(nb, set())
+                        overuse = max(0, len(occ_set - {net.net_id}) + 1 - 1)
+                        enter = (LIFT_COST + graph.hist.get(nb, 0.0)) * (
+                            1 + pres_fac * overuse
                         )
+                        new_cost = cost + enter
+                        if new_cost < dist.get(nb, float("inf")):
+                            dist[nb] = new_cost
+                            prev[nb] = cell
+                            heapq.heappush(
+                                pq, (new_cost + _h(nb), nb[1], nb[0], nb[2], new_cost, nb)
+                            )
+
+            return found, dist, prev
+
+        found, dist, prev = _search(allow_hops=True)
+        if not found:
+            # The hop-receiver exit constraint can lock every approach to a
+            # terminal into a "straight through" hop landing that points
+            # away from it (seen at 16-lane density under heavy congestion
+            # pricing). The base 4-connected grid is always fully connected
+            # (no cell is walled off on all four sides), so retry without
+            # hops/lifts as a fallback before declaring true unreachability.
+            found, dist, prev = _search(allow_hops=False)
 
         if not found:
             raise RoutingError(

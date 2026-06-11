@@ -29,6 +29,13 @@ _DATA = Path(__file__).resolve().parent.parent.parent / "data"
 
 _BUCKET_WIDTH = 4
 
+# Design convention (2026-06-11): items flow south → north. Sources default
+# to the south face, sinks to the north face; west/east (and pins) are used
+# when one face's port count is insufficient (e.g. the full-lane stacker:
+# 8 inputs on south+west+east, 4 outputs on north).
+SOURCE_FACE = 1  # south
+SINK_FACE = 3  # north
+
 
 def _load_platform(name: str) -> dict:
     with open(_DATA / "platforms.json") as f:
@@ -202,6 +209,26 @@ def _port_groups(plat: dict, face: int) -> list[list[tuple[int, int]]]:
     return [ports[i : i + _GROUP_SIZE] for i in range(0, len(ports), _GROUP_SIZE)]
 
 
+def side_regions(plat: dict) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    """West/east-side region group lists for ``Region`` pins (§2a).
+
+    The western region is every west-face (0) group plus the west-most half
+    of the north-face (3) groups; the eastern region mirrors this on the
+    east face (2) and the east-most half of face 3. This is the Half
+    Splitter's ``western_faces``/``eastern_faces`` split, generalized to any
+    platform.
+    """
+    west_groups = _port_groups(plat, 0)
+    east_groups = _port_groups(plat, 2)
+    north_groups = _port_groups(plat, 3)
+    half = len(north_groups) // 2
+    western = [(0, i) for i in range(len(west_groups))] + [(3, i) for i in range(half)]
+    eastern = [(2, i) for i in range(len(east_groups))] + [
+        (3, i) for i in range(len(north_groups) - half, len(north_groups))
+    ]
+    return western, eastern
+
+
 def group_inversions(pairs: list[tuple[int, int]]) -> int:
     """Count inversions in a source-group → sink-group permutation (§2a).
 
@@ -291,12 +318,13 @@ def place(
     y_min, y_max = border, grid_h - border - 1
 
     # Port positions from the calibrated ports list.
-    # Convention: sources default to the north wall (face 3, items flow south
-    # into the platform), sinks default to the south wall (face 1, items exit
-    # south). Abstract nodes may set a "face" key (0=west, 1=south, 2=east,
-    # 3=north) to land on a different platform edge (WP-M multi-face ports).
-    all_source_ports = _edge_ports(plat, 3)
-    all_sink_ports = _edge_ports(plat, 1)
+    # Convention: sources default to the south wall (SOURCE_FACE, items flow
+    # north into the platform), sinks default to the north wall (SINK_FACE,
+    # items exit north). Abstract nodes may set a "face" key (0=west, 1=south,
+    # 2=east, 3=north) to land on a different platform edge (WP-M multi-face
+    # ports).
+    all_source_ports = _edge_ports(plat, SOURCE_FACE)
+    all_sink_ports = _edge_ports(plat, SINK_FACE)
     input_y = all_source_ports[0][1]
     output_y = all_sink_ports[0][1]
 
@@ -315,22 +343,27 @@ def place(
     sink_ports = [p for p in all_sink_ports if p not in pinned_positions]
 
     # Separate the remaining (Free) sources, sinks, and machines. Sources/
-    # sinks on the primary faces (3 / 1) drive the row model and WP-L
-    # monotone sink ordering; sources/sinks pinned to other faces are
-    # assigned ports independently, in node order.
+    # sinks on the primary faces (SOURCE_FACE / SINK_FACE) drive the row
+    # model and WP-L monotone sink ordering; sources/sinks pinned to other
+    # faces are assigned ports independently, in node order.
     free_sources = [n for n in all_sources if n["id"] not in port_pos]
     free_sinks = [n for n in all_sinks if n["id"] not in port_pos]
 
-    sources = [n for n in free_sources if n.get("face", 3) == 3]
-    sinks = [n for n in free_sinks if n.get("face", 1) == 1]
-    extra_sources = [n for n in free_sources if n.get("face", 3) != 3]
-    extra_sinks = [n for n in free_sinks if n.get("face", 1) != 1]
+    sources = [n for n in free_sources if n.get("face", SOURCE_FACE) == SOURCE_FACE]
+    sinks = [n for n in free_sinks if n.get("face", SINK_FACE) == SINK_FACE]
+    extra_sources = [n for n in free_sources if n.get("face", SOURCE_FACE) != SOURCE_FACE]
+    extra_sinks = [n for n in free_sinks if n.get("face", SINK_FACE) != SINK_FACE]
 
-    # Extra-face ports: assign sequentially from that face's port list.
+    # Extra-face ports: assign sequentially from that face's free port list.
     extra_face_next: dict[int, int] = defaultdict(int)
     for n in extra_sources + extra_sinks:
         face = n["face"]
-        ports = _edge_ports(plat, face)
+        ports = [p for p in _edge_ports(plat, face) if p not in pinned_positions]
+        if extra_face_next[face] >= len(ports):
+            raise ValueError(
+                f"node {n['id']!r} needs a port on face {face} but all "
+                f"{len(ports)} free ports there are taken"
+            )
         port_pos[n["id"]] = ports[extra_face_next[face]]
         extra_face_next[face] += 1
         port_rot[n["id"]] = _port_rotation_for(face, n["kind"])
@@ -339,9 +372,14 @@ def place(
     # right. To avoid route crossings, order sinks to match the source
     # ordering: trace each source → machines → sink chain, then assign the
     # sink that a leftmost source feeds to the leftmost sink port, etc.
-    primary_src_rot = _port_rotation_for(3, "platform_in")
-    primary_sink_rot = _port_rotation_for(1, "platform_out")
+    primary_src_rot = _port_rotation_for(SOURCE_FACE, "platform_in")
+    primary_sink_rot = _port_rotation_for(SINK_FACE, "platform_out")
 
+    if len(sources) > len(source_ports):
+        raise ValueError(
+            f"{len(sources)} sources need free ports on face {SOURCE_FACE} "
+            f"but only {len(source_ports)} remain after pinning"
+        )
     for i, src in enumerate(sources):
         port_pos[src["id"]] = source_ports[i]
         port_rot[src["id"]] = primary_src_rot
@@ -363,7 +401,7 @@ def place(
             visited.add(nid)
             n = node_by_id[nid]
             if n["kind"] == "platform_out":
-                if n.get("face", 1) == 1 and nid not in port_pos:
+                if n.get("face", SINK_FACE) == SINK_FACE and nid not in port_pos:
                     found.append(nid)
                 continue
             for child in edge_out.get(nid, []):
@@ -386,6 +424,11 @@ def place(
         if sink["id"] not in seen_sinks:
             ordered_sinks.append(sink["id"])
 
+    if len(ordered_sinks) > len(sink_ports):
+        raise ValueError(
+            f"{len(ordered_sinks)} sinks need free ports on face {SINK_FACE} "
+            f"but only {len(sink_ports)} remain after pinning"
+        )
     for i, sink_id in enumerate(ordered_sinks):
         port_pos[sink_id] = sink_ports[i]
         port_rot[sink_id] = primary_sink_rot
@@ -408,12 +451,14 @@ def place(
     ]
 
     if input_y > output_y:
-        # South flow (common case): row 0 nearest sources, last row nearest sinks.
+        # Southward flow: row 0 nearest sources (high y), last row nearest sinks.
         model.add(row_y[0] <= input_y - 3)
         model.add(row_y[-1] >= output_y + 3)
         for r in range(n_stages - 1):
             model.add(row_y[r] >= row_y[r + 1] + 3)
     else:
+        # Northward flow (the south→north convention): row 0 nearest the
+        # south sources (low y), rows ascend toward the north sinks.
         model.add(row_y[0] >= input_y + 3)
         model.add(row_y[-1] <= output_y - 3)
         for r in range(n_stages - 1):
@@ -484,49 +529,62 @@ def place(
     # --- Density constraints (WP-M channel capacity) ---
     # Per routing channel, per x-bucket of width _BUCKET_WIDTH: the number of
     # nets whose horizontal interval covers the bucket must not exceed the
-    # channel height (classic channel-routing density).
-    if input_y > output_y:
-        all_px = [x for x, _ in port_pos.values()]
-        bkt_lo = min(x_min, *all_px)
-        bkt_hi = max(x_max, *all_px)
-        n_bkt = (bkt_hi - bkt_lo + _BUCKET_WIDTH) // _BUCKET_WIDTH + 1
+    # channel height (classic channel-routing density). Only edges between
+    # machines and *primary-face* ports are counted: routes to west/east or
+    # pinned ports run along the platform sides, not across the horizontal
+    # channels, so their x-intervals say nothing about channel load.
+    primary_port_ids = {n["id"] for n in sources} | set(ordered_sinks)
+    all_px = [x for x, _ in port_pos.values()]
+    bkt_lo = min(x_min, *all_px)
+    bkt_hi = max(x_max, *all_px)
+    n_bkt = (bkt_hi - bkt_lo + _BUCKET_WIDTH) // _BUCKET_WIDTH + 1
 
+    if input_y > output_y:
         ch_h = [input_y - row_y[0] - 1]
         for r in range(n_stages - 1):
             ch_h.append(row_y[r] - row_y[r + 1] - 1)
         ch_h.append(row_y[-1] - output_y - 1)
+    else:
+        ch_h = [row_y[0] - input_y - 1]
+        for r in range(n_stages - 1):
+            ch_h.append(row_y[r + 1] - row_y[r] - 1)
+        ch_h.append(output_y - row_y[-1] - 1)
 
-        ch_edges: dict[int, list[tuple]] = defaultdict(list)
-        for sid, did in abstract["edges"]:
-            sn, dn = node_by_id[sid], node_by_id[did]
-            xs = _node_x(sid, sn, port_pos, m_x, model)
-            xd = _node_x(did, dn, port_pos, m_x, model)
-            if sn["kind"] == "platform_in":
-                ci = 0
-            elif sn["kind"] == "machine":
-                ci = stages[sid] + 1
-            else:
-                continue
-            ch_edges[ci].append((xs, xd))
+    ch_edges: dict[int, list[tuple]] = defaultdict(list)
+    for sid, did in abstract["edges"]:
+        sn, dn = node_by_id[sid], node_by_id[did]
+        if sn["kind"] == "platform_in" and sid not in primary_port_ids:
+            continue
+        if dn["kind"] == "platform_out" and did not in primary_port_ids:
+            continue
+        xs = _node_x(sid, sn, port_pos, m_x, model)
+        xd = _node_x(did, dn, port_pos, m_x, model)
+        if sn["kind"] == "platform_in":
+            ci = 0
+        elif sn["kind"] == "machine":
+            ci = stages[sid] + 1
+        else:
+            continue
+        ch_edges[ci].append((xs, xd))
 
-        for ci in range(n_stages + 1):
-            edges_ci = ch_edges.get(ci, [])
-            if not edges_ci:
-                continue
-            for b in range(n_bkt):
-                bl = bkt_lo + b * _BUCKET_WIDTH
-                bh = min(bl + _BUCKET_WIDTH - 1, bkt_hi)
-                terms: list = []
-                fixed = 0
-                for ei, (xs, xd) in enumerate(edges_ci):
-                    c = _covers_bucket(model, xs, xd, bl, bh, f"d{ci}b{b}e{ei}")
-                    if isinstance(c, bool):
-                        if c:
-                            fixed += 1
-                    else:
-                        terms.append(c)
-                if terms or fixed > 0:
-                    model.add(sum(terms) + fixed <= ch_h[ci])
+    for ci in range(n_stages + 1):
+        edges_ci = ch_edges.get(ci, [])
+        if not edges_ci:
+            continue
+        for b in range(n_bkt):
+            bl = bkt_lo + b * _BUCKET_WIDTH
+            bh = min(bl + _BUCKET_WIDTH - 1, bkt_hi)
+            terms: list = []
+            fixed = 0
+            for ei, (xs, xd) in enumerate(edges_ci):
+                c = _covers_bucket(model, xs, xd, bl, bh, f"d{ci}b{b}e{ei}")
+                if isinstance(c, bool):
+                    if c:
+                        fixed += 1
+                else:
+                    terms.append(c)
+            if terms or fixed > 0:
+                model.add(sum(terms) + fixed <= ch_h[ci])
 
     # Rotation constraints: a machine's output must face *toward* its
     # downstream neighbour (positive dot product between output direction and
@@ -770,23 +828,37 @@ def _assign_ports(
     neighbor_positions: list[tuple[int, int]],
     port_cells: list[tuple[int, int]],
 ) -> list[int]:
-    """Assign neighbors to port cells by nearest-neighbor (greedy).
+    """Assign neighbors to port cells by monotone (non-crossing) matching.
+
+    A multi-cell machine's port cells are adjacent and differ along one
+    axis (e.g. a cutter's anchor/second-cell output ports). Sorting both the
+    port cells and the neighbors along that axis (breaking ties on the other
+    axis) and pairing them positionally avoids the crossed assignments a
+    pure nearest-neighbor match can produce when the neighbors fall on the
+    same side of the machine — e.g. a cutter's west/east-half outputs both
+    routed to Region sinks on the platform's north face (§7.2 WP-M2).
 
     Returns result[i] = index of the port cell assigned to neighbor i.
     """
-    assigned: list[int | None] = [None] * len(neighbor_positions)
-    used: set[int] = set()
-    pairs = []
-    for i, np in enumerate(neighbor_positions):
-        for j, pc in enumerate(port_cells):
-            d = abs(np[0] - pc[0]) + abs(np[1] - pc[1])
-            pairs.append((d, i, j))
-    pairs.sort()
-    for _, i, j in pairs:
-        if assigned[i] is None and j not in used:
-            assigned[i] = j
-            used.add(j)
-    return assigned  # type: ignore[return-value]
+    n = len(port_cells)
+    if n <= 1:
+        return [0] * len(neighbor_positions)
+
+    xs = [p[0] for p in port_cells]
+    ys = [p[1] for p in port_cells]
+    axis = 0 if max(xs) - min(xs) >= max(ys) - min(ys) else 1
+    other = 1 - axis
+
+    port_order = sorted(range(n), key=lambda j: (port_cells[j][axis], port_cells[j][other]))
+    nbr_order = sorted(
+        range(len(neighbor_positions)),
+        key=lambda i: (neighbor_positions[i][axis], neighbor_positions[i][other]),
+    )
+
+    assigned = [0] * len(neighbor_positions)
+    for nbr_idx, port_idx in zip(nbr_order, port_order):
+        assigned[nbr_idx] = port_idx
+    return assigned
 
 
 def _build_netlist(

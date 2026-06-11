@@ -38,6 +38,15 @@ north star is intra-platform place-and-route for dense platforms; the easy
 single-op platforms are the test harness. `docs/QUESTIONS.md` holds anything
 waiting on the user.
 
+## Design Conventions
+
+- **Flow runs south → north, always.** Synthesized blueprints take inputs
+  (sources) on the south face and emit outputs (sinks) on the north face.
+  Use west/east faces only when one face's port count is insufficient — e.g.
+  the full-lane stacker takes its 8 full-belt inputs on south+west+east and
+  outputs 4 on north. Encoded as `place.SOURCE_FACE` (1) / `place.SINK_FACE`
+  (3); never hardcode face numbers elsewhere.
+
 ## Blueprints Location
 
 - Blueprints symlink: `~/Projects/shapez_2_blueprints/`

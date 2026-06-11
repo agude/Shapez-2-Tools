@@ -128,19 +128,20 @@ class TestMultiFacePorts:
 
 
 class TestCutterDefault:
-    """WP-M: a 2-output CutterDefault feeding sinks on different faces.
+    """WP-M: a 2-output Mirrored cutter feeding sinks on different faces.
 
     Building block for the Half Splitter gate: confirms the multi-cell
     placement (``_is_multi_cell`` / ``_second_cell_tables``), BFS sink
     tracing, and multi-face port assignment compose for a cutter without
-    any further changes to ``place.py``.
+    any further changes to ``place.py``. South source, north + west sinks —
+    the synthesized cutter fan's convention (§7.2 WP-M2).
     """
 
     def _abstract(self):
         return {
             "nodes": [
                 {"id": "src0", "type": "BeltPortReceiverInternalVariant", "kind": "platform_in"},
-                {"id": "cut0", "type": "CutterDefaultInternalVariant", "kind": "machine"},
+                {"id": "cut0", "type": "CutterDefaultInternalVariantMirrored", "kind": "machine"},
                 {"id": "snk0", "type": "BeltPortSenderInternalVariant", "kind": "platform_out"},
                 {
                     "id": "snk1",
@@ -159,7 +160,7 @@ class TestCutterDefault:
         result = place(self._abstract(), "Foundation_1x1")
 
         plat = _load_platform("Foundation_1x1")
-        south_ports = set(_edge_ports(plat, 1))
+        north_ports = set(_edge_ports(plat, 3))
         west_ports = set(_edge_ports(plat, 0))
 
         cutter_pos = next(
@@ -171,7 +172,7 @@ class TestCutterDefault:
         assert len(cells) == 2  # anchor + second cell
 
         sink_positions = {pos for pos, n in result.nodes.items() if n.kind == "platform_out"}
-        assert len(sink_positions & south_ports) == 1
+        assert len(sink_positions & north_ports) == 1
         assert len(sink_positions & west_ports) == 1
 
         # No two nodes/cutter cells share a position.
@@ -180,7 +181,14 @@ class TestCutterDefault:
 
     def test_routes_and_splits_shape_to_correct_faces(self):
         """Place → route → lift → interpret: east/west halves land on the
-        correctly-faced sinks, matching ``shapes.cut``."""
+        correctly-faced sinks, matching ``shapes.cut``.
+
+        Per the absolute half->cell mapping (machines.md, §7.2 WP-M2 problem
+        3): the anchor's front emits the east half, the second cell's front
+        emits the west half. With ``Mirrored`` at R=1 (south source -> north
+        sinks) the second cell sits west of the anchor, so the west half
+        reaches the west-face sink and the east half the north-face sink.
+        """
         from shapez2_tools.generator import Entity
         from shapez2_tools.interpret import interpret
         from shapez2_tools.place import _edge_ports, _load_platform, place
@@ -202,7 +210,7 @@ class TestCutterDefault:
         assert lift.validate(routed_bp) == []
 
         plat = _load_platform("Foundation_1x1")
-        south_ports = set(_edge_ports(plat, 1))
+        north_ports = set(_edge_ports(plat, 3))
         west_ports = set(_edge_ports(plat, 0))
 
         src_pos = next(p for p, n in routed_nl.nodes.items() if n.kind == "platform_in")
@@ -213,7 +221,7 @@ class TestCutterDefault:
         for pos, n in routed_nl.nodes.items():
             if n.kind != "platform_out":
                 continue
-            if pos in south_ports:
+            if pos in north_ports:
                 assert out[pos] == east
             elif pos in west_ports:
                 assert out[pos] == west
@@ -404,11 +412,17 @@ class TestPinnedPorts:
         """§2a: the western/eastern regions for the Half Splitter — west
         (resp. east) face plus the two west-most (resp. east-most) north-face
         groups, 16 slots each, disjoint."""
-        from shapez2_tools.place import _assign_pinned_ports, _load_platform, _port_groups
+        from shapez2_tools.place import (
+            _assign_pinned_ports,
+            _load_platform,
+            _port_groups,
+            side_regions,
+        )
 
         plat = _load_platform("Foundation_2x4")
         western = [(0, 0), (0, 1), (3, 0), (3, 1)]
         eastern = [(2, 0), (2, 1), (3, 2), (3, 3)]
+        assert side_regions(plat) == (western, eastern)
 
         nodes = []
         for i in range(16):
