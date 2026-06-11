@@ -1,10 +1,12 @@
 # Blueprint Synthesis — Plan
 
-**Status:** Draft, updated 2026-06-10. **WP-M in progress (row-based placement
-model + feedback loop landed — hand constraints deleted, series-with-throughput
-xfail goes green, half-destroy throughput=3 synthesizes). WP-J done. WP-K done.
-WP-L landed. WP-H landed. Scaling plan: §2a (architecture) + WP-I…WP-M (§7.2)
-— negotiated-congestion routing for dense platforms.**
+**Status:** Draft, updated 2026-06-10. **WP-M in progress — first north-star
+gate passes** (`test_synth_diagonal_full_belt_2x4`: 8-pair diagonal on
+Foundation_2x4, 32/32 edges, validates + interprets with hops). Row model +
+feedback loop landed, hop direction constraints landed, A\* heuristic landed
+(3.9× routing speedup). WP-J done. WP-K done. WP-L landed. WP-H landed.
+Scaling plan: §2a (architecture) + WP-I…WP-M (§7.2) — negotiated-congestion
+routing for dense platforms.**
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -20,7 +22,7 @@ regression floor. The hard target is intra-platform **place-and-route**.
 
 ## 0. Status & handoff (2026-06-10)
 
-**Built and green** (241 tests pass, 1 xfail, `just test`, ruff clean):
+**Built and green** (247 tests pass, 0 xfail, `just test`, ruff clean):
 - `blueprint.py` — faithful `.spz2bp` codec.
 - `generator.py` — tile-replication generator: builds the rotator family
   (180/cw/ccw × 1×1/1×4) from one lifted tile. `Entity`, lift/stamp/build,
@@ -56,7 +58,10 @@ regression floor. The hard target is intra-platform **place-and-route**.
   recovers 32 port nodes (16 in, 16 out) + 148 edges, all platform_in→platform_out.
   **WP-K hop tracing:** `_resolve_hops` pairs interior launcher/catcher entities
   by scanning along the sender's facing direction (first receiver with same
-  rotation wins). `trace_layer(..., contract_hops=True)` threads belt contraction
+  rotation wins); senders sorted by `(rotation, projected position)` so
+  within each direction the sender whose items reach receivers first is
+  processed first — fixes greedy pairing when multiple senders face the same
+  way. `trace_layer(..., contract_hops=True)` threads belt contraction
   through hop pairs transparently. Verified: 145/145 Half Splitter pairs,
   18/18 swap_diagonal pairs.
 - `shapes.py` — **multi-layer** shape model + absolute ops (rotate / cut /
@@ -94,10 +99,20 @@ regression floor. The hard target is intra-platform **place-and-route**.
   (66/66 edges) and `swap_diagonal` (162/162 edges) both round-trip through
   lift as isomorphic; single-cell corpus parity holds (all 7 fixtures).
   **WP-K hop routing:** `RoutingGraph(hop_range=N)` enables launcher/catcher
-  hop edges in Dijkstra expansion (cost = `d·BASE + HOP_PENALTY`, strictly
-  more expensive than walking — only congestion tips the balance). Hop
-  endpoint cells emit `BeltPortSender/ReceiverInternalVariant`; flight cells
-  are free. Single-floor topological crossings now route and round-trip.
+  hop edges (cost = `d·BASE + HOP_PENALTY`, strictly more expensive than
+  walking — only congestion tips the balance). Hop endpoint cells emit
+  `BeltPortSender/ReceiverInternalVariant`; flight cells are free.
+  **Hop direction constraints:** sender approach (must be fed from opposite
+  the hop), receiver exit (must continue in hop direction), terminal exit
+  (hops landing on terminals must match the boundary edge direction toward
+  the downstream machine/sink), no double-hop (receiver can't launch),
+  root approach (seeds cell\_approach from port offset). `_resolve_hops`
+  sorts senders by `(rotation, projected position)` for deterministic
+  pairing. Single-floor topological crossings now route and round-trip.
+  **A\* heuristic:** `_grow_tree` uses `manhattan(cell, terminal) × BASE`
+  as an admissible heuristic, pruning exploration on large grids (3.9×
+  speedup on the 2×4 diagonal). Platform bounds from `platforms.json`
+  replace the fixed-margin bounding box for the passable set.
   **WP-J lift routing:** `RoutingGraph(lift_enabled=True)` enables vertical
   lift edges in Dijkstra (cost = `LIFT_COST = 3.0`, both cells occupied).
   `_lift_emit_table` inverts `lift.lift_inout` for all 16 variants × 4
@@ -158,11 +173,13 @@ regression floor. The hard target is intra-platform **place-and-route**.
   correctly (placement + routing + port assignment verified end-to-end).
   **Diagonal trick synthesis:** `DiagonalSpec(pairs, platform)` generates the
   paired north/south → swapper → diagonal topology; `synthesize_diagonal()`
-  lowers it through the full pipeline. Verified on 1×1 with 2 pairs (8/8 edges)
-  **and on 2×2 with 4 pairs** (16/16 edges, validates, interprets to the correct
-  diagonals on all 8 lanes). CLI: `synth swap_diagonal [--pairs N] [--platform P]`.
+  lowers it through the full pipeline. Verified on 1×1 with 2 pairs (8/8 edges),
+  **on 2×2 with 4 pairs** (16/16 edges), **and on 2×4 with 8 pairs** (32/32
+  edges, validates, interprets to correct diagonals on all 16 lanes, with
+  hop\_range=4 — the **first north-star gate**).
+  CLI: `synth swap_diagonal [--pairs N] [--platform P]`.
   Reference: `data/reference/swap_diagonal_4pair_2x2.spz2bp`.
-  **40 synth tests green, 0 xfail (246 total, 0 xfail).**
+  **41 synth tests green, 0 xfail (247 total, 0 xfail).**
 - CLI: `gen`, `diff`, `show`, `lift`, `viz`, `place`, `synth`. `synth` synthesizes
   a blueprint from a spec (e.g. `synth rotate_180` or `synth rotate_cw,rotate_cw`).
   `viz` renders a blueprint as HTML/SVG (belts as directional lines,
@@ -212,23 +229,26 @@ feed groups (9 + 8) plus 9 pass-throughs via 2-coloring the constraint graph.
 ~~WP-A~~ ✓ → ~~WP-B~~ ✓ → ~~WP-C~~ ✓ → ~~**WP-D placement**~~ ✓ →
 ~~**WP-E synthesize**~~ ✓ → ~~**WP-I PathFinder**~~ ✓ → ~~**WP-J lifts**~~ ✓ →
 ~~**WP-L assignment**~~ ✓ → **WP-M row placement** (row model + feedback loop
-landed; density constraints + crossing budget remaining).
+landed; hop direction constraints landed; A\* heuristic landed; **first
+north-star gate passes** — `test_synth_diagonal_full_belt_2x4`; Half Splitter
+gate remaining).
 `synth.py` runs the full pipeline: spec → abstract netlist → monotone sort →
 place → route → blueprint, with a feedback retry loop on routing failure.
 Verified: rotate-180/cw/ccw on 1×1 quarter (**isomorphic to oracles**, 16/16
 edges each), half-destroy on 1×1 (validates + interprets at throughput=2
 **and throughput=3**), series chains with throughput=2 (**16 machines on 1×1,
-the former xfail**). CLI: `just run synth rotate_180 -o out.spz2bp`.
+the former xfail**), **8-pair diagonal on 2×4 with hops (32/32 edges,
+validates + interprets)**. CLI: `just run synth rotate_180 -o out.spz2bp`.
 
 **Remaining gaps:**
 - ~~The tight 2D merger packing (cutter/swapper xfails)~~ — **resolved by WP-I**
   (PathFinder negotiated-congestion router). Both multi-cell corpus fixtures
   now round-trip at full edge count.
-- **The diagonal extractor** (north-star demo): `DiagonalSpec` +
-  `synthesize_diagonal()` landed for 2 pairs on 1×1 (8/8 edges, validates,
-  interprets to correct diagonals). Scaling to 4 pairs (the full-belt target)
-  needs a platform with 8 ports — Foundation_2x2 is the candidate and is now
-  calibrated (Q5 resolved).
+- ~~**The diagonal extractor**~~ (north-star demo): **first gate passes.**
+  `test_synth_diagonal_full_belt_2x4` — 8 pairs on Foundation_2x4 with
+  hop\_range=4, 32/32 edges, validates, interprets to correct diagonals on
+  all 16 lanes (0.6s with A\* heuristic). Scales from 2 pairs on 1×1 through
+  4 pairs on 2×2 to 8 pairs on 2×4.
 - **Platform calibration done (2026-06-05).** User provided 13 empty
   templates (TEMPLATES/ in the blueprints repo) with `BeltPortReceiverInternalVariant`
   on every IO port slot. Port slots are **bidirectional** (Receiver = source,
@@ -1190,24 +1210,29 @@ Build **after** WP-I (it consumes PathFinder's overuse output as feedback).
   `forbidden: set[tuple[int, int]]` and excludes those cells from all machine
   flat positions.
   **(Future: map overused cells to channel/bucket for density feedback.)**
+- ✅ **Hop direction constraints:** sender approach (fed from opposite the
+  hop), receiver exit (continue in hop direction), terminal exit (hops to
+  terminals must match boundary edge direction), no double-hop, root approach.
+  `_resolve_hops` sender sort for deterministic pairing.
+- ✅ **A\* heuristic:** `manhattan(cell, terminal) × BASE` as admissible
+  heuristic in `_grow_tree`. Platform bounds from `platforms.json` replace
+  the fixed-margin bounding box. 2×4 diagonal: 2.44s → 0.62s (3.9×).
+- ✅ **North-star gate 1:** `test_synth_diagonal_full_belt_2x4` — 8-pair
+  diagonal on Foundation_2x4 with hop\_range=4, 32/32 edges, validates +
+  interprets to correct diagonals on all 16 lanes. **PASSES.**
 - **Crossing budget check (§2a):** before solving, compare the pinned
   permutation's inversion count against total crossing capacity
   (floors + hops + channel slack); reject infeasible specs with a counting
   message.
-- **Tests first:** `test_half_destroy_throughput_3` (the known tight 1→3
-  failure synthesizes; §0's limitation note flips); the
-  `test_series_with_throughput` xfail goes green (or moves to a larger
-  platform with a comment saying why); `test_diagonal_4pair_2x2_still_green`
-  (regression); **north-star gates:** `test_synth_diagonal_full_belt_2x4` — the
-  48-in/96-out full-belt diagonal extractor validates + interprets correctly —
-  and `test_synth_half_splitter_2x4` — the Half Splitter (§2a: 48 in south,
-  cut, west halves out on `Region(western_faces)`, east halves on
-  `Region(eastern_faces)`; full 3-D allowed) validates + interprets
+- **North-star gate 2:** `test_synth_half_splitter_2x4` — the Half Splitter
+  (§2a: 48 in south, cut, west halves out on `Region(western_faces)`, east
+  halves on `Region(eastern_faces)`; full 3-D allowed) validates + interprets
   correctly, asserting per-kind belt counts and **region membership** of
   every output port — but **not** any specific slot assignment within a
-  region. Record belts vs the human oracle where one exists (I7, tracked
-  metric, soft target ≤ 2×).
-- **Done when:** the north-star gates pass end-to-end (spec → assign → place
+  region. Needs: `CutterSpec`, multi-face port support, region-constrained
+  output assignment. Record belts vs the human oracle where one exists (I7,
+  tracked metric, soft target ≤ 2×).
+- **Done when:** both north-star gates pass end-to-end (spec → assign → place
   → route → emit → lift → interpret).
 
 ### 7.3 Sequencing & dependencies
@@ -1225,8 +1250,10 @@ Build **after** WP-I (it consumes PathFinder's overuse output as feedback).
   (negotiated congestion); WP-J done (lift calibration + 3-D tracing + lift
   edges in PathFinder); WP-K done (hop tracer + router); WP-L done (monotone
   sort + quotient stamping). **WP-M in progress:** row model + feedback loop
-  landed (hand constraints deleted, xfails resolved); density constraints
-  and crossing budget check remain. North-star gates next.
+  landed; hop direction constraints landed; A\* heuristic landed (3.9×
+  routing speedup); **first north-star gate passes**
+  (`test_synth_diagonal_full_belt_2x4`). Remaining: crossing budget check,
+  Half Splitter gate (CutterSpec + multi-face ports + region assignment).
 
 ### 7.4 Test infrastructure to build first
 - `tests/conftest.py`: fixture loaders + the `CLOSED_FIXTURES` / `OPEN_FIXTURES`
