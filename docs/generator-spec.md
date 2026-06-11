@@ -4,9 +4,9 @@
 gate passes** (`test_synth_diagonal_full_belt_2x4`: 8-pair diagonal on
 Foundation_2x4, 32/32 edges, validates + interprets with hops). Row model +
 feedback loop landed, hop direction constraints landed, A\* heuristic landed
-(3.9× routing speedup). WP-J done. WP-K done. WP-L landed. WP-H landed.
-Scaling plan: §2a (architecture) + WP-I…WP-M (§7.2) — negotiated-congestion
-routing for dense platforms.**
+(3.9× routing speedup), multi-face port support landed. WP-J done. WP-K done.
+WP-L landed. WP-H landed. Scaling plan: §2a (architecture) + WP-I…WP-M (§7.2)
+— negotiated-congestion routing for dense platforms.**
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -148,6 +148,29 @@ regression floor. The hard target is intra-platform **place-and-route**.
   **16/16** rotator edges and **8/8** swapper edges.
   `abstract_netlist(nl)` strips coordinates from a lifted netlist for the
   solver. Accepts `forbidden` cells for WP-M feedback loop.
+  **Density constraints:** per channel, per x-bucket of width 4, the number
+  of nets whose horizontal interval covers the bucket is capped at the
+  channel height (`_covers_bucket` reifies interval-covers-bucket for
+  const/var endpoints). Row-balance objective term centers rows between the
+  source and sink channels.
+  **WP-M multi-face ports (Half Splitter gate, slice 1):** `platform_in`/
+  `platform_out` nodes may carry an optional `"face"` key (0=west, 1=south,
+  2=east, 3=north; default 3 for sources, 1 for sinks) to land on a
+  non-default platform edge. `_port_rotation_for(face, kind)` derives the
+  port entity's belt rotation — `face` for sources (the calibrated
+  into-interior direction), `(face+2)%4` for sinks (continuing outward) —
+  generalizing the old single global `port_rotation`. Extra-face ports are
+  assigned sequentially from `_edge_ports(plat, face)`, independent of the
+  row model; primary-face (3/1) ports keep the existing row-model + WP-L
+  monotone sink ordering. Verified end-to-end: a rotator with a west-face
+  (and separately east-face) sink places, routes, and lifts isomorphic.
+  **CutterDefault composes with multi-face ports out of the box:** a single
+  `CutterDefaultInternalVariant` (1-in/2-out, `_is_multi_cell` already true)
+  feeding one south-face sink and one west-face sink places, routes, lifts
+  isomorphic, and `interpret` recovers the correct `shapes.cut` east/west
+  halves on the correctly-faced sinks — no placer changes needed
+  (`tests/test_place.py::TestCutterDefault`). De-risks the Half Splitter's
+  per-lane cutter fan; `CutterSpec` + region-constrained assignment remain.
   **The placer is scaffolding** — machine placement is often a human design
   decision; the product is the router.
 - `synth.py` — spec-driven synthesis (WP-E + WP-L + WP-M). `Spec(op, platform,
@@ -498,12 +521,13 @@ the demand signal and the partial oracle. Functional spec, as stated:
   1. **Output ports are Region-constrained, not slot-pinned** (corrected
      2026-06-09 — an earlier draft of this item said `Free`, which
      over-relaxed: the side semantics *is* the spec). West-half sinks carry
-     `Region(western_faces)`, east-half sinks `Region(eastern_faces)` (§5
-     pinning levels); face purity follows from the regions being disjoint.
-     What the hand build over-specified — and what the optimizer now owns —
-     is the **slot-level assignment within each region**: which lane lands
-     on which face/slot/floor of its side. Hard `Pinned` remains available
-     for factory-integration cases.
+     `Region(western_faces)`, east-half sinks `Region(eastern_faces)` — each
+     region a named set of port-`Group`s (§5 pinning levels); face purity
+     follows from the regions being disjoint. What the hand build
+     over-specified — and what the optimizer now owns — is the **slot-level
+     assignment within each region**: which lane lands on which
+     face/slot/floor of its side. Hard `Locked` pins remain available for
+     factory-integration cases.
   2. **Single-floor + copy-paste layers is a hand convenience.** Humans build
      one floor and duplicate it because hand-routing in 3-D is miserable; the
      optimizer has no such excuse. Full 3-D routing — lifts, non-identical
@@ -520,11 +544,22 @@ the demand signal and the partial oracle. Functional spec, as stated:
 
 ### Crossing budget (cheap infeasibility check)
 
-With pinned inputs and outputs, the minimum number of route crossings is fixed
-by the permutation (its inversion count). Floors, lifts, hops, and channel
-heights give a computable crossing capacity. Compare the two **before**
-solving anything: an impossible spec is rejected with a counting argument and
-a clear message instead of a solver timeout. (Built as part of WP-M.)
+With `Locked`- or `Group`-pinned inputs and outputs, the minimum number of
+route crossings is fixed by the **group-level permutation**'s inversion count
+(slot assignment within a group is free and contributes no additional
+crossings). Floors, lifts, hops, and channel heights give a computable
+crossing capacity. Compare the two **before** solving anything: an impossible
+spec is rejected with a counting argument and a clear message instead of a
+solver timeout. (Built as part of WP-M.)
+
+**Blocked on `Group`-level sink pinning (§5):** today every sink is
+effectively `Free`, and `place()`'s sink ordering (`_trace_all_sinks` +
+left-to-right `ordered_sinks`) always reassigns sink *positions* to match
+source x-order — normalizing the placed netlist to 0 inversions regardless of
+the abstract netlist's edges. A worked test case once `Group` lands: 4 input
+groups and 4 output groups (west→east) on `Foundation_2x4`'s north/south
+faces, with input group *i* `Group`-pinned to output group `5-i` — a full
+reversal, maximal group-level crossing (6 inversions for 4 groups).
 
 ---
 
@@ -577,14 +612,35 @@ spec library and the measuring stick.
 ## 5. Open questions
 
 - Decoration detection: family/position-aware, not type-based.
-- Output-port pinning — **DECIDED (2026-06-09):** pinning is per-sink and
-  optional, three levels: `Pinned` (exact port), `Region` (any port on a
-  given face set), `Free` (any port, with **face purity** — one result kind
-  per face). The level is part of each spec's semantics — e.g. the Half
-  Splitter uses `Region` (west halves → western faces, east → eastern; the
-  side matters), not `Free`. The assignment stage (WP-L) chooses slots within
-  whatever freedom the level leaves. Remaining sub-question: the concrete
-  encoding on netlist sink nodes.
+- Output-port pinning — **DECIDED (2026-06-09), refined (2026-06-10):**
+  pinning is per-sink and optional, a four-level hierarchy where each level
+  is a relaxation of the one before it:
+  - **Locked** (was `Pinned`): exactly this port. No optimizer freedom.
+  - **Group** *(new)*: any port within this **group** — a group being the
+    platform's natural cluster of co-located, same-face ports (e.g. on
+    `Foundation_2x4` each face's ports split into 4-port groups by x/y
+    contiguity; derivable from `platforms.json`'s flat `ports` list, not yet
+    a stored field). The optimizer picks the slot within the group.
+  - **Region**: any port in any group within a *named set of groups* (e.g.
+    `western_faces` = the 2 west-face groups + the 2 west-most north-face
+    groups). The optimizer picks both group and slot.
+  - **Free**: any port on the platform, subject to **face purity** (one
+    result kind per face). `Free` ≡ `Region(all groups)`.
+
+  The level is part of each spec's semantics — e.g. the Half Splitter uses
+  `Region` (west halves → `western_faces`, east → `eastern_faces`; the side
+  matters), not `Free`. **`Group` is the new addressable unit**: it is what
+  makes a "force this group of inputs to cross to that group of outputs"
+  spec — and the crossing-budget check below — expressible at all.
+  `Free`/`Region` sinks are reordered by `place()`'s monotone sink
+  assignment, which always drives inversions to 0 and so cannot represent a
+  forced crossing.
+
+  The assignment stage (WP-L/WP-M) chooses slots (and groups, for `Region`)
+  within whatever freedom the level leaves. Remaining sub-question: the
+  concrete encoding on netlist sink nodes (likely
+  `{"pin": "locked"|"group"|"region"|"free", "target": <port|group-id|
+  region-name|None>}`).
 - Routing objective: fit-first, then compactness; how to measure vs human.
 - Icon convention mismatch (`icon:Platforms` used for both quarter and full belt);
   `BinaryVersion` meaning.
@@ -1159,16 +1215,19 @@ is one the router never negotiates.
   assignment minimizes pairwise inversions for uniform specs — most "insane"
   crossings never come into existence. Implementation: a deterministic sort in
   `synth._lower` before placement; no solver.
-- **Output-port assignment (scope added 2026-06-09):** for `Region` and
-  `Free` sinks (§5 pinning decision) the assignment stage also chooses
-  **which physical port each sink uses**, not just the ordering within
-  pinned groups. Monotone rule extends naturally: sort each result kind's
-  sinks and its candidate ports in flow order, assign k-th to k-th. For
-  `Region` sinks (the Half Splitter case) the candidate set is the region's
-  ports — nothing else to decide. Only `Free` sinks need the extra
-  kind→face step: assign whole faces to one kind (face purity) minimizing
-  total Manhattan distance from the kind's machine outputs to the face (a
-  tiny assignment problem; brute force is fine).
+- **Output-port assignment (scope added 2026-06-09, refined 2026-06-10):**
+  for `Region` and `Free` sinks (§5 pinning decision) the assignment stage
+  also chooses **which physical port each sink uses**, not just the ordering
+  within pinned groups. Monotone rule extends naturally: sort each result
+  kind's sinks and its candidate ports in flow order, assign k-th to k-th.
+  For `Region` sinks (the Half Splitter case) the candidate set is the
+  union of the region's `Group`s — nothing else to decide. Only `Free` sinks
+  need the extra kind→face step: assign whole faces to one kind (face
+  purity) minimizing total Manhattan distance from the kind's machine
+  outputs to the face (a tiny assignment problem; brute force is fine).
+  `Group`/`Locked` sinks (§5) bypass this stage entirely — their group/port
+  is fixed by the spec, not chosen here; `place()` must stop reordering them
+  via `_trace_all_sinks`.
 - **General case (defer until a real need):** interchangeable-instance groups
   on *lifted* netlists + pairwise-crossing minimization via CP-SAT (bool
   `x[i][s]` = instance i in slot s; crossing bools reified from order
@@ -1229,9 +1288,10 @@ Build **after** WP-I (it consumes PathFinder's overuse output as feedback).
   halves on `Region(eastern_faces)`; full 3-D allowed) validates + interprets
   correctly, asserting per-kind belt counts and **region membership** of
   every output port — but **not** any specific slot assignment within a
-  region. Needs: `CutterSpec`, multi-face port support, region-constrained
-  output assignment. Record belts vs the human oracle where one exists (I7,
-  tracked metric, soft target ≤ 2×).
+  region. ✅ Multi-face port support landed (`_port_rotation_for`, optional
+  `"face"` key on `platform_in`/`platform_out`). Still needs: `CutterSpec`,
+  region-constrained output assignment. Record belts vs the human oracle
+  where one exists (I7, tracked metric, soft target ≤ 2×).
 - **Done when:** both north-star gates pass end-to-end (spec → assign → place
   → route → emit → lift → interpret).
 
@@ -1252,8 +1312,9 @@ Build **after** WP-I (it consumes PathFinder's overuse output as feedback).
   sort + quotient stamping). **WP-M in progress:** row model + feedback loop
   landed; hop direction constraints landed; A\* heuristic landed (3.9×
   routing speedup); **first north-star gate passes**
-  (`test_synth_diagonal_full_belt_2x4`). Remaining: crossing budget check,
-  Half Splitter gate (CutterSpec + multi-face ports + region assignment).
+  (`test_synth_diagonal_full_belt_2x4`); multi-face port support landed.
+  Remaining: crossing budget check, Half Splitter gate (CutterSpec + region
+  assignment).
 
 ### 7.4 Test infrastructure to build first
 - `tests/conftest.py`: fixture loaders + the `CLOSED_FIXTURES` / `OPEN_FIXTURES`
