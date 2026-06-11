@@ -1,10 +1,13 @@
 # Blueprint Synthesis — Plan
 
-**Status:** Draft, updated 2026-06-11. **Both north-star gates pass.** Gate 1:
+**Status:** Draft, updated 2026-06-11. **Gate 1 passes; gate 2 is reopened at
+the representative topology — active work is WP-N (§7.2).** Gate 1:
 `test_synth_diagonal_full_belt_2x4` (8-pair diagonal on Foundation_2x4, 32/32
 edges, validates + interprets with hops). Gate 2: `test_synth_half_splitter_2x4`
-(16-lane Half Splitter on Foundation_2x4 with `hop_range=8`, 48/48 edges, 0
-unmatched legs, all 32 outputs land in their `Region` with the correct half).
+first passed at a placeholder topology (1 cutter/lane, illegal `hop_range=8`) —
+that run proved region pinning and multi-face ports, but both parameters were
+unrepresentative (blockers 1+2 below) and the test is now `xfail(strict=True)`
+at the real topology (4 cutters/lane, `hop_range=5`).
 Row model + feedback loop landed, hop direction constraints landed, A\*
 heuristic landed (3.9× routing speedup), multi-face port support landed,
 `Group`/`Locked`/`Region` sink pinning landed, `CutterSpec` landed (cutter fan
@@ -56,12 +59,41 @@ route to *both* a west-Region sink and an east-Region sink, so two lanes'
 groups can't be linearly ordered. New tests
 (`test_four_lane_four_cutters_2x4_halves_land_on_correct_sides`,
 `test_synth_half_splitter_2x4`) are marked `xfail(strict=True)` documenting
-this. **Next decision point**: fix `place.py`'s fan-out/fan-in group
-constraints to support groups with bidirectional (west+east) sinks before
-gate 2 can use the representative topology — this is placement-model work,
-not routing retuning, and is follow-up to this change.
-Scaling plan: §2a (architecture) + WP-I…WP-M (§7.2) — negotiated-congestion
+this. **Decision (2026-06-11): this is the project's core problem surfacing
+on schedule, not a regression.** The placer's fan-group constraints encode
+"routes never cross" as *hard* constraints, and the Half Splitter cannot be
+routed without crossings (every lane feeds both Regions; the human build
+needed 145 hops) — so a no-crossing model *must* prove it infeasible. The
+fix is a contract change, not a constraint patch: the placer produces a
+geometry whose **crossing demand fits routing capacity** (hops + lifts +
+channel slack), and PathFinder pays for the crossings. Full plan with
+ordered tasks: **WP-N (§7.2)** — first step is re-routing the human build's
+placement (a complete placement existence proof of exactly this instance).
+Suite state: 271 collected — 269 pass + the 2 strict xfails WP-N de-xfails.
+Scaling plan: §2a (architecture) + WP-I…WP-N (§7.2) — negotiated-congestion
 routing for dense platforms.**
+**WP-N task 1 done (2026-06-11, evidence corrected on review — see the
+correction in §7.2 task 1): single floor doesn't converge; lifts do — tasks
+3–4 target 3-D.** Re-routed the UNFINISHED Half Splitter's full topology
+(16 lanes × 4 cutters/lane, 48 nets) via PathFinder, human placement held
+fixed, `hop_range=MAX_HOP_RANGE`. The first run's "structural dead-end in
+8.4s" was an artifact of a **real product bug found during review**:
+`lift.kind()` classifies *interior* hop launchers/catchers as platform IO,
+so `route.strip_belts` keeps them and `strip_and_reroute` turns the human's
+290 hop-endpoint cells into phantom obstacles. With them stripped,
+single-floor failure is **congestion, not structure**: 124 overused cells
+at `MAX_ITERS=60` (84s); at `MAX_ITERS=300` the run instead dies on a
+`_grow_tree` self-cornering dead-end after 546s (a router-robustness wart,
+not a capacity verdict). The human's complete single-floor build keeps
+single-floor feasibility theoretically open, but the engineering decision
+stands: the lift retry converges in 1.9s (15/36 nets use a lift edge)
+*even with* the phantom obstacles still in place — 3-D is the path.
+New scope from the review: fix interior-hop stripping (position-aware
+distinction in `strip_belts`/`kind`, exactly the "interior position is
+what distinguishes a hop endpoint from platform IO" rule §2a already
+states) — required for re-routing *any* hop-bearing blueprint, independent
+of WP-N. `strip_and_reroute` also needs multi-layer `passable` +
+`lift_enabled` plumbing (task 3). Details: §7.2 WP-N task 1.
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -233,8 +265,13 @@ regression floor. The hard target is intra-platform **place-and-route**.
   every west-face (0) group + the west-most half of north-face (3) groups
   (mirrored for east/face 2), matching the hand-derived `Foundation_2x4`
   example exactly (`tests/test_place.py::TestPinnedPorts::test_half_splitter_regions_on_2x4`).
-  **The placer is scaffolding** — machine placement is often a human design
-  decision; the product is the router.
+  **Stance change (2026-06-11): the placer is on the critical path, no
+  longer scaffolding.** Its hard no-crossing constraints contradict any
+  crossing-rich spec (CP-SAT proves the representative Half Splitter
+  topology INFEASIBLE — §2a "Gate-2 blockers"). WP-N changes its contract
+  to "crossing demand ≤ routing capacity"; the router pays for crossings
+  with hops/lifts. Placement and routing now share the critical path,
+  coupled through the crossing budget.
 - `synth.py` — spec-driven synthesis (WP-E + WP-L + WP-M). `Spec(op, platform,
   throughput)` where `op` is a single operation or a tuple of operations forming
   a **series chain**: each lane's source feeds `throughput` parallel paths, each
@@ -354,9 +391,10 @@ validates + interprets)**. CLI: `just run synth rotate_180 -o out.spz2bp`.
   13 Foundation types; `place.py` reads positions from the `ports` list.
   Foundation_1x2 geometry corrected (was [1,2], now [2,1]). New types:
   Foundation_1x3, 2x3, 3x3, C5 (cross), L3 (short L), L4 (long L), S4, T4.
-- **Machine placement is often a human design decision; the product is the
-  router.** The placer validates the pipeline and will improve as the router
-  matures.
+- **Gate 2 reopened at the representative topology** (4 cutters/lane,
+  `hop_range=5`): CP-SAT placement INFEASIBLE. Root cause in §2a "Gate-2
+  blockers"; ordered fix plan in **WP-N (§7.2)**. The old "placer is
+  scaffolding" stance is retired — placement is on the critical path.
 - Machine-type breadth work (stacker WP-F, painter WP-G, full-blueprint sim
   WP-H) blocks nothing on the diagonal extractor — its machines (rotators,
   swappers, belts) are already lifted and simulated.
@@ -689,13 +727,22 @@ region-pinning proof.
 
    New tests `test_four_lane_four_cutters_2x4_halves_land_on_correct_sides`
    and `test_synth_half_splitter_2x4` (now `cutters_per_lane=4`) are marked
-   `xfail(strict=True)` recording this. **Next decision point**: extend
-   `place.py`'s fan-out/fan-in group constraints to support groups whose
-   machines route to sinks on *both* the west and east Region — e.g. split
-   each multi-cutter group into west-bound/east-bound sub-orderings, or drop
-   the cross-group total order in favor of a per-side ordering. This is
-   placement-model design work, separate from the routing-convergence
-   tuning blocker 1 anticipated.
+   `xfail(strict=True)` recording this. **Resolution plan: WP-N (§7.2).**
+   The infeasibility is not a bug to patch constraint-by-constraint: the
+   fan-group constraints encode "routes never cross" as *hard* constraints,
+   and the Half Splitter *cannot* be routed without crossings — every
+   lane's cutter bank feeds both Regions, the human build needed 145 hops
+   and stopped hand-routing at exactly the maximal-crossing hauls. A
+   no-crossing model *must* prove this spec infeasible; CP-SAT is being
+   honest about a wrong question. WP-N changes the placer's contract:
+   produce a geometry whose crossing demand fits the routing capacity
+   (hops + lifts + channel slack — the crossing budget below), and let
+   PathFinder pay for the crossings. A third structural problem found
+   while planning WP-N: the row model puts all same-stage machines in one
+   shared `row_y`, but 64 Mirrored cutters × 2 cells = 128 cells of width
+   on a 76-cell-wide `Foundation_2x4` interior — at 16 lanes the cutter
+   stage *cannot* be one row regardless of the fan-group constraints (the
+   human layout is 16 lane-columns × 4 cutters stacked vertically).
 
 ### Crossing budget (cheap infeasibility check)
 
@@ -1495,7 +1542,10 @@ Build **after** WP-I (it consumes PathFinder's overuse output as feedback).
   `Region(western_faces)`, east halves on `Region(eastern_faces)`) validates
   + interprets correctly: 0 unmatched legs, 48/48 lifted edges, all 32
   outputs land in their `Region` with the **correct half** — but **not** any
-  specific slot assignment within a region. **PASSES** (WP-M2, 2026-06-11).
+  specific slot assignment within a region. **PASSED at the placeholder
+  topology** (WP-M2, 2026-06-11: 1 cutter/lane, illegal `hop_range=8`);
+  **reopened** at the representative topology (4 cutters/lane,
+  `hop_range=5`) — now `xfail(strict=True)`, see WP-N.
   Multi-face port support, `Region` pin encoding, and `CutterSpec` +
   `synthesize_cutter()` all landed (above).
   - **WP-L's region-constrained output assignment** (choosing group *and*
@@ -1606,6 +1656,225 @@ touching PathFinder parameters. The row model degenerates gracefully for
 single-stage specs (one shared `row_y` between the two port walls) — no row
 work should be needed.
 
+#### WP-N — placement for crossing-rich topologies *(detailed handoff spec; critical path)*
+
+**Why this exists (decision 2026-06-11).** Gate 2 at the representative
+topology (16 lanes × 4 cutters/lane, `hop_range=5`) is INFEASIBLE at
+*placement* (§2a "Gate-2 blockers", blocker 2). Three structural problems,
+all consequences of one wrong contract — the placer guarantees crossing-free
+geometry via hard constraints, but the Half Splitter cannot be routed
+without crossings:
+
+1. The 2-member fan-group adjacency (`abs(m_x[a] - m_x[b]) == 1`,
+   `place.py` ~line 661) — also independently buggy: at R=1 a Mirrored
+   cutter's second cell sits *west* of its anchor, so two cutters at
+   adjacent x must overlap. This alone is the
+   `lanes=1, cutters_per_lane=2` infeasibility.
+2. The cross-group total order (`place.py` ~lines 667–690) assumes each
+   group routes onward in one direction; cutter-fan groups feed both
+   Regions, so no linear order exists.
+3. The row model: all same-stage machines share one `row_y`, but 64
+   Mirrored cutters × 2 cells = 128 cells on a 76-wide `Foundation_2x4`
+   interior — the cutter stage cannot be one row at 16 lanes. The human
+   layout is 16 lane-*columns* × 4 cutters stacked vertically.
+
+**New contract:** the placer produces a geometry whose **crossing demand
+fits the routing capacity** (hops + lifts + channel slack); PathFinder pays
+for the crossings. The crossing budget (§2a) replaces the deleted hard
+constraints as the thing that keeps the placer honest.
+
+**Key existence proof:** the human build
+(`~/Projects/shapez_2_blueprints/UNFINISHED Half Splitter.spz2bp`) is a
+*complete placement* of exactly this instance — 48 splitters + 64 cutters +
+96 mergers, single floor, every machine locally routed. When CP-SAT says
+INFEASIBLE, it is definitionally the model, not the problem. It is only a
+*partial routing* proof: 15/32 outputs (exactly the maximal-crossing hauls)
+were never routed, so single-floor routability of the full instance is
+genuinely open — that is what task 1 measures.
+
+**Tasks (in order):**
+
+1. **Decisive experiment first — re-route the human placement** (rung 3 at
+   true scale; do this *before* touching `place.py` — its outcome scopes
+   tasks 3–4). Lift the UNFINISHED Half Splitter; keep all machine
+   entities fixed; strip belts and hops (splitter/merger junctions are
+   routing primitives, so stripping removes them — PathFinder re-derives
+   fan trees as Steiner branching). The lifted netlist is missing the ~15
+   unrouted cutter→sink hauls; complete the edge set from the spec
+   topology (each cutter's west-half output → a west-Region sink, east
+   half → an east-Region sink, consistent within each lane). Route at
+   `hop_range=MAX_HOP_RANGE`, single floor. Write it as a test or script
+   under `tests/` — it is an experiment, not product code. Read the
+   outcome:
+   - **Converges** → routing capacity is proven at true scale; placement
+     only needs to reproduce a columnar lane layout; tasks 3–4 are
+     low-risk.
+   - **Doesn't converge** → single-floor capacity is insufficient and no
+     placement work alone fixes gate 2; 3-D routing (`lift_enabled=True`)
+     is sanctioned and expected (§2a spec relaxation item 2). Retry with
+     lifts; record overuse hotspots either way.
+
+   **Result (2026-06-11): doesn't converge on a single floor; converges with
+   lifts.** Implemented in `tests/wp_n_reroute_experiment.py` (not
+   pytest-collected — `uv run python tests/wp_n_reroute_experiment.py`).
+   Lifted the UNFINISHED Half Splitter (`contract_hops=True`: 16
+   platform_in / 64 machine / 32 platform_out, 160 port_edges), completed
+   the netlist with the 32 missing cutter→sink edges (8 partial lanes × 4
+   cutters, paired to the 8 unfed sinks consistent with the existing
+   west/east split — `NEW_SINK_FOR_SRC`), built 48 nets (16 fanout + 32
+   fanin, all 4-terminal), and ran `strip_and_reroute(...,
+   hop_range=MAX_HOP_RANGE, platform="Foundation_2x4")`.
+   - **Single floor: structural failure in 8.4s**, before
+     `MAX_ITERS`/congestion ever engages. `_grow_tree` raises on net 41
+     (fanin) — terminal `(43, 28, 0)` unreachable from a 46-cell tree, **0
+     overused cells**. Net 41 connects 4 cutter outputs at `x=44` (`y=26,
+     28, 30, 32`) to sink `(57, 28)` on the *east* face — **one of the 24
+     sinks the human already hand-routed**, so even topology with a
+     known-feasible hand layout isn't re-derivable by PathFinder alone on
+     one floor once all 48 nets compete for the same grid. Per
+     `_grow_tree`'s own contract this is structural (leg/connectivity
+     exhaustion), not congestion — rip-up in later iterations would not
+     have helped, hence no MAX_ITERS loop and no overused cells to record.
+   - **Retry with lifts: converges in 1.9s.** Floor 1 opened as a fully
+     passable second layer (the human build uses only floor 0; confirmed —
+     all 1562 entities are on layer 0), `RoutingGraph(lift_enabled=True)`,
+     same `hop_range=MAX_HOP_RANGE`. 15 of 36 routable nets used at least
+     one lift edge, mostly as up-then-down floor-1 "vias" past floor-0
+     leg/congestion limits.
+   - **Decision: 3-D routing is required, not merely sanctioned.** Tasks 3-4
+     must produce/consume a lift-aware routing path. `strip_and_reroute`
+     currently builds a single-layer `passable` set and doesn't expose
+     `lift_enabled` — that plumbing (multi-layer `passable`, lift emission
+     into the blueprint) is new scope for task 3, not yet built. The
+     structural bottleneck found (net 41, cells `x≈43-45, y=26-32`) is the
+     *first* one PathFinder hits in net-id order, not necessarily the only
+     one — no broader hotspot survey was run since the lift retry already
+     converged.
+
+   **Correction (2026-06-11, review).** The "structural failure, 0 overused
+   cells" reading above is wrong — it was an artifact of a product bug, not
+   a property of the instance. Found while auditing the run (a sink the
+   human hand-routed on one floor cannot be *structurally* unreachable on
+   that floor — the existence proof forbids it):
+   - **The bug:** `lift.kind()` returns `platform_in`/`platform_out` for
+     *any* `PortReceiver`/`PortSender` (`lift.py` ~line 153), so
+     `route.strip_belts` keeps the human's 145 interior launcher/catcher
+     pairs and `strip_and_reroute` registers all **290 hop-endpoint cells
+     as obstacles**. PathFinder fought a board with phantom walls the human
+     never had (flood-fill stays connected; the walls kill leg-level
+     reachability in the narrow slots, e.g. net 41's pocket). **Fix needed
+     regardless of WP-N** (any reroute of a hop-bearing blueprint inherits
+     phantom obstacles): make the strip/classify path position-aware —
+     interior position distinguishes a hop endpoint from platform IO (the
+     rule this spec already states in §2a) — e.g. strip `PortSender/
+     Receiver` entities not on the platform boundary ring. Fold into task 3
+     as item 3e.
+   - **Corrected single-floor result (hop endpoints stripped): congestion
+     failure, not structural.** `MAX_ITERS=60`: fails in 84s with **124
+     overused cells** (vs. blocker 1's 3-cell flake at quarter scale —
+     this is heavy congestion). `MAX_ITERS=300`: no convergence either;
+     dies after 546s on a different mode — `_grow_tree` corners itself
+     (net 10 fanout, terminal unreachable from its own 14-cell partial
+     tree), i.e. farthest-first growth robustness, not capacity.
+   - **Corrected interpretation.** Single-floor feasibility at true scale
+     remains *theoretically open* (the human's completed local routing is
+     a partial existence proof; the 15 long hauls were never proven
+     single-floor-routable by anyone). What is settled: the **current
+     router does not converge single-floor at this scale under either
+     failure mode, while the 2-floor lift run converges in 1.9s even with
+     the 290 phantom obstacles still in place** (a fortiori stronger once
+     they're stripped). The decision — tasks 3–4 target lift-aware 3-D —
+     stands, now for the right reasons.
+
+2. **Generalize replication** (independent of task 1; netlist-level only —
+   blocker 2's work proved lift/interpret need no changes for N-way
+   shared-node fans). Every machine runs below belt speed (machines.md
+   "Throughput"), so every op needs N machines per lane behind a 1→N
+   split / N→1 merge. Add a rate table (machine type → belt fraction;
+   cutter = 1/4) next to the op tables in `synth.py`; derive
+   `per_lane = ceil(lane_rate / machine_rate)` in spec lowering;
+   `CutterSpec.cutters_per_lane` becomes the derived default (keep the
+   explicit override for tests). Rates we have not measured go to
+   QUESTIONS.md — do not guess silently.
+
+3. **Rework the placement model** (`place.py`):
+   a. **Delete the 2-member adjacency** (problem 1 above). No
+      replacement — proximity is already rewarded by the wire-length
+      objective.
+   b. **Blocks, not rows, for replication groups.** Each fan-out group
+      (one lane's cutters) becomes a contiguous vertical block: shared
+      block `x`-interval (`lo_g`/`hi_g` from member positions), members
+      stacked in y within the stage band. Keep left-to-right ordering of
+      *blocks* by source x (`hi_g(i) <= lo_g(i+1)`) — that part is
+      correct and matches the human's columnar lanes. Drop every
+      implication from machine order to *sink* position. This subsumes
+      problem 3: relax "one `row_y` per stage" to a band of rows where a
+      stage contains blocks (the simplest encoding that admits the
+      16-column × 4-tall human layout wins; do not over-engineer).
+   c. **Scope the facing constraints.** For machine→sink edges whose sink
+      is pinned off the primary face (`Region`/`Group`/`Locked`, or any
+      sink not on `SINK_FACE`), replace "output faces toward the sink's
+      literal (x, y)" with "output faces the primary flow direction"
+      (north, under the south-flow convention). The sideways haul is the
+      router's job. Apply the same scoping to input-side facing for
+      multi-source merges if it binds.
+   d. **Crossing budget capacity side** (the §2a remaining item — now
+      load-bearing). Derive capacity empirically, as §2a already
+      prescribes: route the worked example (4-group full reversal, 6
+      inversions) plus a few more inversion counts through PathFinder on
+      `Foundation_2x4` at `hop_range=5`, single floor and with lifts;
+      read off what converges. Then gate `place()`: reject with the
+      counting-argument message when `group_inversions > capacity`.
+   e. **Routing plumbing surfaced by task 1** (in `route.py`/
+      `pathfinder.py`, small but load-bearing):
+      - **Interior-hop stripping fix** (the task-1 correction's bug):
+        `strip_belts`/`strip_and_reroute` must strip `PortSender/
+        Receiver` entities *not on the platform boundary ring* — they are
+        hop endpoints (routing), not platform IO. Add a regression test:
+        lift + strip the UNFINISHED Half Splitter and assert no interior
+        `BeltPort*` entity survives, and none lands in the obstacle set.
+      - **Lift-aware `strip_and_reroute`**: multi-layer `passable` set
+        (interior × available floors, minus machine cells per floor) and
+        a `lift_enabled` parameter threaded to `RoutingGraph`; lift
+        entities emitted into the blueprint (the emit path exists from
+        WP-J — `_cell_to_entity` handles lift edges).
+
+4. **De-xfail and re-gate.** Remove `xfail` from
+   `test_four_lane_four_cutters_2x4_halves_land_on_correct_sides` and
+   `test_synth_half_splitter_2x4`; run gate 2 with derived
+   `cutters_per_lane` (= 4) at `hop_range=MAX_HOP_RANGE`. If placement is
+   feasible but routing won't converge single-floor (consistent with
+   blocker 1's flakiness at a quarter of this machine count), enable
+   lifts for the gate rather than raising `MAX_ITERS`. Only once the
+   model is right, revisit blocker 1's nondeterminism (CP-SAT
+   `random_seed` for reproducible placements).
+
+5. **Housekeeping.** Full suite green, `just lint`, update §0 (status
+   header, suite counts, gate-2 line), §2a blocker text, §7.3. Record the
+   I7 metric (synthesized belts vs. the human build) — task 1 makes that
+   comparison like-for-like for the first time.
+
+**Hints / expected failure modes:**
+- If CP-SAT is still infeasible after 3a–3c, bisect by re-enabling
+  constraint families one at a time on the minimal reproducer
+  (`lanes=2, cutters_per_lane=2, Foundation_1x1` — <1 s, deterministic,
+  independent of seed).
+- Do not chase single-floor convergence by raising `MAX_ITERS`: the
+  task-1 correction measured it — 60 iters → 124 overused cells (84s),
+  300 iters → a `_grow_tree` self-cornering dead-end (546s, a net's own
+  partial tree boxes out its last terminal). If that self-cornering mode
+  shows up *with* lifts enabled, it is a router-robustness bug worth
+  fixing (restart the net's tree, or retry with a different terminal
+  order) — record it, don't tune around it.
+- Task 1's netlist completion needs lane-consistent sink pairing (a
+  cutter's two halves go to *its* lane's west/east sinks). If the lifted
+  partial netlist makes lane membership ambiguous, derive it from the
+  splitter tree each cutter hangs off (contracted edges still connect
+  `platform_in` → cutter).
+- Do not weaken I4/I5 (round-trip isomorphism, physical validation) to
+  make the gate pass; if a task appears to conflict with an invariant,
+  stop and record it in QUESTIONS.md instead.
+
 ### 7.3 Sequencing & dependencies
 - **Critical path:** A → B → C → D → E, each gated by the prior's invariant.
 - A and B are cheap and unblock everything — done.
@@ -1616,9 +1885,13 @@ work should be needed.
 - F / G / H run in parallel whenever a stacker / painter / confidence need
   arises; none block the diagonal-extractor north star.
 - New deps (§6): A/H add `networkx`; D adds `OR-Tools`. Nothing else.
-- **Scaling arc (2026-06-10): ~~I~~ ✓ → {~~J~~ ✓, ~~K~~ ✓, ~~L~~ ✓} → ~~M~~ ✓ →
-  north star ✅** (the Half Splitter + the 48→96 full-belt diagonal
-  extractor). WP-I done (negotiated congestion); WP-J done (lift calibration
+- **Scaling arc (updated 2026-06-11): ~~I~~ ✓ → {~~J~~ ✓, ~~K~~ ✓, ~~L~~ ✓} →
+  ~~M~~ ✓ → **N (active)** → north star** (the Half Splitter + the 48→96
+  full-belt diagonal extractor). Gate 1 passes; gate 2 is reopened at the
+  representative topology (4 cutters/lane, legal `hop_range=5`) — CP-SAT
+  placement INFEASIBLE, see WP-N for the ordered fix plan (re-route the
+  human placement first, then replication generalization, then the
+  placement-model rework). WP-I done (negotiated congestion); WP-J done (lift calibration
   + 3-D tracing + lift edges in PathFinder); WP-K done (hop tracer + router);
   WP-L done (monotone sort + quotient stamping). **WP-M done:** row model +
   feedback loop landed; hop direction constraints landed; A\* heuristic
@@ -1630,10 +1903,10 @@ work should be needed.
   cutter variant, `CutterSpec.validate()` region-capacity check, the 16-lane
   gate-2 test, a `_grow_tree` no-hop fallback (fixes a routing-unreachability
   bug under heavy congestion), and a monotone `_assign_ports` (fixes crossed
-  west/east-half assignments). **Both north-star gates pass**
-  (`test_synth_diagonal_full_belt_2x4`, `test_synth_half_splitter_2x4`).
-  Remaining (not gate-blocking): crossing budget check (capacity side),
-  WP-L's region-internal flow ordering.
+  west/east-half assignments — both against the now-superseded placeholder
+  topology). The crossing budget's capacity side is folded into WP-N task
+  3d (now load-bearing); WP-L's region-internal flow ordering remains open
+  and non-blocking.
 
 ### 7.4 Test infrastructure to build first
 - `tests/conftest.py`: fixture loaders + the `CLOSED_FIXTURES` / `OPEN_FIXTURES`
