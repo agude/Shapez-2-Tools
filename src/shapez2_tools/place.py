@@ -178,6 +178,16 @@ def _edge_ports(plat: dict, rotation: int) -> list[tuple[int, int]]:
     return sorted((x, y) for x, y, r in plat["ports"] if r == rotation)
 
 
+def _port_rotation_for(face: int, kind: str) -> int:
+    """Belt rotation for a port entity on the given platform face.
+
+    ``platforms.json``'s per-port rotation is the direction a *source* on
+    that face points to feed the interior. A sink on the same face continues
+    that flow outward, i.e. the opposite (180°) rotation.
+    """
+    return face if kind == "platform_in" else (face + 2) % 4
+
+
 def place(
     abstract: dict,
     platform: str,
@@ -203,8 +213,10 @@ def place(
     y_min, y_max = border, grid_h - border - 1
 
     # Port positions from the calibrated ports list.
-    # Convention: sources on the north wall (R=3, items flow south into the
-    # platform), sinks on the south wall (R=1, items exit south).
+    # Convention: sources default to the north wall (face 3, items flow south
+    # into the platform), sinks default to the south wall (face 1, items exit
+    # south). Abstract nodes may set a "face" key (0=west, 1=south, 2=east,
+    # 3=north) to land on a different platform edge (WP-M multi-face ports).
     source_ports = _edge_ports(plat, 3)
     sink_ports = _edge_ports(plat, 1)
     input_y = source_ports[0][1]
@@ -213,20 +225,41 @@ def place(
     # Index nodes by id.
     node_by_id: dict[str, dict] = {n["id"]: n for n in abstract["nodes"]}
 
-    # Separate sources, sinks, and machines.
-    sources = [n for n in abstract["nodes"] if n["kind"] == "platform_in"]
-    sinks = [n for n in abstract["nodes"] if n["kind"] == "platform_out"]
+    # Separate sources, sinks, and machines. Sources/sinks on the primary
+    # faces (3 / 1) drive the row model and WP-L monotone sink ordering;
+    # sources/sinks pinned to other faces are assigned ports independently,
+    # in node order.
+    all_sources = [n for n in abstract["nodes"] if n["kind"] == "platform_in"]
+    all_sinks = [n for n in abstract["nodes"] if n["kind"] == "platform_out"]
     machines = [n for n in abstract["nodes"] if n["kind"] == "machine"]
 
-    # Assign port positions from the actual port list, left to right.
-    # To avoid route crossings, order sinks to match the source ordering:
-    # trace each source → machines → sink chain, then assign the sink that
-    # a leftmost source feeds to the leftmost sink port, etc.
-    port_rotation = _port_rotation(input_y, output_y)
+    sources = [n for n in all_sources if n.get("face", 3) == 3]
+    sinks = [n for n in all_sinks if n.get("face", 1) == 1]
+    extra_sources = [n for n in all_sources if n.get("face", 3) != 3]
+    extra_sinks = [n for n in all_sinks if n.get("face", 1) != 1]
 
-    src_positions: dict[str, tuple[int, int]] = {}
+    port_pos: dict[str, tuple[int, int]] = {}
+    port_rot: dict[str, int] = {}
+
+    # Extra-face ports: assign sequentially from that face's port list.
+    extra_face_next: dict[int, int] = defaultdict(int)
+    for n in extra_sources + extra_sinks:
+        face = n["face"]
+        ports = _edge_ports(plat, face)
+        port_pos[n["id"]] = ports[extra_face_next[face]]
+        extra_face_next[face] += 1
+        port_rot[n["id"]] = _port_rotation_for(face, n["kind"])
+
+    # Assign primary-face port positions from the actual port list, left to
+    # right. To avoid route crossings, order sinks to match the source
+    # ordering: trace each source → machines → sink chain, then assign the
+    # sink that a leftmost source feeds to the leftmost sink port, etc.
+    primary_src_rot = _port_rotation_for(3, "platform_in")
+    primary_sink_rot = _port_rotation_for(1, "platform_out")
+
     for i, src in enumerate(sources):
-        src_positions[src["id"]] = source_ports[i]
+        port_pos[src["id"]] = source_ports[i]
+        port_rot[src["id"]] = primary_src_rot
 
     # Build the src → sink mapping by tracing through machine edges.
     edge_out: dict[str, list[str]] = {}
@@ -234,7 +267,7 @@ def place(
         edge_out.setdefault(sid, []).append(did)
 
     def _trace_all_sinks(src_id: str) -> list[str]:
-        """BFS from src through machines, return all reachable sink ids."""
+        """BFS from src through machines, return reachable primary-face sinks."""
         visited: set[str] = set()
         frontier = [src_id]
         found: list[str] = []
@@ -245,7 +278,8 @@ def place(
             visited.add(nid)
             n = node_by_id[nid]
             if n["kind"] == "platform_out":
-                found.append(nid)
+                if n.get("face", 1) == 1:
+                    found.append(nid)
                 continue
             for child in edge_out.get(nid, []):
                 frontier.append(child)
@@ -256,7 +290,7 @@ def place(
     # one source may reach multiple sinks; BFS visits them in edge order so
     # the leftmost source's reachable sinks fill leftmost port slots first.
     ordered_sinks: list[str] = []
-    src_by_x = sorted(sources, key=lambda s: src_positions[s["id"]][0])
+    src_by_x = sorted(sources, key=lambda s: port_pos[s["id"]][0])
     seen_sinks: set[str] = set()
     for src in src_by_x:
         for sink_id in _trace_all_sinks(src["id"]):
@@ -267,12 +301,12 @@ def place(
         if sink["id"] not in seen_sinks:
             ordered_sinks.append(sink["id"])
 
-    sink_positions: dict[str, tuple[int, int]] = {}
     for i, sink_id in enumerate(ordered_sinks):
-        sink_positions[sink_id] = sink_ports[i]
+        port_pos[sink_id] = sink_ports[i]
+        port_rot[sink_id] = primary_sink_rot
 
     if not machines:
-        return _build_netlist(abstract, src_positions, sink_positions, {}, port_rotation)
+        return _build_netlist(abstract, port_pos, port_rot, {})
 
     # --- Stage computation (WP-M row model) ---
     stages = _compute_stages(abstract)
@@ -347,7 +381,7 @@ def place(
         flat_positions.append(flat2)
 
     # Also exclude port positions from ALL occupied cells.
-    for pos in list(src_positions.values()) + list(sink_positions.values()):
+    for pos in port_pos.values():
         fixed_flat = pos[0] * h + pos[1]
         for fp in flat_positions:
             model.add(fp != fixed_flat)
@@ -367,9 +401,7 @@ def place(
     # nets whose horizontal interval covers the bucket must not exceed the
     # channel height (classic channel-routing density).
     if input_y > output_y:
-        all_px = [x for x, _ in src_positions.values()] + [
-            x for x, _ in sink_positions.values()
-        ]
+        all_px = [x for x, _ in port_pos.values()]
         bkt_lo = min(x_min, *all_px)
         bkt_hi = max(x_max, *all_px)
         n_bkt = (bkt_hi - bkt_lo + _BUCKET_WIDTH) // _BUCKET_WIDTH + 1
@@ -382,8 +414,8 @@ def place(
         ch_edges: dict[int, list[tuple]] = defaultdict(list)
         for sid, did in abstract["edges"]:
             sn, dn = node_by_id[sid], node_by_id[did]
-            xs = _node_x(sid, sn, src_positions, sink_positions, m_x, model)
-            xd = _node_x(did, dn, src_positions, sink_positions, m_x, model)
+            xs = _node_x(sid, sn, port_pos, m_x, model)
+            xd = _node_x(did, dn, port_pos, m_x, model)
             if sn["kind"] == "platform_in":
                 ci = 0
             elif sn["kind"] == "machine":
@@ -431,8 +463,8 @@ def place(
         if src_node["kind"] == "machine":
             sx = m_x[src_id]
             sy = m_y[src_id]
-            dx = _node_x(dst_id, dst_node, src_positions, sink_positions, m_x, model)
-            dy = _node_y(dst_id, dst_node, src_positions, sink_positions, m_y, model)
+            dx = _node_x(dst_id, dst_node, port_pos, m_x, model)
+            dy = _node_y(dst_id, dst_node, port_pos, m_y, model)
             _add_output_faces_toward(
                 model,
                 m_r[src_id],
@@ -451,8 +483,8 @@ def place(
         if dst_node["kind"] == "machine":
             dx2 = m_x[dst_id]
             dy2 = m_y[dst_id]
-            sx2 = _node_x(src_id, src_node, src_positions, sink_positions, m_x, model)
-            sy2 = _node_y(src_id, src_node, src_positions, sink_positions, m_y, model)
+            sx2 = _node_x(src_id, src_node, port_pos, m_x, model)
+            sy2 = _node_y(src_id, src_node, port_pos, m_y, model)
             _add_output_faces_toward(
                 model,
                 m_r[dst_id],
@@ -502,7 +534,7 @@ def place(
     src_x_for_id: dict[str, int] = {}
     for sid in fanout_src_ids:
         fanout_by_src[sid] = [m for m in fan_out_groups[sid] if node_by_id[m]["kind"] == "machine"]
-        src_x_for_id[sid] = src_positions[sid][0]
+        src_x_for_id[sid] = port_pos[sid][0]
     sorted_src_ids = sorted(fanout_src_ids, key=lambda s: src_x_for_id[s])
 
     for i in range(len(sorted_src_ids) - 1):
@@ -520,10 +552,10 @@ def place(
         src_node = node_by_id[src_id]
         dst_node = node_by_id[dst_id]
 
-        sx = _node_x(src_id, src_node, src_positions, sink_positions, m_x, model)
-        sy = _node_y(src_id, src_node, src_positions, sink_positions, m_y, model)
-        dx = _node_x(dst_id, dst_node, src_positions, sink_positions, m_x, model)
-        dy = _node_y(dst_id, dst_node, src_positions, sink_positions, m_y, model)
+        sx = _node_x(src_id, src_node, port_pos, m_x, model)
+        sy = _node_y(src_id, src_node, port_pos, m_y, model)
+        dx = _node_x(dst_id, dst_node, port_pos, m_x, model)
+        dy = _node_y(dst_id, dst_node, port_pos, m_y, model)
 
         abs_dx = model.new_int_var(0, grid_w, f"spc_adx_{ei}")
         abs_dy = model.new_int_var(0, grid_h, f"spc_ady_{ei}")
@@ -539,10 +571,10 @@ def place(
         src_node = node_by_id[src_id]
         dst_node = node_by_id[dst_id]
 
-        sx = _node_x(src_id, src_node, src_positions, sink_positions, m_x, model)
-        sy = _node_y(src_id, src_node, src_positions, sink_positions, m_y, model)
-        dx = _node_x(dst_id, dst_node, src_positions, sink_positions, m_x, model)
-        dy = _node_y(dst_id, dst_node, src_positions, sink_positions, m_y, model)
+        sx = _node_x(src_id, src_node, port_pos, m_x, model)
+        sy = _node_y(src_id, src_node, port_pos, m_y, model)
+        dx = _node_x(dst_id, dst_node, port_pos, m_x, model)
+        dy = _node_y(dst_id, dst_node, port_pos, m_y, model)
 
         abs_dx = model.new_int_var(0, grid_w, f"adx_{src_id}_{dst_id}")
         abs_dy = model.new_int_var(0, grid_h, f"ady_{src_id}_{dst_id}")
@@ -595,7 +627,7 @@ def place(
             solver.value(m_r[mid]),
         )
 
-    return _build_netlist(abstract, src_positions, sink_positions, machine_positions, port_rotation)
+    return _build_netlist(abstract, port_pos, port_rot, machine_positions)
 
 
 def _add_output_faces_toward(
@@ -637,30 +669,15 @@ def _add_output_faces_toward(
     model.add(prod_x + prod_y >= 1)
 
 
-def _port_rotation(input_y: int, output_y: int) -> int:
-    """Determine port rotation from the platform's port Y positions.
-
-    Sources at a higher y feed downward (south); the convention in the rotator
-    corpus is R=3 for both sources and sinks on platforms where input_y > output_y.
-    """
-    if input_y > output_y:
-        return 3
-    return 1
-
-
-def _node_x(nid, node, src_pos, sink_pos, m_x, model):
-    if node["kind"] == "platform_in":
-        return src_pos[nid][0]
-    if node["kind"] == "platform_out":
-        return sink_pos[nid][0]
+def _node_x(nid, node, port_pos, m_x, model):
+    if node["kind"] in ("platform_in", "platform_out"):
+        return port_pos[nid][0]
     return m_x[nid]
 
 
-def _node_y(nid, node, src_pos, sink_pos, m_y, model):
-    if node["kind"] == "platform_in":
-        return src_pos[nid][1]
-    if node["kind"] == "platform_out":
-        return sink_pos[nid][1]
+def _node_y(nid, node, port_pos, m_y, model):
+    if node["kind"] in ("platform_in", "platform_out"):
+        return port_pos[nid][1]
     return m_y[nid]
 
 
@@ -689,10 +706,9 @@ def _assign_ports(
 
 def _build_netlist(
     abstract: dict,
-    src_positions: dict[str, tuple[int, int]],
-    sink_positions: dict[str, tuple[int, int]],
+    port_pos: dict[str, tuple[int, int]],
+    port_rot: dict[str, int],
     machine_positions: dict[str, tuple[int, int, int]],
-    port_rotation: int,
 ) -> lift.Netlist:
     """Assemble a concrete Netlist from solver results."""
     node_by_id = {n["id"]: n for n in abstract["nodes"]}
@@ -700,7 +716,7 @@ def _build_netlist(
     pos_for_id: dict[str, tuple[int, int]] = {}
     nodes: dict[tuple[int, int], lift.Node] = {}
 
-    for nid, pos in src_positions.items():
+    for nid, pos in port_pos.items():
         pos_for_id[nid] = pos
         n = node_by_id[nid]
         nodes[pos] = lift.Node(
@@ -708,20 +724,8 @@ def _build_netlist(
             y=pos[1],
             layer=0,
             type=n["type"],
-            kind="platform_in",
-            rotation=port_rotation,
-        )
-
-    for nid, pos in sink_positions.items():
-        pos_for_id[nid] = pos
-        n = node_by_id[nid]
-        nodes[pos] = lift.Node(
-            x=pos[0],
-            y=pos[1],
-            layer=0,
-            type=n["type"],
-            kind="platform_out",
-            rotation=port_rotation,
+            kind=n["kind"],
+            rotation=port_rot[nid],
         )
 
     for nid, (x, y, r) in machine_positions.items():
