@@ -57,6 +57,8 @@ class Net:
     root: Cell
     terminals: list[Cell]
     root_offset: bool = False
+    root_approach: tuple[int, int] | None = None
+    terminal_exit: dict[Cell, tuple[int, int]] = field(default_factory=dict)
     tree_cells: set[Cell] = field(default_factory=set)
     tree_edges: list[tuple[Cell, Cell]] = field(default_factory=list)
     hop_edges: set[tuple[Cell, Cell]] = field(default_factory=set)
@@ -117,12 +119,15 @@ def _grow_tree(
     cell_out: dict[Cell, int] = defaultdict(int)
     hop_cells: set[Cell] = set()
     lift_cells: set[Cell] = set()
+    cell_approach: dict[Cell, tuple[int, int]] = {}
 
     # When the root was offset from its port cell, a boundary edge will be
     # appended after routing. Pre-seed the incoming count so the root can
     # legally become a splitter (1,2)/(1,3) or merger (2,1)/(3,1).
     if net.root_offset:
         cell_in[root] = 1
+    if net.root_approach is not None:
+        cell_approach[root] = net.root_approach
 
     for terminal in terminals:
         if terminal in tree_cells:
@@ -167,6 +172,16 @@ def _grow_tree(
                     continue
                 if nb in tree_cells and nb != terminal:
                     continue
+                # Hop receiver exit constraint: a cell reached via a hop
+                # must exit in the hop direction (straight through).
+                if cell in prev:
+                    p = prev[cell]
+                    md = abs(cell[0] - p[0]) + abs(cell[1] - p[1])
+                    if md > 1:
+                        ux = (1 if cell[0] > p[0] else -1) if cell[0] != p[0] else 0
+                        uy = (1 if cell[1] > p[1] else -1) if cell[1] != p[1] else 0
+                        if (nb[0] - cell[0], nb[1] - cell[1]) != (ux, uy):
+                            continue
 
                 occ_set = graph.occ.get(nb, set())
                 overuse = max(0, len(occ_set - {net.net_id}) + 1 - 1)
@@ -182,26 +197,51 @@ def _grow_tree(
 
             if graph.hop_range > 0:
                 cx, cy, cl = cell
-                for dx, dy in ((1, 0), (0, 1), (-1, 0), (0, -1)):
-                    for hdist in range(2, graph.hop_range + 1):
-                        nb = (cx + dx * hdist, cy + dy * hdist, cl)
-                        if nb not in graph.passable:
+                # No hops from cells reached via hops (can't overlay
+                # launcher + catcher on the same cell).
+                _skip_hops = False
+                if cell in prev:
+                    p = prev[cell]
+                    if abs(cx - p[0]) + abs(cy - p[1]) > 1:
+                        _skip_hops = True
+                if _skip_hops:
+                    pass
+                else:
+                    # Sender approach constraint: the hop sender must be
+                    # fed from the direction opposite to the hop, so
+                    # approach_dir must equal the hop direction.
+                    if cell in prev:
+                        p = prev[cell]
+                        _approach = (cx - p[0], cy - p[1])
+                    elif cell in cell_approach:
+                        _approach = cell_approach[cell]
+                    else:
+                        _approach = None
+                    for dx, dy in ((1, 0), (0, 1), (-1, 0), (0, -1)):
+                        if _approach is not None and _approach != (dx, dy):
                             continue
-                        if nb in tree_cells and nb != terminal:
-                            continue
-                        occ_set = graph.occ.get(nb, set())
-                        overuse = max(0, len(occ_set - {net.net_id}) + 1 - 1)
-                        hop_base = hdist * BASE + HOP_PENALTY
-                        enter = (hop_base + graph.hist.get(nb, 0.0)) * (
-                            1 + pres_fac * overuse
-                        )
-                        new_cost = cost + enter
-                        if new_cost < dist.get(nb, float("inf")):
-                            dist[nb] = new_cost
-                            prev[nb] = cell
-                            heapq.heappush(
-                                pq, (new_cost, nb[1], nb[0], nb[2], nb)
+                        for hdist in range(2, graph.hop_range + 1):
+                            nb = (cx + dx * hdist, cy + dy * hdist, cl)
+                            if nb not in graph.passable:
+                                continue
+                            if nb in tree_cells and nb != terminal:
+                                continue
+                            te = net.terminal_exit.get(nb)
+                            if te is not None and (dx, dy) != te:
+                                continue
+                            occ_set = graph.occ.get(nb, set())
+                            overuse = max(0, len(occ_set - {net.net_id}) + 1 - 1)
+                            hop_base = hdist * BASE + HOP_PENALTY
+                            enter = (hop_base + graph.hist.get(nb, 0.0)) * (
+                                1 + pres_fac * overuse
                             )
+                            new_cost = cost + enter
+                            if new_cost < dist.get(nb, float("inf")):
+                                dist[nb] = new_cost
+                                prev[nb] = cell
+                                heapq.heappush(
+                                    pq, (new_cost, nb[1], nb[0], nb[2], nb)
+                                )
 
             if graph.lift_enabled:
                 cx, cy, cl = cell
@@ -244,12 +284,21 @@ def _grow_tree(
         prev_cell = seed_cell
         for pc in path:
             tree_edges.append((prev_cell, pc))
+            dx = pc[0] - prev_cell[0]
+            dy = pc[1] - prev_cell[1]
+            md = abs(dx) + abs(dy)
             if pc[2] != prev_cell[2]:
                 lift_cells.add(prev_cell)
                 lift_cells.add(pc)
-            elif abs(pc[0] - prev_cell[0]) + abs(pc[1] - prev_cell[1]) > 1:
+            elif md > 1:
                 hop_cells.add(prev_cell)
                 hop_cells.add(pc)
+            if md == 1:
+                cell_approach[pc] = (dx, dy)
+            elif md > 1 and pc[2] == prev_cell[2]:
+                ux = (1 if dx > 0 else -1) if dx != 0 else 0
+                uy = (1 if dy > 0 else -1) if dy != 0 else 0
+                cell_approach[pc] = (ux, uy)
             cell_out[prev_cell] += 1
             cell_in[pc] += 1
             tree_cells.add(pc)
@@ -677,6 +726,7 @@ def strip_and_reroute(
                 if new_root in passable:
                     net.root = new_root
                     net.root_offset = True
+                    net.root_approach = d
             new_terms = []
             for tx, ty, tl in net.terminals:
                 orig = (tx, ty, tl)
@@ -686,6 +736,7 @@ def strip_and_reroute(
                     if new_t in passable:
                         port_of_term[net.net_id].append((new_t, orig))
                         new_terms.append(new_t)
+                        net.terminal_exit[new_t] = (-d[0], -d[1])
                     else:
                         new_terms.append(orig)
                 else:
@@ -698,6 +749,7 @@ def strip_and_reroute(
                 if new_root in passable:
                     net.root = new_root
                     net.root_offset = True
+                    net.root_approach = d
             new_terms = []
             for tx, ty, tl in net.terminals:
                 orig = (tx, ty, tl)
@@ -707,6 +759,7 @@ def strip_and_reroute(
                     if new_t in passable:
                         port_of_term[net.net_id].append((new_t, orig))
                         new_terms.append(new_t)
+                        net.terminal_exit[new_t] = (-d[0], -d[1])
                     else:
                         new_terms.append(orig)
                 else:

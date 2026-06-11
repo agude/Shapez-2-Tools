@@ -747,3 +747,33 @@ class TestRowPlacement:
         out_shapes = {str(s) for s in outputs.values()}
         assert "Ru--Ru--" in out_shapes
         assert "--Ru--Ru" in out_shapes
+
+    def test_synth_diagonal_full_belt_2x4(self):
+        """North-star gate: 8-pair diagonal on Foundation_2x4 with hops."""
+        from shapez2_tools import interpret
+
+        spec = DiagonalSpec(pairs=8, platform="Foundation_2x4")
+        result = synthesize_diagonal(spec, hop_range=4)
+        assert lift.validate(result) == []
+
+        nl = lift.trace_layer(result, 0, contract_hops=True)
+        assert len(nl.edges) == 32
+
+        srcs = sorted(
+            [(p, n) for p, n in nl.nodes.items() if n.kind == "platform_in"],
+            key=lambda pn: pn[0][0],
+        )
+        assert len(srcs) == 16
+
+        north = Shape.parse("Ru----Ru")
+        south = Shape.parse("--RuRu--")
+        inputs = {}
+        for i, (pos, _) in enumerate(srcs):
+            inputs[pos] = north if i % 2 == 0 else south
+
+        outputs = interpret.interpret(nl, inputs)
+        assert len(outputs) == 16
+
+        out_shapes = {str(s) for s in outputs.values()}
+        assert "Ru--Ru--" in out_shapes
+        assert "--Ru--Ru" in out_shapes

@@ -223,6 +223,14 @@ def _resolve_hops(
                 receivers_by_pos[pos] = pos
                 receiver_rotations[pos] = e.rotation
 
+    # Sort senders so that within each facing direction, the sender whose
+    # items reach receivers first is processed first.  For west-facing hops
+    # (dx=-1), the easternmost sender launches first; sort key = dx*x + dy*y
+    # ascending naturally handles all four directions.
+    senders.sort(
+        key=lambda s: (s.rotation, _DIR_VEC[s.rotation][0] * s.x + _DIR_VEC[s.rotation][1] * s.y)
+    )
+
     pairs: list[tuple[tuple[int, int], tuple[int, int]]] = []
     used_receivers: set[tuple[int, int]] = set()
     for s in senders:
