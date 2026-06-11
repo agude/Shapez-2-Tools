@@ -4,9 +4,10 @@
 gate passes** (`test_synth_diagonal_full_belt_2x4`: 8-pair diagonal on
 Foundation_2x4, 32/32 edges, validates + interprets with hops). Row model +
 feedback loop landed, hop direction constraints landed, A\* heuristic landed
-(3.9× routing speedup), multi-face port support landed. WP-J done. WP-K done.
-WP-L landed. WP-H landed. Scaling plan: §2a (architecture) + WP-I…WP-M (§7.2)
-— negotiated-congestion routing for dense platforms.**
+(3.9× routing speedup), multi-face port support landed, `Group`/`Locked`
+sink pinning landed. WP-J done. WP-K done. WP-L landed. WP-H landed. Scaling
+plan: §2a (architecture) + WP-I…WP-M (§7.2) — negotiated-congestion routing
+for dense platforms.**
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -552,14 +553,20 @@ crossing capacity. Compare the two **before** solving anything: an impossible
 spec is rejected with a counting argument and a clear message instead of a
 solver timeout. (Built as part of WP-M.)
 
-**Blocked on `Group`-level sink pinning (§5):** today every sink is
-effectively `Free`, and `place()`'s sink ordering (`_trace_all_sinks` +
-left-to-right `ordered_sinks`) always reassigns sink *positions* to match
-source x-order — normalizing the placed netlist to 0 inversions regardless of
-the abstract netlist's edges. A worked test case once `Group` lands: 4 input
-groups and 4 output groups (west→east) on `Foundation_2x4`'s north/south
-faces, with input group *i* `Group`-pinned to output group `5-i` — a full
-reversal, maximal group-level crossing (6 inversions for 4 groups).
+**`Group`/`Locked` sink pinning landed (2026-06-10) — unblocked.**
+`place._assign_pinned_ports` honors `Locked`/`Group` pins independent of the
+Free monotone reorder (`_trace_all_sinks` now skips already-pinned sinks); the
+worked example — 4 input groups and 4 output groups (west→east) on
+`Foundation_2x4`'s north/south faces, input group *i* `Group`-pinned to output
+group `3-i` (0-indexed: a full reversal) — places correctly and
+`group_inversions` reports 6 inversions for 4 groups
+(`tests/test_place.py::TestPinnedPorts`). **Still needed for the check
+itself:** the *capacity* side (floors/lifts/hops/channel-slack →
+crossing-capacity number) and the `reject if inversions > capacity` gate with
+its counting-argument message. No formula for capacity has been derived yet —
+do this by routing the worked example above (and a few more inversion counts)
+through PathFinder and reading off how many simultaneous crossings a
+`Foundation_2x4` interior actually sustains, rather than guessing.
 
 ---
 
@@ -637,10 +644,22 @@ spec library and the measuring stick.
   forced crossing.
 
   The assignment stage (WP-L/WP-M) chooses slots (and groups, for `Region`)
-  within whatever freedom the level leaves. Remaining sub-question: the
-  concrete encoding on netlist sink nodes (likely
-  `{"pin": "locked"|"group"|"region"|"free", "target": <port|group-id|
-  region-name|None>}`).
+  within whatever freedom the level leaves.
+
+  **Encoding — `Locked`/`Group` landed (2026-06-10):** a `platform_in`/
+  `platform_out` node carries `{"pin": "locked"|"group", "target": ...}`.
+  `target` is `(x, y)` for `locked` (an exact port position) or
+  `(face, group_index)` for `group` (any slot within that group, assigned in
+  node order). Nodes without a `"pin"` key are `Free` (existing monotone
+  behaviour, unchanged). `place._assign_pinned_ports` handles both;
+  `place._port_groups(plat, face)` derives groups as consecutive runs of 4
+  ports from `platforms.json`'s flat `ports` list (one group per platform
+  unit-edge — verified 4/4/4/4 on `Foundation_2x4`'s south face, 1 group of 4
+  on every `Foundation_1x1` face). `place.group_inversions(pairs)` counts
+  inversions in a source-group → sink-group permutation (the §2a worked
+  example: full reversal of 4 groups = 6 inversions). `Region` (`target` =
+  named set of group-ids) and the `Free`-sink kind→face assignment remain
+  open — `Region` is a thin wrapper once a region→group-id table exists.
 - Routing objective: fit-first, then compactness; how to measure vs human.
 - Icon convention mismatch (`icon:Platforms` used for both quarter and full belt);
   `BinaryVersion` meaning.
@@ -1279,10 +1298,20 @@ Build **after** WP-I (it consumes PathFinder's overuse output as feedback).
 - ✅ **North-star gate 1:** `test_synth_diagonal_full_belt_2x4` — 8-pair
   diagonal on Foundation_2x4 with hop\_range=4, 32/32 edges, validates +
   interprets to correct diagonals on all 16 lanes. **PASSES.**
+- ✅ **`Group`/`Locked` sink pinning (§5):** `place._assign_pinned_ports`
+  (pin = `"locked"` → exact `(x, y)`, `"group"` → `(face, group_index)`,
+  next free slot in node order); `place._port_groups(plat, face)` chunks
+  `platforms.json`'s `ports` list into 4-port groups; `_trace_all_sinks`
+  skips already-pinned sinks so the Free monotone reorder no longer
+  normalizes pinned nets to 0 inversions. `place.group_inversions(pairs)`
+  counts the group-level permutation's inversions. §2a worked example (4
+  groups, full reversal → 6 inversions) verified
+  (`tests/test_place.py::TestPortGroups`, `TestGroupInversions`,
+  `TestPinnedPorts`, 7 new tests).
 - **Crossing budget check (§2a):** before solving, compare the pinned
-  permutation's inversion count against total crossing capacity
-  (floors + hops + channel slack); reject infeasible specs with a counting
-  message.
+  permutation's inversion count (now computable, see above) against total
+  crossing capacity (floors + hops + channel slack); reject infeasible specs
+  with a counting message. **Capacity side not yet derived** — see §2a.
 - **North-star gate 2:** `test_synth_half_splitter_2x4` — the Half Splitter
   (§2a: 48 in south, cut, west halves out on `Region(western_faces)`, east
   halves on `Region(eastern_faces)`; full 3-D allowed) validates + interprets
@@ -1312,8 +1341,9 @@ Build **after** WP-I (it consumes PathFinder's overuse output as feedback).
   sort + quotient stamping). **WP-M in progress:** row model + feedback loop
   landed; hop direction constraints landed; A\* heuristic landed (3.9×
   routing speedup); **first north-star gate passes**
-  (`test_synth_diagonal_full_belt_2x4`); multi-face port support landed.
-  Remaining: crossing budget check, Half Splitter gate (CutterSpec + region
+  (`test_synth_diagonal_full_belt_2x4`); multi-face port support landed;
+  `Group`/`Locked` sink pinning landed. Remaining: crossing budget check
+  (capacity side), Half Splitter gate (`Region` pin + `CutterSpec` + region
   assignment).
 
 ### 7.4 Test infrastructure to build first

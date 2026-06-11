@@ -188,6 +188,70 @@ def _port_rotation_for(face: int, kind: str) -> int:
     return face if kind == "platform_in" else (face + 2) % 4
 
 
+_GROUP_SIZE = 4
+
+
+def _port_groups(plat: dict, face: int) -> list[list[tuple[int, int]]]:
+    """Partition a face's ports into groups of 4, ordered by position.
+
+    A group is the platform's natural cluster of co-located, same-face ports
+    (one per platform unit-edge) — the addressable unit for ``Group``/
+    ``Region`` pins (§5).
+    """
+    ports = _edge_ports(plat, face)
+    return [ports[i : i + _GROUP_SIZE] for i in range(0, len(ports), _GROUP_SIZE)]
+
+
+def group_inversions(pairs: list[tuple[int, int]]) -> int:
+    """Count inversions in a source-group → sink-group permutation (§2a).
+
+    ``pairs`` are ``(source_group_index, sink_group_index)``. An inversion is
+    a pair of edges whose sink-group order disagrees with their source-group
+    order — the minimum number of route crossings the placement must
+    accommodate.
+    """
+    ordered = [sink for _src, sink in sorted(pairs)]
+    return sum(
+        1
+        for i in range(len(ordered))
+        for j in range(i + 1, len(ordered))
+        if ordered[i] > ordered[j]
+    )
+
+
+def _assign_pinned_ports(
+    plat: dict, nodes: list[dict],
+) -> tuple[dict[str, tuple[int, int]], dict[str, int]]:
+    """Assign port positions for ``Locked``/``Group``-pinned nodes (§5).
+
+    A ``"group"`` pin (``target = (face, group_index)``) takes the next free
+    slot within that group, in node order. A ``"locked"`` pin
+    (``target = (x, y)``) takes that exact port position. Nodes without a
+    ``"pin"`` key (``Free``, the default) are not assigned here.
+
+    Returns ``(port_pos, port_rot)`` covering only the pinned node ids.
+    """
+    port_pos: dict[str, tuple[int, int]] = {}
+    port_rot: dict[str, int] = {}
+    face_for_port = {(x, y): r for x, y, r in plat["ports"]}
+    group_next: dict[tuple[int, int], int] = defaultdict(int)
+
+    for n in nodes:
+        pin = n.get("pin")
+        if pin == "group":
+            face, gidx = n["target"]
+            slot = group_next[(face, gidx)]
+            port_pos[n["id"]] = _port_groups(plat, face)[gidx][slot]
+            group_next[(face, gidx)] += 1
+            port_rot[n["id"]] = _port_rotation_for(face, n["kind"])
+        elif pin == "locked":
+            pos = tuple(n["target"])
+            port_pos[n["id"]] = pos
+            port_rot[n["id"]] = _port_rotation_for(face_for_port[pos], n["kind"])
+
+    return port_pos, port_rot
+
+
 def place(
     abstract: dict,
     platform: str,
@@ -217,29 +281,36 @@ def place(
     # into the platform), sinks default to the south wall (face 1, items exit
     # south). Abstract nodes may set a "face" key (0=west, 1=south, 2=east,
     # 3=north) to land on a different platform edge (WP-M multi-face ports).
-    source_ports = _edge_ports(plat, 3)
-    sink_ports = _edge_ports(plat, 1)
-    input_y = source_ports[0][1]
-    output_y = sink_ports[0][1]
+    all_source_ports = _edge_ports(plat, 3)
+    all_sink_ports = _edge_ports(plat, 1)
+    input_y = all_source_ports[0][1]
+    output_y = all_sink_ports[0][1]
 
     # Index nodes by id.
     node_by_id: dict[str, dict] = {n["id"]: n for n in abstract["nodes"]}
 
-    # Separate sources, sinks, and machines. Sources/sinks on the primary
-    # faces (3 / 1) drive the row model and WP-L monotone sink ordering;
-    # sources/sinks pinned to other faces are assigned ports independently,
-    # in node order.
     all_sources = [n for n in abstract["nodes"] if n["kind"] == "platform_in"]
     all_sinks = [n for n in abstract["nodes"] if n["kind"] == "platform_out"]
     machines = [n for n in abstract["nodes"] if n["kind"] == "machine"]
 
-    sources = [n for n in all_sources if n.get("face", 3) == 3]
-    sinks = [n for n in all_sinks if n.get("face", 1) == 1]
-    extra_sources = [n for n in all_sources if n.get("face", 3) != 3]
-    extra_sinks = [n for n in all_sinks if n.get("face", 1) != 1]
+    # Locked/Group-pinned ports (§5) are assigned first, independent of the
+    # Free ordering below.
+    port_pos, port_rot = _assign_pinned_ports(plat, all_sources + all_sinks)
+    pinned_positions = set(port_pos.values())
+    source_ports = [p for p in all_source_ports if p not in pinned_positions]
+    sink_ports = [p for p in all_sink_ports if p not in pinned_positions]
 
-    port_pos: dict[str, tuple[int, int]] = {}
-    port_rot: dict[str, int] = {}
+    # Separate the remaining (Free) sources, sinks, and machines. Sources/
+    # sinks on the primary faces (3 / 1) drive the row model and WP-L
+    # monotone sink ordering; sources/sinks pinned to other faces are
+    # assigned ports independently, in node order.
+    free_sources = [n for n in all_sources if n["id"] not in port_pos]
+    free_sinks = [n for n in all_sinks if n["id"] not in port_pos]
+
+    sources = [n for n in free_sources if n.get("face", 3) == 3]
+    sinks = [n for n in free_sinks if n.get("face", 1) == 1]
+    extra_sources = [n for n in free_sources if n.get("face", 3) != 3]
+    extra_sinks = [n for n in free_sinks if n.get("face", 1) != 1]
 
     # Extra-face ports: assign sequentially from that face's port list.
     extra_face_next: dict[int, int] = defaultdict(int)
@@ -278,7 +349,7 @@ def place(
             visited.add(nid)
             n = node_by_id[nid]
             if n["kind"] == "platform_out":
-                if n.get("face", 1) == 1:
+                if n.get("face", 1) == 1 and nid not in port_pos:
                     found.append(nid)
                 continue
             for child in edge_out.get(nid, []):

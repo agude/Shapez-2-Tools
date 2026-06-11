@@ -252,3 +252,168 @@ class TestPlaceThenRoute:
 
         assert lift.isomorphic(original, routed_nl)
         assert lift.validate(routed_bp) == []
+
+
+class TestPortGroups:
+    """§5: ports are partitioned into groups of 4 — the addressable unit for
+    ``Group``/``Region`` pins (one group per platform unit-edge)."""
+
+    def test_groups_of_four_ordered_by_position(self):
+        from shapez2_tools.place import _load_platform, _port_groups
+
+        plat = _load_platform("Foundation_2x4")
+        groups = _port_groups(plat, 1)  # south face: 16 ports = 4 groups
+
+        assert len(groups) == 4
+        assert all(len(g) == 4 for g in groups)
+        assert groups[0][-1][0] < groups[1][0][0]
+        assert groups[1][-1][0] < groups[2][0][0]
+        assert groups[2][-1][0] < groups[3][0][0]
+
+    def test_single_unit_platform_has_one_group_per_face(self):
+        from shapez2_tools.place import _load_platform, _port_groups
+
+        plat = _load_platform("Foundation_1x1")
+        for face in range(4):
+            groups = _port_groups(plat, face)
+            assert len(groups) == 1
+            assert len(groups[0]) == 4
+
+
+class TestGroupInversions:
+    """§2a: group-level permutation inversions = minimum route crossings."""
+
+    def test_identity_has_no_inversions(self):
+        from shapez2_tools.place import group_inversions
+
+        assert group_inversions([(0, 0), (1, 1), (2, 2), (3, 3)]) == 0
+
+    def test_full_reversal_of_four_groups(self):
+        """The §2a worked example: a full reversal of 4 groups = 6 inversions."""
+        from shapez2_tools.place import group_inversions
+
+        assert group_inversions([(0, 3), (1, 2), (2, 1), (3, 0)]) == 6
+
+
+class TestPinnedPorts:
+    """§5: ``Group``/``Locked`` pins place ports independent of the Free
+    monotone ordering."""
+
+    def test_locked_pin_uses_exact_port(self):
+        from shapez2_tools.place import _assign_pinned_ports, _edge_ports, _load_platform
+
+        plat = _load_platform("Foundation_1x1")
+        target = _edge_ports(plat, 0)[2]  # an arbitrary west-face port
+        nodes = [
+            {
+                "id": "snk0",
+                "type": "BeltPortSenderInternalVariant",
+                "kind": "platform_out",
+                "pin": "locked",
+                "target": target,
+            },
+        ]
+
+        port_pos, port_rot = _assign_pinned_ports(plat, nodes)
+
+        assert port_pos["snk0"] == target
+        assert port_rot["snk0"] == 2  # west-face (0) sink exits west: (0+2)%4
+
+    def test_group_pinned_full_reversal(self):
+        """§2a worked example: 4 source groups → 4 sink groups, reversed.
+
+        Each group's 4 slots are assigned in node order; sources land in
+        their target north-face group and sinks in their target south-face
+        group, with the group order reversed end to end.
+        """
+        from shapez2_tools.place import (
+            _assign_pinned_ports,
+            _load_platform,
+            _port_groups,
+            group_inversions,
+        )
+
+        plat = _load_platform("Foundation_2x4")
+        src_groups = _port_groups(plat, 3)
+        sink_groups = _port_groups(plat, 1)
+
+        nodes = []
+        for g in range(4):
+            for slot in range(4):
+                nodes.append({
+                    "id": f"src{g}_{slot}",
+                    "type": "BeltPortReceiverInternalVariant",
+                    "kind": "platform_in",
+                    "pin": "group",
+                    "target": (3, g),
+                })
+                nodes.append({
+                    "id": f"sink{g}_{slot}",
+                    "type": "BeltPortSenderInternalVariant",
+                    "kind": "platform_out",
+                    "pin": "group",
+                    "target": (1, 3 - g),
+                })
+        # One pair per group (not per slot): the group-level permutation.
+        pairs = [(g, 3 - g) for g in range(4)]
+
+        port_pos, port_rot = _assign_pinned_ports(plat, nodes)
+
+        for g in range(4):
+            for slot in range(4):
+                assert port_pos[f"src{g}_{slot}"] in src_groups[g]
+                assert port_pos[f"sink{g}_{slot}"] in sink_groups[3 - g]
+                assert port_rot[f"src{g}_{slot}"] == 3
+                assert port_rot[f"sink{g}_{slot}"] == 3
+
+        # Every slot in every group is filled exactly once.
+        assert len(set(port_pos.values())) == len(port_pos)
+
+        # Full reversal of 4 groups: 6 inversions (§2a).
+        assert group_inversions(pairs) == 6
+
+    def test_place_with_group_pinned_reversal(self):
+        """End-to-end: ``place()`` honors a group-reversed, pass-through netlist.
+
+        No machines, so this exercises only the pinned-port assignment path
+        (the ``if not machines`` early return).
+        """
+        from shapez2_tools.place import _load_platform, _port_groups, place
+
+        plat = _load_platform("Foundation_2x4")
+        src_groups = _port_groups(plat, 3)
+        sink_groups = _port_groups(plat, 1)
+        all_src_ports = {p for g in src_groups for p in g}
+        all_sink_ports = {p for g in sink_groups for p in g}
+
+        nodes = []
+        edges = []
+        for g in range(4):
+            for slot in range(4):
+                src_id = f"src{g}_{slot}"
+                sink_id = f"sink{g}_{slot}"
+                nodes.append({
+                    "id": src_id,
+                    "type": "BeltPortReceiverInternalVariant",
+                    "kind": "platform_in",
+                    "pin": "group",
+                    "target": (3, g),
+                })
+                nodes.append({
+                    "id": sink_id,
+                    "type": "BeltPortSenderInternalVariant",
+                    "kind": "platform_out",
+                    "pin": "group",
+                    "target": (1, 3 - g),
+                })
+                edges.append((src_id, sink_id))
+
+        result = place({"nodes": nodes, "edges": edges}, "Foundation_2x4")
+
+        positions = list(result.nodes.keys())
+        assert len(positions) == len(set(positions))
+
+        src_positions = {p for p, n in result.nodes.items() if n.kind == "platform_in"}
+        sink_positions = {p for p, n in result.nodes.items() if n.kind == "platform_out"}
+        assert src_positions == all_src_ports
+        assert sink_positions == all_sink_ports
