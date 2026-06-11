@@ -248,6 +248,7 @@ def _lower(
         try:
             return reroute_with_junctions(
                 stripped, placed, layer=layer, hop_range=hop_range,
+                platform=platform,
             )
         except RoutingError as err:
             if attempt == _MAX_RETRIES:

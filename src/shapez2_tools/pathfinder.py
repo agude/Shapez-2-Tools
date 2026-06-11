@@ -133,11 +133,15 @@ def _grow_tree(
         if terminal in tree_cells:
             continue
 
-        # Dijkstra from all tree cells (cost 0) to this terminal.
+        # A* from all tree cells (cost 0) to this terminal.
         # Tree cells are seeds but not intermediate expansion targets.
+        tx, ty, tl = terminal
+        def _h(c: Cell) -> float:
+            return (abs(c[0] - tx) + abs(c[1] - ty)) * BASE
+
         dist: dict[Cell, float] = {}
         prev: dict[Cell, Cell] = {}
-        pq: list[tuple[float, int, int, int, Cell]] = []
+        pq: list[tuple[float, int, int, int, float, Cell]] = []
 
         for seed in tree_cells:
             if seed in hop_cells or seed in lift_cells:
@@ -154,11 +158,11 @@ def _grow_tree(
             if candidate not in LEGAL_LEG_PATTERNS and total_legs > 0:
                 continue
             dist[seed] = 0.0
-            heapq.heappush(pq, (0.0, seed[1], seed[0], seed[2], seed))
+            heapq.heappush(pq, (_h(seed), seed[1], seed[0], seed[2], 0.0, seed))
 
         found = False
         while pq:
-            cost, _y, _x, _l, cell = heapq.heappop(pq)
+            _f, _y, _x, _l, cost, cell = heapq.heappop(pq)
 
             if cost > dist.get(cell, float("inf")):
                 continue
@@ -193,7 +197,7 @@ def _grow_tree(
                 if new_cost < dist.get(nb, float("inf")):
                     dist[nb] = new_cost
                     prev[nb] = cell
-                    heapq.heappush(pq, (new_cost, nb[1], nb[0], nb[2], nb))
+                    heapq.heappush(pq, (new_cost + _h(nb), nb[1], nb[0], nb[2], new_cost, nb))
 
             if graph.hop_range > 0:
                 cx, cy, cl = cell
@@ -240,7 +244,7 @@ def _grow_tree(
                                 dist[nb] = new_cost
                                 prev[nb] = cell
                                 heapq.heappush(
-                                    pq, (new_cost, nb[1], nb[0], nb[2], nb)
+                                    pq, (new_cost + _h(nb), nb[1], nb[0], nb[2], new_cost, nb)
                                 )
 
             if graph.lift_enabled:
@@ -261,7 +265,7 @@ def _grow_tree(
                         dist[nb] = new_cost
                         prev[nb] = cell
                         heapq.heappush(
-                            pq, (new_cost, nb[1], nb[0], nb[2], nb)
+                            pq, (new_cost + _h(nb), nb[1], nb[0], nb[2], new_cost, nb)
                         )
 
         if not found:
@@ -667,12 +671,28 @@ def build_nets(
 # ---------------------------------------------------------------------------
 
 
+def _platform_bounds(platform: str) -> tuple[int, int, int, int]:
+    """Return (min_x, max_x, min_y, max_y) for the platform's buildable interior."""
+    import json
+    from pathlib import Path
+
+    data = Path(__file__).resolve().parent.parent.parent / "data"
+    with open(data / "platforms.json") as f:
+        platforms = json.load(f)
+    plat = platforms[platform]
+    ports = plat["ports"]
+    xs = [p[0] for p in ports]
+    ys = [p[1] for p in ports]
+    return min(xs), max(xs), min(ys), max(ys)
+
+
 def strip_and_reroute(
     bp: Blueprint,
     netlist: lift.Netlist,
     layer: int = 0,
     *,
     hop_range: int = 0,
+    platform: str | None = None,
 ) -> Blueprint:
     """Strip belts and re-route via PathFinder.
 
@@ -691,12 +711,15 @@ def strip_and_reroute(
                 if dl == 0:
                     machine_cells.add((e.x + dx, e.y + dy))
 
-    # Build passable set: bounding box minus machine cells.
-    all_x = [pos[0] for pos in netlist.nodes]
-    all_y = [pos[1] for pos in netlist.nodes]
-    margin = 5
-    min_x, max_x = min(all_x) - margin, max(all_x) + margin
-    min_y, max_y = min(all_y) - margin, max(all_y) + margin
+    # Build passable set from platform bounds (preferred) or node bounding box.
+    if platform is not None:
+        min_x, max_x, min_y, max_y = _platform_bounds(platform)
+    else:
+        all_x = [pos[0] for pos in netlist.nodes]
+        all_y = [pos[1] for pos in netlist.nodes]
+        margin = 5
+        min_x, max_x = min(all_x) - margin, max(all_x) + margin
+        min_y, max_y = min(all_y) - margin, max(all_y) + margin
 
     passable: set[Cell] = set()
     for x in range(min_x, max_x + 1):
