@@ -1,11 +1,22 @@
 # Blueprint Synthesis — Plan
 
-**Status:** Draft, updated 2026-06-10. **WP-M in progress — first north-star
-gate passes** (`test_synth_diagonal_full_belt_2x4`: 8-pair diagonal on
-Foundation_2x4, 32/32 edges, validates + interprets with hops). Row model +
-feedback loop landed, hop direction constraints landed, A\* heuristic landed
-(3.9× routing speedup), multi-face port support landed, `Group`/`Locked`/
-`Region` sink pinning landed. WP-J done. WP-K done. WP-L landed. WP-H landed.
+**Status:** Draft, updated 2026-06-11. **Both north-star gates pass.** Gate 1:
+`test_synth_diagonal_full_belt_2x4` (8-pair diagonal on Foundation_2x4, 32/32
+edges, validates + interprets with hops). Gate 2: `test_synth_half_splitter_2x4`
+(16-lane Half Splitter on Foundation_2x4 with `hop_range=8`, 48/48 edges, 0
+unmatched legs, all 32 outputs land in their `Region` with the correct half).
+Row model + feedback loop landed, hop direction constraints landed, A\*
+heuristic landed (3.9× routing speedup), multi-face port support landed,
+`Group`/`Locked`/`Region` sink pinning landed, `CutterSpec` landed (cutter fan
+with `Region`-pinned west/east outputs). WP-J done. WP-K done. WP-L landed.
+WP-H landed. **South→north flow convention landed 2026-06-11** (sources south,
+sinks north — user decision, applies to every design); **WP-M2 done
+(2026-06-11)** — Mirrored cutter fan, `CutterSpec.validate()` region-capacity
+check, the 16-lane gate-2 test, and a `_grow_tree` routing-unreachability fix
+(no-hop fallback search) and `_assign_ports` monotone-matching fix (avoids
+crossed west/east-half assignments when both halves land on the same
+platform face). Working tree: 268/268 pass. Remaining: crossing budget check
+(capacity side), WP-L's region-internal flow ordering (not gate-blocking).
 Scaling plan: §2a (architecture) + WP-I…WP-M (§7.2) — negotiated-congestion
 routing for dense platforms.**
 
@@ -23,7 +34,7 @@ regression floor. The hard target is intra-platform **place-and-route**.
 
 ## 0. Status & handoff (2026-06-10)
 
-**Built and green** (260 tests pass, 0 xfail, `just test`, ruff clean):
+**Built and green** (268 tests pass, 0 xfail, `just test`, ruff clean):
 - `blueprint.py` — faithful `.spz2bp` codec.
 - `generator.py` — tile-replication generator: builds the rotator family
   (180/cw/ccw × 1×1/1×4) from one lifted tile. `Entity`, lift/stamp/build,
@@ -156,13 +167,15 @@ regression floor. The hard target is intra-platform **place-and-route**.
   source and sink channels.
   **WP-M multi-face ports (Half Splitter gate, slice 1):** `platform_in`/
   `platform_out` nodes may carry an optional `"face"` key (0=west, 1=south,
-  2=east, 3=north; default 3 for sources, 1 for sinks) to land on a
+  2=east, 3=north; default `SOURCE_FACE`=1 for sources, `SINK_FACE`=3 for
+  sinks since the 2026-06-11 south-flow convention) to land on a
   non-default platform edge. `_port_rotation_for(face, kind)` derives the
   port entity's belt rotation — `face` for sources (the calibrated
   into-interior direction), `(face+2)%4` for sinks (continuing outward) —
   generalizing the old single global `port_rotation`. Extra-face ports are
   assigned sequentially from `_edge_ports(plat, face)`, independent of the
-  row model; primary-face (3/1) ports keep the existing row-model + WP-L
+  row model; primary-face (`SOURCE_FACE`=1 south / `SINK_FACE`=3 north,
+  since 2026-06-11) ports keep the existing row-model + WP-L
   monotone sink ordering. Verified end-to-end: a rotator with a west-face
   (and separately east-face) sink places, routes, and lifts isomorphic.
   **CutterDefault composes with multi-face ports out of the box:** a single
@@ -171,7 +184,12 @@ regression floor. The hard target is intra-platform **place-and-route**.
   isomorphic, and `interpret` recovers the correct `shapes.cut` east/west
   halves on the correctly-faced sinks — no placer changes needed
   (`tests/test_place.py::TestCutterDefault`). De-risks the Half Splitter's
-  per-lane cutter fan; `CutterSpec` + region-constrained assignment remain.
+  per-lane cutter fan.
+  **`side_regions(plat)` (2026-06-10):** derives the Half Splitter's
+  `western_faces`/`eastern_faces` group lists generically for any platform —
+  every west-face (0) group + the west-most half of north-face (3) groups
+  (mirrored for east/face 2), matching the hand-derived `Foundation_2x4`
+  example exactly (`tests/test_place.py::TestPinnedPorts::test_half_splitter_regions_on_2x4`).
   **The placer is scaffolding** — machine placement is often a human design
   decision; the product is the router.
 - `synth.py` — spec-driven synthesis (WP-E + WP-L + WP-M). `Spec(op, platform,
@@ -203,7 +221,20 @@ regression floor. The hard target is intra-platform **place-and-route**.
   hop\_range=4 — the **first north-star gate**).
   CLI: `synth swap_diagonal [--pairs N] [--platform P]`.
   Reference: `data/reference/swap_diagonal_4pair_2x2.spz2bp`.
-  **41 synth tests green, 0 xfail (247 total, 0 xfail).**
+  **Cutter fan synthesis (2026-06-10):** `CutterSpec(lanes, platform)`
+  generates the per-lane `src → CutterDefault → (sink_w, sink_e)` topology,
+  with `sink_w`/`sink_e` `Region`-pinned to `side_regions(plat)`'s western/
+  eastern groups — the Half Splitter's per-lane fan + side semantics.
+  `synthesize_cutter()` lowers it through the full pipeline. Verified: 1 lane
+  on `Foundation_1x1` with `hop_range=0` (0 unmatched legs, `interpret`
+  recovers the correct west/east halves on the matching faces); **4 lanes on
+  `Foundation_2x4` with `hop_range=4`** (0 unmatched legs, all 8 sinks land
+  in their `Region` with the correct half,
+  `tests/test_synth.py::TestCutterSynthesize`); **16 lanes on
+  `Foundation_2x4` with `hop_range=8`** (north-star gate 2, 0 unmatched legs,
+  all 32 sinks land in their `Region` with the correct half,
+  `test_synth_half_splitter_2x4`, ~12-17s).
+  **268 total tests, 0 xfail.**
 - CLI: `gen`, `diff`, `show`, `lift`, `viz`, `place`, `synth`. `synth` synthesizes
   a blueprint from a spec (e.g. `synth rotate_180` or `synth rotate_cw,rotate_cw`).
   `viz` renders a blueprint as HTML/SVG (belts as directional lines,
@@ -1336,21 +1367,121 @@ Build **after** WP-I (it consumes PathFinder's overuse output as feedback).
   permutation's inversion count (now computable, see above) against total
   crossing capacity (floors + hops + channel slack); reject infeasible specs
   with a counting message. **Capacity side not yet derived** — see §2a.
-- **North-star gate 2:** `test_synth_half_splitter_2x4` — the Half Splitter
-  (§2a: 48 in south, cut, west halves out on `Region(western_faces)`, east
-  halves on `Region(eastern_faces)`; full 3-D allowed) validates + interprets
-  correctly, asserting per-kind belt counts and **region membership** of
-  every output port — but **not** any specific slot assignment within a
-  region. ✅ Multi-face port support landed (`_port_rotation_for`, optional
-  `"face"` key on `platform_in`/`platform_out`). ✅ `Region` pin encoding
-  landed (above). Still needs: `CutterSpec`, wiring `synth.py` to emit
-  `"pin": "region"` sink nodes for `western_faces`/`eastern_faces`, and
-  WP-L's region-constrained output assignment (choosing group *and* slot per
-  sink within its region — currently `_assign_pinned_ports` fills slots in
-  raw node order with no flow-based ordering). Record belts vs the human
-  oracle where one exists (I7, tracked metric, soft target ≤ 2×).
+- ✅ **North-star gate 2:** `test_synth_half_splitter_2x4` — the Half
+  Splitter (§2a: 16 in south, cut, west halves out on
+  `Region(western_faces)`, east halves on `Region(eastern_faces)`) validates
+  + interprets correctly: 0 unmatched legs, 48/48 lifted edges, all 32
+  outputs land in their `Region` with the **correct half** — but **not** any
+  specific slot assignment within a region. **PASSES** (WP-M2, 2026-06-11).
+  Multi-face port support, `Region` pin encoding, and `CutterSpec` +
+  `synthesize_cutter()` all landed (above).
+  - **WP-L's region-constrained output assignment** (choosing group *and*
+    slot per sink within its region — currently `_assign_pinned_ports` fills
+    slots in raw node order with no flow-based ordering). **Not required for
+    gate 2** (the gate asserts region membership only, not slot order).
+  - Record belts vs the human oracle where one exists (I7, tracked metric,
+    soft target ≤ 2×) — **not yet recorded**: the human's `UNFINISHED Half
+    Splitter` is a larger, multi-floor design (64 cutters) and isn't a
+    like-for-like comparison against the single-floor 16-lane gate.
 - **Done when:** both north-star gates pass end-to-end (spec → assign → place
   → route → emit → lift → interpret).
+
+#### WP-M2 — south-flow convention + Half Splitter gate *(detailed handoff spec)* — **DONE**
+
+**Design convention (user decision, 2026-06-11): items flow south → north.**
+Sources (inputs) go on the **south face (1)**, sinks (outputs) on the
+**north face (3)** — always, for every synthesized design. West/east faces
+are used only when one face's port count is insufficient: e.g. the full-lane
+stacker (a future spec: 8 full-belt inputs, 4 outputs) takes inputs on
+south+west+east and outputs on north. Encoded as `place.SOURCE_FACE = 1` /
+`place.SINK_FACE = 3`; never hardcode 1/3 elsewhere.
+
+**The gate-2 blocker was three separate problems** (diagnosed empirically
+2026-06-11; each experiment is reproducible):
+
+1. **Port capacity.** At 16 lanes the two regions consume all 32 ports on
+   faces 0+2+3 (Foundation_2x4: 8 west + 8 east + 16 north), and the old
+   convention (sources north) left zero source ports → bare `IndexError` in
+   `place()`. **Resolved by the convention flip**: sources now default to
+   the south face (16 free ports), which is also what the real Half Splitter
+   does.
+2. **Density-constraint misattribution.** The channel-capacity model charged
+   *every* `platform_in` edge to channel 0 and every machine→sink edge to a
+   row channel, bucketed by x-interval — meaningless for west/east-face or
+   pinned ports whose routes run along the platform sides, not across the
+   horizontal channels. Consequence: CP-SAT INFEASIBLE at ≥ 4 lanes with
+   south sources; with density disabled, 16 lanes routed fine (48/48 edges,
+   0 unmatched legs, 14.2 s). **Resolved in the working tree**: density now
+   counts only edges whose port endpoint is a *primary-face* port
+   (`primary_port_ids`), and channel heights are computed for both flow
+   orientations.
+3. **Half→side semantics.** With south sources the rotation constraint turns
+   every cutter to face north (R=1). The half→cell mapping is **absolute and
+   game-verified** (machines.md, `cutters_8_pinwheel.spz2bp`, all 4 rotations
+   × both variants): *anchor cell front = east half, second cell front =
+   west half*, for `Default` **and** `Mirrored`. At R=1, `Default`'s second
+   cell sits **east** of the anchor (right of flow), so the west half exits
+   on the east side and `_assign_ports`' proximity assignment wires the
+   wrong port — measured 28/32 sinks wrong at 16 lanes. `Mirrored`'s second
+   cell sits **west** at R=1 (left of flow), putting the west half on the
+   west side. The human's `UNFINISHED Half Splitter` confirms variant-mixing
+   is the intended mechanism (32 `Default` + 32 `Mirrored`). **Fix: the
+   cutter fan must use `CutterDefaultInternalVariantMirrored`** (task 1).
+   `lift._machine_footprint`, `place._is_multi_cell`, and
+   `place._second_cell_tables` already handle `Mirrored`; `interpret`'s
+   anchor-first output order is variant-independent and already correct.
+
+**Already in the working tree (2026-06-11, verified — do not redo):**
+`place.py` now has `SOURCE_FACE`/`SINK_FACE` constants; flipped defaults
+(`all_source_ports`/`all_sink_ports`, `face` key defaults, primary
+rotations, `_trace_all_sinks`); extra-face port assignment skips pinned
+positions and raises a clear error when a face is full; clear capacity
+errors replace the silent `IndexError` for primary-face sources/sinks;
+density constraints are orientation-aware (both `input_y > output_y` and
+the south-flow `else` branch) and face-aware (`primary_port_ids`). Suite
+state at handoff: 262/266 pass; the 4 failures were exactly problem 3
+(`tests/test_place.py::TestCutterDefault` ×2,
+`tests/test_synth.py::TestCutterSynthesize` halves tests ×2). All 5 tasks
+below are now done; suite state: **268/268 pass**, `just lint` clean.
+
+**Tasks (in order):**
+1. **Switch the cutter fan to the Mirrored variant.** In `synth.py`, point
+   the cutter-fan netlist at `CutterDefaultInternalVariantMirrored` (rename
+   the constant so it isn't a lie, e.g. `CUTTER_FAN_TYPE`). Fix the two
+   `TestCutterSynthesize` halves tests by re-running them (no assertion
+   changes should be needed — they assert region membership + correct half,
+   which Mirrored makes true). Rewrite the two `TestCutterDefault` placer
+   tests in `tests/test_place.py` to the new convention: south source,
+   Mirrored cutter, west-face + north-face sinks; assert the west half
+   lands on the west-face sink per the absolute mapping above.
+2. **Fix `CutterSpec.validate()`.** It counts face-3 ports for sources;
+   under the convention it must count `SOURCE_FACE` ports (import the
+   constant). Add a region-capacity check: `lanes` must not exceed the slot
+   count of either region from `side_regions(plat)`. Clear `ValueError`
+   messages for both.
+3. **Add north-star gate 2 as a test:** `test_synth_half_splitter_2x4` —
+   `CutterSpec(lanes=16, platform="Foundation_2x4")`, `hop_range=4`. Assert:
+   `validate(bp) == []`, `unmatched_legs == 0`, lifted edges == 48, all 32
+   sinks in their region with the correct half (reuse the 4-lane test's
+   structure). Expected runtime ~15 s — if that's too slow for the default
+   suite, follow whatever slow-test convention `tests/` already has, or add
+   a `slow` marker; do not silently drop the test.
+4. **Sweep stale convention references.** `CutterSpec`/
+   `netlist_from_cutter_spec` docstrings say "north-face sources"; §0 of
+   this spec and any other "sources on the north wall" text. Grep for
+   `face 3`, `north wall`, `north-face source`.
+5. **Re-verify the ladder + housekeeping.** Full suite green, `just lint`,
+   update §0 (status header, test counts, gate-2 line) and §7.3. Optionally
+   record the I7 metric: belts in the synthesized 16-lane Half Splitter vs
+   the human build.
+
+**Hints / expected failure modes:** if halves are still wrong on a few
+lanes after task 1, suspect `_assign_ports` proximity ties (the two output
+cells equidistant from a sink) — inspect the tie-break, don't touch the
+calibration tables. If 16 lanes won't route, raise `hop_range` before
+touching PathFinder parameters. The row model degenerates gracefully for
+single-stage specs (one shared `row_y` between the two port walls) — no row
+work should be needed.
 
 ### 7.3 Sequencing & dependencies
 - **Critical path:** A → B → C → D → E, each gated by the prior's invariant.
@@ -1362,17 +1493,24 @@ Build **after** WP-I (it consumes PathFinder's overuse output as feedback).
 - F / G / H run in parallel whenever a stacker / painter / confidence need
   arises; none block the diagonal-extractor north star.
 - New deps (§6): A/H add `networkx`; D adds `OR-Tools`. Nothing else.
-- **Scaling arc (2026-06-10): ~~I~~ ✓ → {~~J~~ ✓, ~~K~~ ✓, ~~L~~ ✓} → M → north star**
-  (the Half Splitter + the 48→96 full-belt diagonal extractor). WP-I done
-  (negotiated congestion); WP-J done (lift calibration + 3-D tracing + lift
-  edges in PathFinder); WP-K done (hop tracer + router); WP-L done (monotone
-  sort + quotient stamping). **WP-M in progress:** row model + feedback loop
-  landed; hop direction constraints landed; A\* heuristic landed (3.9×
-  routing speedup); **first north-star gate passes**
-  (`test_synth_diagonal_full_belt_2x4`); multi-face port support landed;
-  `Group`/`Locked`/`Region` sink pinning landed. Remaining: crossing budget
-  check (capacity side), Half Splitter gate (`CutterSpec` + wiring
-  `synth.py`'s sinks to `Region` pins + region-internal flow ordering).
+- **Scaling arc (2026-06-10): ~~I~~ ✓ → {~~J~~ ✓, ~~K~~ ✓, ~~L~~ ✓} → ~~M~~ ✓ →
+  north star ✅** (the Half Splitter + the 48→96 full-belt diagonal
+  extractor). WP-I done (negotiated congestion); WP-J done (lift calibration
+  + 3-D tracing + lift edges in PathFinder); WP-K done (hop tracer + router);
+  WP-L done (monotone sort + quotient stamping). **WP-M done:** row model +
+  feedback loop landed; hop direction constraints landed; A\* heuristic
+  landed (3.9× routing speedup); multi-face port support landed;
+  `Group`/`Locked`/`Region` sink pinning landed; `CutterSpec` landed (cutter
+  fan with `Region`-pinned outputs); **south-flow convention landed
+  (2026-06-11)** — sources default to the south face, sinks to the north
+  (`place.SOURCE_FACE`/`SINK_FACE`); **WP-M2 done (2026-06-11)** — Mirrored
+  cutter variant, `CutterSpec.validate()` region-capacity check, the 16-lane
+  gate-2 test, a `_grow_tree` no-hop fallback (fixes a routing-unreachability
+  bug under heavy congestion), and a monotone `_assign_ports` (fixes crossed
+  west/east-half assignments). **Both north-star gates pass**
+  (`test_synth_diagonal_full_belt_2x4`, `test_synth_half_splitter_2x4`).
+  Remaining (not gate-blocking): crossing budget check (capacity side),
+  WP-L's region-internal flow ordering.
 
 ### 7.4 Test infrastructure to build first
 - `tests/conftest.py`: fixture loaders + the `CLOSED_FIXTURES` / `OPEN_FIXTURES`
