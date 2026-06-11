@@ -372,6 +372,74 @@ class TestPinnedPorts:
         # Full reversal of 4 groups: 6 inversions (§2a).
         assert group_inversions(pairs) == 6
 
+    def test_region_pin_spans_multiple_groups(self):
+        """A ``region`` pin fills the flattened slot pool of every listed
+        group, in node order, before any group repeats."""
+        from shapez2_tools.place import _assign_pinned_ports, _load_platform, _port_groups
+
+        plat = _load_platform("Foundation_2x4")
+        region = [(0, 0), (0, 1)]  # both west-face groups: 8 slots total
+        nodes = [
+            {
+                "id": f"sink{i}",
+                "type": "BeltPortSenderInternalVariant",
+                "kind": "platform_out",
+                "pin": "region",
+                "target": region,
+            }
+            for i in range(8)
+        ]
+
+        port_pos, port_rot = _assign_pinned_ports(plat, nodes)
+
+        expected_slots = [
+            pos for face, gidx in region for pos in _port_groups(plat, face)[gidx]
+        ]
+        assert [port_pos[f"sink{i}"] for i in range(8)] == expected_slots
+        assert len(set(port_pos.values())) == 8
+        # West face (0): a sink continues outward, rotation (0+2)%4 = 2.
+        assert all(r == 2 for r in port_rot.values())
+
+    def test_half_splitter_regions_on_2x4(self):
+        """§2a: the western/eastern regions for the Half Splitter — west
+        (resp. east) face plus the two west-most (resp. east-most) north-face
+        groups, 16 slots each, disjoint."""
+        from shapez2_tools.place import _assign_pinned_ports, _load_platform, _port_groups
+
+        plat = _load_platform("Foundation_2x4")
+        western = [(0, 0), (0, 1), (3, 0), (3, 1)]
+        eastern = [(2, 0), (2, 1), (3, 2), (3, 3)]
+
+        nodes = []
+        for i in range(16):
+            nodes.append({
+                "id": f"west{i}",
+                "type": "BeltPortSenderInternalVariant",
+                "kind": "platform_out",
+                "pin": "region",
+                "target": western,
+            })
+            nodes.append({
+                "id": f"east{i}",
+                "type": "BeltPortSenderInternalVariant",
+                "kind": "platform_out",
+                "pin": "region",
+                "target": eastern,
+            })
+
+        port_pos, port_rot = _assign_pinned_ports(plat, nodes)
+
+        west_slots = {
+            pos for face, gidx in western for pos in _port_groups(plat, face)[gidx]
+        }
+        east_slots = {
+            pos for face, gidx in eastern for pos in _port_groups(plat, face)[gidx]
+        }
+
+        assert {port_pos[f"west{i}"] for i in range(16)} == west_slots
+        assert {port_pos[f"east{i}"] for i in range(16)} == east_slots
+        assert west_slots.isdisjoint(east_slots)
+
     def test_place_with_group_pinned_reversal(self):
         """End-to-end: ``place()`` honors a group-reversed, pass-through netlist.
 

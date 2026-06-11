@@ -222,12 +222,16 @@ def group_inversions(pairs: list[tuple[int, int]]) -> int:
 def _assign_pinned_ports(
     plat: dict, nodes: list[dict],
 ) -> tuple[dict[str, tuple[int, int]], dict[str, int]]:
-    """Assign port positions for ``Locked``/``Group``-pinned nodes (§5).
+    """Assign port positions for ``Locked``/``Group``/``Region``-pinned nodes (§5).
 
     A ``"group"`` pin (``target = (face, group_index)``) takes the next free
-    slot within that group, in node order. A ``"locked"`` pin
-    (``target = (x, y)``) takes that exact port position. Nodes without a
-    ``"pin"`` key (``Free``, the default) are not assigned here.
+    slot within that group, in node order. A ``"region"`` pin
+    (``target = [(face, group_index), ...]``, a named set of groups) takes
+    the next free slot across the *flattened* slot pool of every listed
+    group, in node order — a thin wrapper over the same mechanism. A
+    ``"locked"`` pin (``target = (x, y)``) takes that exact port position.
+    Nodes without a ``"pin"`` key (``Free``, the default) are not assigned
+    here.
 
     Returns ``(port_pos, port_rot)`` covering only the pinned node ids.
     """
@@ -235,6 +239,7 @@ def _assign_pinned_ports(
     port_rot: dict[str, int] = {}
     face_for_port = {(x, y): r for x, y, r in plat["ports"]}
     group_next: dict[tuple[int, int], int] = defaultdict(int)
+    region_next: dict[tuple[tuple[int, int], ...], int] = defaultdict(int)
 
     for n in nodes:
         pin = n.get("pin")
@@ -244,6 +249,15 @@ def _assign_pinned_ports(
             port_pos[n["id"]] = _port_groups(plat, face)[gidx][slot]
             group_next[(face, gidx)] += 1
             port_rot[n["id"]] = _port_rotation_for(face, n["kind"])
+        elif pin == "region":
+            groups = tuple((face, gidx) for face, gidx in n["target"])
+            slots = [
+                pos for face, gidx in groups for pos in _port_groups(plat, face)[gidx]
+            ]
+            pos = slots[region_next[groups]]
+            port_pos[n["id"]] = pos
+            region_next[groups] += 1
+            port_rot[n["id"]] = _port_rotation_for(face_for_port[pos], n["kind"])
         elif pin == "locked":
             pos = tuple(n["target"])
             port_pos[n["id"]] = pos
