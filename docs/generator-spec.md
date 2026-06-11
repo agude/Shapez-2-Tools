@@ -4,10 +4,10 @@
 gate passes** (`test_synth_diagonal_full_belt_2x4`: 8-pair diagonal on
 Foundation_2x4, 32/32 edges, validates + interprets with hops). Row model +
 feedback loop landed, hop direction constraints landed, A\* heuristic landed
-(3.9× routing speedup), multi-face port support landed, `Group`/`Locked`
-sink pinning landed. WP-J done. WP-K done. WP-L landed. WP-H landed. Scaling
-plan: §2a (architecture) + WP-I…WP-M (§7.2) — negotiated-congestion routing
-for dense platforms.**
+(3.9× routing speedup), multi-face port support landed, `Group`/`Locked`/
+`Region` sink pinning landed. WP-J done. WP-K done. WP-L landed. WP-H landed.
+Scaling plan: §2a (architecture) + WP-I…WP-M (§7.2) — negotiated-congestion
+routing for dense platforms.**
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -23,7 +23,7 @@ regression floor. The hard target is intra-platform **place-and-route**.
 
 ## 0. Status & handoff (2026-06-10)
 
-**Built and green** (247 tests pass, 0 xfail, `just test`, ruff clean):
+**Built and green** (260 tests pass, 0 xfail, `just test`, ruff clean):
 - `blueprint.py` — faithful `.spz2bp` codec.
 - `generator.py` — tile-replication generator: builds the rotator family
   (180/cw/ccw × 1×1/1×4) from one lifted tile. `Entity`, lift/stamp/build,
@@ -568,6 +568,20 @@ do this by routing the worked example above (and a few more inversion counts)
 through PathFinder and reading off how many simultaneous crossings a
 `Foundation_2x4` interior actually sustains, rather than guessing.
 
+**`Region` sink pinning landed (2026-06-10).** `place._assign_pinned_ports`
+now also handles `"pin": "region"`, `"target": [(face, group_index), ...]` —
+the flattened slot pool of every listed group, assigned in node order, the
+"thin wrapper" §5 anticipated. Verified on the Half Splitter's own regions:
+`western_faces = [(0,0),(0,1),(3,0),(3,1)]` and
+`eastern_faces = [(2,0),(2,1),(3,2),(3,3)]` on `Foundation_2x4` each yield 16
+disjoint slots (`tests/test_place.py::TestPinnedPorts::test_half_splitter_regions_on_2x4`,
+`test_region_pin_spans_multiple_groups`). Region names (`western_faces` etc.)
+are not a stored concept — callers (synth/tests) pass the literal group-id
+list; `place.py` stays structural. **Not yet wired into `synth.py`** — no
+spec constructs `"pin": "region"` nodes yet, and WP-L's "Region sinks choose
+both group and slot" output-port assignment (the monotone-within-region
+ordering) remains open.
+
 ---
 
 ## 3. The ladder
@@ -646,20 +660,24 @@ spec library and the measuring stick.
   The assignment stage (WP-L/WP-M) chooses slots (and groups, for `Region`)
   within whatever freedom the level leaves.
 
-  **Encoding — `Locked`/`Group` landed (2026-06-10):** a `platform_in`/
-  `platform_out` node carries `{"pin": "locked"|"group", "target": ...}`.
-  `target` is `(x, y)` for `locked` (an exact port position) or
-  `(face, group_index)` for `group` (any slot within that group, assigned in
-  node order). Nodes without a `"pin"` key are `Free` (existing monotone
-  behaviour, unchanged). `place._assign_pinned_ports` handles both;
+  **Encoding — `Locked`/`Group`/`Region` landed (2026-06-10):** a
+  `platform_in`/`platform_out` node carries
+  `{"pin": "locked"|"group"|"region", "target": ...}`. `target` is `(x, y)`
+  for `locked` (an exact port position), `(face, group_index)` for `group`
+  (any slot within that group, assigned in node order), or
+  `[(face, group_index), ...]` for `region` (any slot within the flattened
+  pool of every listed group, assigned in node order — a thin wrapper over
+  `group`). Nodes without a `"pin"` key are `Free` (existing monotone
+  behaviour, unchanged). `place._assign_pinned_ports` handles all three;
   `place._port_groups(plat, face)` derives groups as consecutive runs of 4
   ports from `platforms.json`'s flat `ports` list (one group per platform
   unit-edge — verified 4/4/4/4 on `Foundation_2x4`'s south face, 1 group of 4
   on every `Foundation_1x1` face). `place.group_inversions(pairs)` counts
   inversions in a source-group → sink-group permutation (the §2a worked
-  example: full reversal of 4 groups = 6 inversions). `Region` (`target` =
-  named set of group-ids) and the `Free`-sink kind→face assignment remain
-  open — `Region` is a thin wrapper once a region→group-id table exists.
+  example: full reversal of 4 groups = 6 inversions). Region *names* (e.g.
+  `western_faces`) are not stored anywhere — callers pass the literal
+  group-id list. The `Free`-sink kind→face assignment and the `Region`-sink
+  group+slot output assignment (WP-L) remain open.
 - Routing objective: fit-first, then compactness; how to measure vs human.
 - Icon convention mismatch (`icon:Platforms` used for both quarter and full belt);
   `BinaryVersion` meaning.
@@ -1308,6 +1326,12 @@ Build **after** WP-I (it consumes PathFinder's overuse output as feedback).
   groups, full reversal → 6 inversions) verified
   (`tests/test_place.py::TestPortGroups`, `TestGroupInversions`,
   `TestPinnedPorts`, 7 new tests).
+- ✅ **`Region` sink pinning (§5):** `place._assign_pinned_ports` adds
+  `pin = "region"` → `target = [(face, group_index), ...]`, the flattened
+  slot pool of every listed group, next free slot in node order. Verified on
+  the Half Splitter's own `western_faces`/`eastern_faces` regions on
+  `Foundation_2x4` — 16 disjoint slots each
+  (`tests/test_place.py::TestPinnedPorts`, 2 new tests, 260 total).
 - **Crossing budget check (§2a):** before solving, compare the pinned
   permutation's inversion count (now computable, see above) against total
   crossing capacity (floors + hops + channel slack); reject infeasible specs
@@ -1318,9 +1342,13 @@ Build **after** WP-I (it consumes PathFinder's overuse output as feedback).
   correctly, asserting per-kind belt counts and **region membership** of
   every output port — but **not** any specific slot assignment within a
   region. ✅ Multi-face port support landed (`_port_rotation_for`, optional
-  `"face"` key on `platform_in`/`platform_out`). Still needs: `CutterSpec`,
-  region-constrained output assignment. Record belts vs the human oracle
-  where one exists (I7, tracked metric, soft target ≤ 2×).
+  `"face"` key on `platform_in`/`platform_out`). ✅ `Region` pin encoding
+  landed (above). Still needs: `CutterSpec`, wiring `synth.py` to emit
+  `"pin": "region"` sink nodes for `western_faces`/`eastern_faces`, and
+  WP-L's region-constrained output assignment (choosing group *and* slot per
+  sink within its region — currently `_assign_pinned_ports` fills slots in
+  raw node order with no flow-based ordering). Record belts vs the human
+  oracle where one exists (I7, tracked metric, soft target ≤ 2×).
 - **Done when:** both north-star gates pass end-to-end (spec → assign → place
   → route → emit → lift → interpret).
 
@@ -1342,9 +1370,9 @@ Build **after** WP-I (it consumes PathFinder's overuse output as feedback).
   landed; hop direction constraints landed; A\* heuristic landed (3.9×
   routing speedup); **first north-star gate passes**
   (`test_synth_diagonal_full_belt_2x4`); multi-face port support landed;
-  `Group`/`Locked` sink pinning landed. Remaining: crossing budget check
-  (capacity side), Half Splitter gate (`Region` pin + `CutterSpec` + region
-  assignment).
+  `Group`/`Locked`/`Region` sink pinning landed. Remaining: crossing budget
+  check (capacity side), Half Splitter gate (`CutterSpec` + wiring
+  `synth.py`'s sinks to `Region` pins + region-internal flow ordering).
 
 ### 7.4 Test infrastructure to build first
 - `tests/conftest.py`: fixture loaders + the `CLOSED_FIXTURES` / `OPEN_FIXTURES`
