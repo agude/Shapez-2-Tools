@@ -784,14 +784,20 @@ def reroute_astar(stripped: Blueprint, netlist: lift.Netlist, layer: int = 0) ->
     return _rebuild_blueprint(stripped, all_entities)
 
 
-def reroute_with_junctions(stripped: Blueprint, netlist: lift.Netlist, layer: int = 0) -> Blueprint:
+def reroute_with_junctions(
+    stripped: Blueprint,
+    netlist: lift.Netlist,
+    layer: int = 0,
+    *,
+    hop_range: int = 0,
+) -> Blueprint:
     """Re-route a netlist handling fan-in and fan-out with junctions.
 
     Delegates to the PathFinder negotiated-congestion router (WP-I).
     """
     from shapez2_tools.pathfinder import strip_and_reroute
 
-    return strip_and_reroute(stripped, netlist, layer=layer)
+    return strip_and_reroute(stripped, netlist, layer=layer, hop_range=hop_range)
 
 
 def _all_entities(bp: Blueprint) -> list[Entity]:

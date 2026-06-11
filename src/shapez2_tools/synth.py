@@ -178,9 +178,14 @@ def netlist_from_diagonal_spec(spec: DiagonalSpec) -> dict:
     return {"nodes": nodes, "edges": edges}
 
 
-def synthesize_diagonal(spec: DiagonalSpec, layer: int = 0) -> Blueprint:
+def synthesize_diagonal(
+    spec: DiagonalSpec, layer: int = 0, *, hop_range: int = 0,
+) -> Blueprint:
     """Synthesize a diagonal-trick blueprint from a spec."""
-    return _lower(netlist_from_diagonal_spec(spec), spec.platform, layer)
+    return _lower(
+        netlist_from_diagonal_spec(spec), spec.platform, layer,
+        hop_range=hop_range,
+    )
 
 
 def _sort_key(n: dict) -> tuple:
@@ -214,7 +219,9 @@ def _monotone_sort(abstract: dict, platform: str) -> dict:
 _MAX_RETRIES = 3
 
 
-def _lower(abstract: dict, platform: str, layer: int = 0) -> Blueprint:
+def _lower(
+    abstract: dict, platform: str, layer: int = 0, *, hop_range: int = 0,
+) -> Blueprint:
     """Lower an abstract netlist to a blueprint: sort → place → route → blueprint.
 
     On routing failure, feeds overused cells back to the placer as forbidden
@@ -239,7 +246,9 @@ def _lower(abstract: dict, platform: str, layer: int = 0) -> Blueprint:
         ]
         stripped = entities_to_blueprint(entities, platform=platform)
         try:
-            return reroute_with_junctions(stripped, placed, layer=layer)
+            return reroute_with_junctions(
+                stripped, placed, layer=layer, hop_range=hop_range,
+            )
         except RoutingError as err:
             if attempt == _MAX_RETRIES:
                 raise
@@ -247,9 +256,9 @@ def _lower(abstract: dict, platform: str, layer: int = 0) -> Blueprint:
                 forbidden.add((x, y))
 
 
-def synthesize(spec: Spec, layer: int = 0) -> Blueprint:
+def synthesize(spec: Spec, layer: int = 0, *, hop_range: int = 0) -> Blueprint:
     """Synthesize a blueprint from a spec."""
-    return _lower(netlist_from_spec(spec), spec.platform, layer)
+    return _lower(netlist_from_spec(spec), spec.platform, layer, hop_range=hop_range)
 
 
 def synthesize_quotient(spec: Spec) -> Blueprint:

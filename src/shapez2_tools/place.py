@@ -27,6 +27,8 @@ from shapez2_tools import lift
 
 _DATA = Path(__file__).resolve().parent.parent.parent / "data"
 
+_BUCKET_WIDTH = 4
+
 
 def _load_platform(name: str) -> dict:
     with open(_DATA / "platforms.json") as f:
@@ -76,6 +78,70 @@ def _compute_stages(abstract: dict) -> dict[str, int]:
             queue.append((child, s))
 
     return stage
+
+
+def _covers_bucket(
+    model: cp_model.CpModel,
+    x_a,
+    x_b,
+    b_lo: int,
+    b_hi: int,
+    tag: str,
+):
+    """Whether the x-interval [min(x_a,x_b), max(x_a,x_b)] covers [b_lo, b_hi].
+
+    Returns True, False, or a fully-reified BoolVar.
+    """
+    a_const = isinstance(x_a, int)
+    b_const = isinstance(x_b, int)
+
+    if a_const and b_const:
+        return min(x_a, x_b) <= b_hi and max(x_a, x_b) >= b_lo
+
+    if b_const:
+        return _covers_bucket(model, x_b, x_a, b_lo, b_hi, tag)
+
+    if a_const:
+        if b_lo <= x_a <= b_hi:
+            return True
+        cov = model.new_bool_var(tag)
+        if x_a < b_lo:
+            model.add(x_b >= b_lo).only_enforce_if(cov)
+            model.add(x_b <= b_lo - 1).only_enforce_if(cov.negated())
+        else:
+            model.add(x_b <= b_hi).only_enforce_if(cov)
+            model.add(x_b >= b_hi + 1).only_enforce_if(cov.negated())
+        return cov
+
+    a_le = model.new_bool_var(f"{tag}_al")
+    model.add(x_a <= b_hi).only_enforce_if(a_le)
+    model.add(x_a >= b_hi + 1).only_enforce_if(a_le.negated())
+
+    b_le = model.new_bool_var(f"{tag}_bl")
+    model.add(x_b <= b_hi).only_enforce_if(b_le)
+    model.add(x_b >= b_hi + 1).only_enforce_if(b_le.negated())
+
+    a_ge = model.new_bool_var(f"{tag}_ag")
+    model.add(x_a >= b_lo).only_enforce_if(a_ge)
+    model.add(x_a <= b_lo - 1).only_enforce_if(a_ge.negated())
+
+    b_ge = model.new_bool_var(f"{tag}_bg")
+    model.add(x_b >= b_lo).only_enforce_if(b_ge)
+    model.add(x_b <= b_lo - 1).only_enforce_if(b_ge.negated())
+
+    c1 = model.new_bool_var(f"{tag}_c1")
+    model.add_bool_or([a_le, b_le]).only_enforce_if(c1)
+    model.add_bool_and([a_le.negated(), b_le.negated()]).only_enforce_if(c1.negated())
+
+    c2 = model.new_bool_var(f"{tag}_c2")
+    model.add_bool_or([a_ge, b_ge]).only_enforce_if(c2)
+    model.add_bool_and([a_ge.negated(), b_ge.negated()]).only_enforce_if(c2.negated())
+
+    cov = model.new_bool_var(tag)
+    model.add_bool_and([c1, c2]).only_enforce_if(cov)
+    model.add_bool_or([c1.negated(), c2.negated()]).only_enforce_if(cov.negated())
+
+    return cov
 
 
 def abstract_netlist(nl: lift.Netlist) -> dict:
@@ -296,6 +362,55 @@ def place(
             for fp in flat_positions:
                 model.add(fp != ff)
 
+    # --- Density constraints (WP-M channel capacity) ---
+    # Per routing channel, per x-bucket of width _BUCKET_WIDTH: the number of
+    # nets whose horizontal interval covers the bucket must not exceed the
+    # channel height (classic channel-routing density).
+    if input_y > output_y:
+        all_px = [x for x, _ in src_positions.values()] + [
+            x for x, _ in sink_positions.values()
+        ]
+        bkt_lo = min(x_min, *all_px)
+        bkt_hi = max(x_max, *all_px)
+        n_bkt = (bkt_hi - bkt_lo + _BUCKET_WIDTH) // _BUCKET_WIDTH + 1
+
+        ch_h = [input_y - row_y[0] - 1]
+        for r in range(n_stages - 1):
+            ch_h.append(row_y[r] - row_y[r + 1] - 1)
+        ch_h.append(row_y[-1] - output_y - 1)
+
+        ch_edges: dict[int, list[tuple]] = defaultdict(list)
+        for sid, did in abstract["edges"]:
+            sn, dn = node_by_id[sid], node_by_id[did]
+            xs = _node_x(sid, sn, src_positions, sink_positions, m_x, model)
+            xd = _node_x(did, dn, src_positions, sink_positions, m_x, model)
+            if sn["kind"] == "platform_in":
+                ci = 0
+            elif sn["kind"] == "machine":
+                ci = stages[sid] + 1
+            else:
+                continue
+            ch_edges[ci].append((xs, xd))
+
+        for ci in range(n_stages + 1):
+            edges_ci = ch_edges.get(ci, [])
+            if not edges_ci:
+                continue
+            for b in range(n_bkt):
+                bl = bkt_lo + b * _BUCKET_WIDTH
+                bh = min(bl + _BUCKET_WIDTH - 1, bkt_hi)
+                terms: list = []
+                fixed = 0
+                for ei, (xs, xd) in enumerate(edges_ci):
+                    c = _covers_bucket(model, xs, xd, bl, bh, f"d{ci}b{b}e{ei}")
+                    if isinstance(c, bool):
+                        if c:
+                            fixed += 1
+                    else:
+                        terms.append(c)
+                if terms or fixed > 0:
+                    model.add(sum(terms) + fixed <= ch_h[ci])
+
     # Rotation constraints: a machine's output must face *toward* its
     # downstream neighbour (positive dot product between output direction and
     # the vector from machine to neighbour). Input must face toward upstream.
@@ -451,6 +566,14 @@ def place(
             model.add_abs_equality(a2dy, second_y[src_id] - dy)
             total_wire.append(a2dx)
             total_wire.append(a2dy)
+
+    # Row balance: prefer rows near the vertical center so routing channels
+    # on both sides of the machine rows have roughly equal height.
+    mid_y = (input_y + output_y) // 2
+    for r in range(n_stages):
+        bal = model.new_int_var(0, grid_h, f"bal_{r}")
+        model.add_abs_equality(bal, row_y[r] - mid_y)
+        total_wire.append(bal)
 
     model.minimize(sum(total_wire))
 

@@ -87,7 +87,7 @@ def _direction(src: Cell, dst: Cell) -> tuple[int, int]:
     return (dst[0] - src[0], dst[1] - src[1])
 
 
-_DIR_TO_ROT: dict[tuple[int, int], int] = {E: 0, S: 1, W: 2, N: 3}
+_DIR_TO_ROT: dict[tuple[int, int], int] = {E: 0, N: 1, W: 2, S: 3}
 
 
 def _grow_tree(
