@@ -661,6 +661,41 @@ class TestCutterSynthesize:
             else:
                 pytest.fail(f"sink {pos} is on neither west nor east face")
 
+    def test_single_lane_two_cutters_halves_land_on_correct_sides(self):
+        """1 lane x 2 cutters/lane on Foundation_1x1: the 1->2 split and the
+        two 2->1 merges route correctly, and both sinks carry the right half
+        (WP-N task 3a: the 2-member fan-group adjacency forced overlapping
+        Mirrored-cutter footprints at R=1, making this INFEASIBLE)."""
+        from shapez2_tools import interpret, shapes
+        from shapez2_tools.place import _edge_ports, _load_platform
+
+        spec = CutterSpec(lanes=1, platform="Foundation_1x1", cutters_per_lane=2)
+        result = synthesize_cutter(spec, hop_range=lift.MAX_HOP_RANGE)
+        assert lift.validate(result) == []
+        assert lift.unmatched_legs(result, 0) == 0
+
+        nl = lift.trace_layer(result, 0, contract_hops=True)
+        assert len(nl.edges) == 3 * spec.lanes * spec.cutters_per_lane
+
+        plat = _load_platform(spec.platform)
+        west_ports = set(_edge_ports(plat, 0))
+        east_ports = set(_edge_ports(plat, 2))
+
+        src_pos = next(p for p, n in nl.nodes.items() if n.kind == "platform_in")
+        shape = Shape.parse("RuCuSuWu")
+        out = interpret.interpret(nl, {src_pos: shape})
+        east_half, west_half = shapes.cut(shape)
+
+        sinks = {p: n for p, n in nl.nodes.items() if n.kind == "platform_out"}
+        assert len(sinks) == 2
+        for pos in sinks:
+            if pos in west_ports:
+                assert out[pos] == west_half
+            elif pos in east_ports:
+                assert out[pos] == east_half
+            else:
+                pytest.fail(f"sink {pos} is on neither west nor east face")
+
     @pytest.mark.xfail(
         reason=(
             "WP-N task 3e.2 (port-band passability fix) removed the "

@@ -643,26 +643,12 @@ def place(
             )
 
     # Fan-group structure: machines sharing a source (fan-out) form a group.
-    # Within a group, machines must be at adjacent x-coordinates.  Same-y
-    # is now enforced by the row model (all machines at the same stage share
-    # a row variable).  Between groups, x-ranges must not overlap so routes
-    # don't cross through other groups' machines.
+    # Cross-group x-ranges must not overlap so routes don't cross through
+    # other groups' machines. Proximity within a group is already rewarded
+    # by the wire-length objective; no adjacency constraint is needed.
     fan_out_groups: defaultdict[str, list[str]] = defaultdict(list)
     for sid, did in abstract["edges"]:
         fan_out_groups[sid].append(did)
-
-    fanout_groups: list[list[str]] = []
-    for group_id, members in fan_out_groups.items():
-        machine_members = [m for m in members if node_by_id[m]["kind"] == "machine"]
-        if len(machine_members) >= 2:
-            fanout_groups.append(machine_members)
-
-    for machine_members in fanout_groups:
-        if len(machine_members) == 2:
-            a, b = machine_members
-            abs_dx = model.new_int_var(0, grid_w, f"grp_dx_{a}_{b}")
-            model.add_abs_equality(abs_dx, m_x[a] - m_x[b])
-            model.add(abs_dx == 1)
 
     # Cross-group ordering: fan-out groups ordered by their source's
     # x-position so routes don't cross. A source at lower x should feed

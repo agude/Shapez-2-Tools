@@ -151,9 +151,23 @@ to share a cell on one floor by a Jordan-curve argument) raises
 `RoutingError` with `lift_enabled=False` and converges with
 `lift_enabled=True`, landing entities on floor 1 and round-tripping via
 `lift.trace`/`lift.isomorphic`. 282/282 pass + 3 strict xfails, `just lint`
-clean. Next: the rest of task 3 (placement model rework 3a-d) and 3f
-hop/lift cost calibration; the oscillation xfail is also fair game
-(PathFinder tie-breaker, e.g. deterministic by `net_id`).
+clean.
+**WP-N task 3a done (2026-06-11):** deleted the 2-member fan-group adjacency
+constraint (`abs(m_x[a] - m_x[b]) == 1`) from `place.py`'s placement model —
+no replacement, per the spec ("proximity is already rewarded by the
+wire-length objective"). This constraint, combined with the R=1 Mirrored
+cutter's second cell sitting west of its anchor, forced two same-row cutters
+to overlap, making `CutterSpec(lanes=1, cutters_per_lane=2)` CP-SAT
+INFEASIBLE. New `test_single_lane_two_cutters_halves_land_on_correct_sides`
+(`TestCutterSynthesize`): 1 lane x 2 cutters/lane on `Foundation_1x1` at
+`hop_range=MAX_HOP_RANGE` now places, routes, validates at zero unmatched
+legs, and both sinks carry the correct half. The `>=2 lanes` xfails are
+untouched — that INFEASIBLE comes from the separate cross-group-ordering
+constraint (problem 2), not this one. 283/283 pass + 3 strict xfails, `just
+lint` clean. Next: the rest of task 3 (3b-d: blocks not rows, scoped facing
+constraints, crossing-budget capacity) and 3f hop/lift cost calibration; the
+oscillation xfail is also fair game (PathFinder tie-breaker, e.g.
+deterministic by `net_id`).
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -1865,9 +1879,9 @@ genuinely open — that is what task 1 measures.
    `just lint` clean.
 
 3. **Rework the placement model** (`place.py`):
-   a. **Delete the 2-member adjacency** (problem 1 above). No
+   a. **Delete the 2-member adjacency — DONE (2026-06-11).** No
       replacement — proximity is already rewarded by the wire-length
-      objective.
+      objective. See the §0 entry for the fix and its regression test.
    b. **Blocks, not rows, for replication groups.** Each fan-out group
       (one lane's cutters) becomes a contiguous vertical block: shared
       block `x`-interval (`lo_g`/`hi_g` from member positions), members
