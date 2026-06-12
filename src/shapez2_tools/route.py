@@ -808,6 +808,7 @@ def reroute_with_junctions(
     *,
     hop_range: int = 0,
     platform: str | None = None,
+    lift_enabled: bool = False,
 ) -> Blueprint:
     """Re-route a netlist handling fan-in and fan-out with junctions.
 
@@ -817,6 +818,7 @@ def reroute_with_junctions(
 
     return strip_and_reroute(
         stripped, netlist, layer=layer, hop_range=hop_range, platform=platform,
+        lift_enabled=lift_enabled,
     )
 
 

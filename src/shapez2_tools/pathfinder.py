@@ -706,6 +706,7 @@ def _build_passable(
     layer: int,
     *,
     platform: str | None = None,
+    extra_layers: tuple[int, ...] = (),
 ) -> set[Cell]:
     """Build the routing graph's passable cell set.
 
@@ -721,6 +722,12 @@ def _build_passable(
     Without a ``platform``, bounds come from the netlist's own node
     positions plus a margin (synthetic test fixtures); there is no port
     ring to exclude.
+
+    ``extra_layers`` (WP-N 3e, lift-aware routing) opens additional floors
+    over the same (x, y) bounding box, fully passable — no ``machine_cells``
+    or ring exclusion. ``netlist`` is single-floor, so an extra floor has no
+    machines or ports of its own; this matches the WP-N task-1 finding that
+    floor+1 is a fully open second layer for the human's single-floor build.
     """
     if platform is not None:
         min_x, max_x, min_y, max_y = _platform_bounds(platform)
@@ -739,12 +746,12 @@ def _build_passable(
     passable: set[Cell] = set()
     for x in range(min_x, max_x + 1):
         for y in range(min_y, max_y + 1):
-            if (x, y) in machine_cells:
-                continue
-            on_ring = platform is not None and (x in (min_x, max_x) or y in (min_y, max_y))
-            if on_ring and (x, y) not in port_cells:
-                continue
-            passable.add((x, y, layer))
+            if (x, y) not in machine_cells:
+                on_ring = platform is not None and (x in (min_x, max_x) or y in (min_y, max_y))
+                if not on_ring or (x, y) in port_cells:
+                    passable.add((x, y, layer))
+            for extra in extra_layers:
+                passable.add((x, y, extra))
     return passable
 
 
@@ -755,17 +762,29 @@ def strip_and_reroute(
     *,
     hop_range: int = 0,
     platform: str | None = None,
+    lift_enabled: bool = False,
 ) -> Blueprint:
     """Strip belts and re-route via PathFinder.
 
-    Drop-in replacement for ``route.reroute_with_junctions``.
+    Drop-in replacement for ``route.reroute_with_junctions``. When
+    ``lift_enabled`` is True (WP-N task 3e), floor ``layer + 1`` is opened as
+    a fully passable second layer and ``RoutingGraph`` may route nets through
+    it via lift edges — the 2-floor approach validated by the WP-N task-1
+    experiment (single floor doesn't converge at Half-Splitter scale; 2
+    floors with lifts does).
     """
-    stripped = strip_belts(bp, layer=layer, netlist=netlist)
-    kept = [e for e in _all_entities(stripped) if e.layer == layer]
+    extra_layers = (layer + 1,) if lift_enabled else ()
 
-    # Machine/port positions → obstacles (not passable)
+    stripped = strip_belts(bp, layer=layer, netlist=netlist)
+    for extra in extra_layers:
+        stripped = strip_belts(stripped, layer=extra)
+    kept = [e for e in _all_entities(stripped) if e.layer in (layer, *extra_layers)]
+
+    # Machine/port positions on the primary floor → obstacles (not passable).
     machine_cells: set[tuple[int, int]] = set()
     for e in kept:
+        if e.layer != layer:
+            continue
         machine_cells.add((e.x, e.y))
         if lift.kind(e.type) == "machine":
             fp = lift._machine_footprint(e.type, e.rotation)
@@ -774,7 +793,9 @@ def strip_and_reroute(
                     machine_cells.add((e.x + dx, e.y + dy))
 
     # Build passable set from platform bounds (preferred) or node bounding box.
-    passable = _build_passable(netlist, machine_cells, layer, platform=platform)
+    passable = _build_passable(
+        netlist, machine_cells, layer, platform=platform, extra_layers=extra_layers,
+    )
 
     # Build nets
     nets, cell_out_dir, cell_in_dir = build_nets(netlist, layer=layer)
@@ -855,7 +876,7 @@ def strip_and_reroute(
             )
         routable.append(net)
 
-    graph = RoutingGraph(passable=passable, hop_range=hop_range)
+    graph = RoutingGraph(passable=passable, hop_range=hop_range, lift_enabled=lift_enabled)
     pathfinder_route(routable, graph)
 
     # Add boundary edges connecting port cells to the tree's root/terminal

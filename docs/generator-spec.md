@@ -133,11 +133,27 @@ layer` always held) — this unblocks the next item, lift-aware
 `strip_and_reroute`, without a latent floor bug. `emit_entities` dropped its
 now-unused `layer` param too. New `TestPerFloorEmit` (2 tests: a layer-1 via
 cell from a lift-crossing route, and hop sender/receiver entities on a
-non-zero floor). 279/279 pass + 3 strict xfails, `just lint` clean. Next:
-the rest of task 3 (placement model rework 3a-d, lift-aware
-`strip_and_reroute`, and 3f hop/lift cost calibration); the oscillation
-xfail is also fair game (PathFinder tie-breaker, e.g. deterministic by
-`net_id`).
+non-zero floor). 279/279 pass + 3 strict xfails, `just lint` clean.
+**WP-N task 3e lift-aware `strip_and_reroute` done (2026-06-11):**
+`_build_passable` gained `extra_layers: tuple[int, ...] = ()`: each extra
+floor is opened fully passable over the platform's bounding box (ring
+included — there are no ports or machines on an extra floor).
+`strip_and_reroute` gained `lift_enabled: bool = False`; when set, floor
+`layer + 1` becomes the sole `extra_layers` entry, belts are stripped from it
+too, its kept entities join the rebuild, and `RoutingGraph(...,
+lift_enabled=True)` may route nets through it via lift edges — the 2-floor
+approach the WP-N task-1 experiment validated at scale.
+`route.reroute_with_junctions` passes `lift_enabled` through unchanged. New
+`TestLiftAwareStripAndReroute` (3 tests): `_build_passable`'s extra floor is
+fully open including the ring; a topological-crossing scenario on
+`Foundation_1x1` (west<->east port pair vs. south<->north port pair, forced
+to share a cell on one floor by a Jordan-curve argument) raises
+`RoutingError` with `lift_enabled=False` and converges with
+`lift_enabled=True`, landing entities on floor 1 and round-tripping via
+`lift.trace`/`lift.isomorphic`. 282/282 pass + 3 strict xfails, `just lint`
+clean. Next: the rest of task 3 (placement model rework 3a-d) and 3f
+hop/lift cost calibration; the oscillation xfail is also fair game
+(PathFinder tie-breaker, e.g. deterministic by `net_id`).
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -1931,16 +1947,16 @@ genuinely open — that is what task 1 measures.
           either a PathFinder tie-breaker (e.g. deterministic by
           `net_id`) or task 3e.4's lift-aware reroute. 277/280 pass + 3
           strict xfails, `just lint` clean.
-      - **Per-floor belt emission fix:** `_cell_to_entity` emits belts
-        and hop endpoints with its `layer` *argument*, not the cell's own
-        floor (`cell[2]`) — only lift entities use `cell[2]`. Multi-floor
-        routing emits every floor-1 belt onto floor 0 without a caller-
-        side patch. Use `cell[2]` for all entity kinds.
-      - **Lift-aware `strip_and_reroute`**: multi-layer `passable` set
-        (interior × available floors, minus machine cells per floor) and
-        a `lift_enabled` parameter threaded to `RoutingGraph`; lift
-        entities emitted into the blueprint (the emit path exists from
-        WP-J — `_cell_to_entity` handles lift edges).
+      - **Per-floor belt emission fix — DONE (2026-06-11).**
+        `_cell_to_entity` no longer takes a `layer` argument; every emitted
+        entity (belts, junctions, hop sender/receiver, lifts) uses the
+        cell's own floor (`cell[2]`). See the §0 entry for details.
+      - **Lift-aware `strip_and_reroute` — DONE (2026-06-11).**
+        `_build_passable` gained `extra_layers` (each extra floor fully
+        passable over the platform's bounding box, ring included) and
+        `strip_and_reroute` gained `lift_enabled` (opens floor `layer + 1`
+        as the extra layer and threads `lift_enabled=True` to
+        `RoutingGraph`). See the §0 entry for the test and pass count.
    f. **Hop/lift cost calibration (2-floor viz review, 2026-06-11).**
       Current constants (`BASE=1.0`, `HOP_PENALTY=2.0`, `LIFT_COST=3.0`)
       make a hop cost `d + 2` — never cheaper than walking, fires only

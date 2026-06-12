@@ -622,6 +622,128 @@ class TestHop:
         assert not net.hop_edges
 
 
+class TestLiftAwareStripAndReroute:
+    """WP-N task 3e: ``strip_and_reroute(..., lift_enabled=True)`` opens
+    floor ``layer + 1`` as a fully passable second layer."""
+
+    def test_extra_layer_is_fully_passable(self):
+        """``_build_passable`` with ``extra_layers`` opens floor 1 over the
+        full bounding box, including the ring excluded on floor 0."""
+        from shapez2_tools.pathfinder import _build_passable, _platform_bounds
+
+        min_x, max_x, min_y, max_y = _platform_bounds("Foundation_1x1")
+
+        nl = lift.Netlist(
+            nodes={
+                (2, 9): lift.Node(
+                    x=2, y=9, layer=0, type="BeltPortReceiverInternalVariant",
+                    kind="platform_in", rotation=0,
+                ),
+                (17, 9): lift.Node(
+                    x=17, y=9, layer=0, type="BeltPortSenderInternalVariant",
+                    kind="platform_out", rotation=0,
+                ),
+            },
+            edges=[((2, 9), (17, 9))],
+            port_edges=[((2, 9), (17, 9))],
+        )
+
+        passable = _build_passable(
+            nl, machine_cells=set(), layer=0, platform="Foundation_1x1",
+            extra_layers=(1,),
+        )
+
+        # Floor 0 keeps the ring-exclusion behaviour (TestPortBandPassability).
+        assert (2, 9, 0) in passable
+        assert (2, 2, 0) not in passable
+        # Floor 1 is fully open, including ring cells with no port on floor 0.
+        for x in range(min_x, max_x + 1):
+            for y in range(min_y, max_y + 1):
+                assert (x, y, 1) in passable
+
+    def test_topological_crossing_converges_with_lift(self):
+        """Two nets that must cross on one floor (west<->east and
+        south<->north through the same Foundation_1x1 interior) route via
+        floor 1 when ``lift_enabled=True``.
+
+        The crossing is forced by a Jordan-curve-style argument: a path
+        connecting the west and east edges of a rectangle and a path
+        connecting its south and north edges must share a cell. With
+        ``hop_range=0`` and no lift, that is a true single-floor
+        impossibility (§7.2 WP-N task 1's finding at full scale, reproduced
+        minimally here).
+        """
+        from shapez2_tools.pathfinder import strip_and_reroute
+        from shapez2_tools.route import _all_entities
+
+        src_a = Entity(type="BeltPortReceiverInternalVariant", x=2, y=9, rotation=0, layer=0)
+        sink_a = Entity(type="BeltPortSenderInternalVariant", x=17, y=9, rotation=0, layer=0)
+        src_b = Entity(type="BeltPortReceiverInternalVariant", x=9, y=2, rotation=1, layer=0)
+        sink_b = Entity(type="BeltPortSenderInternalVariant", x=9, y=17, rotation=1, layer=0)
+
+        bp = _make_bp([src_a, sink_a, src_b, sink_b], platform="Foundation_1x1")
+        nl = lift.Netlist(
+            nodes={
+                (2, 9): lift.Node(
+                    x=2, y=9, layer=0, type=src_a.type, kind="platform_in", rotation=0,
+                ),
+                (17, 9): lift.Node(
+                    x=17, y=9, layer=0, type=sink_a.type, kind="platform_out", rotation=0,
+                ),
+                (9, 2): lift.Node(
+                    x=9, y=2, layer=0, type=src_b.type, kind="platform_in", rotation=1,
+                ),
+                (9, 17): lift.Node(
+                    x=9, y=17, layer=0, type=sink_b.type, kind="platform_out", rotation=1,
+                ),
+            },
+            edges=[((2, 9), (17, 9)), ((9, 2), (9, 17))],
+            port_edges=[((2, 9), (17, 9)), ((9, 2), (9, 17))],
+        )
+
+        result_bp = strip_and_reroute(
+            bp, nl, layer=0, platform="Foundation_1x1", lift_enabled=True,
+        )
+
+        assert any(e.layer == 1 for e in _all_entities(result_bp))
+
+        result_nl = lift.trace(result_bp)
+        assert lift.isomorphic(nl, result_nl)
+
+    def test_topological_crossing_fails_without_lift(self):
+        """Same scenario, ``lift_enabled=False``: single floor cannot
+        converge (RoutingError after MAX_ITERS)."""
+        from shapez2_tools.pathfinder import strip_and_reroute
+
+        src_a = Entity(type="BeltPortReceiverInternalVariant", x=2, y=9, rotation=0, layer=0)
+        sink_a = Entity(type="BeltPortSenderInternalVariant", x=17, y=9, rotation=0, layer=0)
+        src_b = Entity(type="BeltPortReceiverInternalVariant", x=9, y=2, rotation=1, layer=0)
+        sink_b = Entity(type="BeltPortSenderInternalVariant", x=9, y=17, rotation=1, layer=0)
+
+        bp = _make_bp([src_a, sink_a, src_b, sink_b], platform="Foundation_1x1")
+        nl = lift.Netlist(
+            nodes={
+                (2, 9): lift.Node(
+                    x=2, y=9, layer=0, type=src_a.type, kind="platform_in", rotation=0,
+                ),
+                (17, 9): lift.Node(
+                    x=17, y=9, layer=0, type=sink_a.type, kind="platform_out", rotation=0,
+                ),
+                (9, 2): lift.Node(
+                    x=9, y=2, layer=0, type=src_b.type, kind="platform_in", rotation=1,
+                ),
+                (9, 17): lift.Node(
+                    x=9, y=17, layer=0, type=sink_b.type, kind="platform_out", rotation=1,
+                ),
+            },
+            edges=[((2, 9), (17, 9)), ((9, 2), (9, 17))],
+            port_edges=[((2, 9), (17, 9)), ((9, 2), (9, 17))],
+        )
+
+        with pytest.raises(RoutingError):
+            strip_and_reroute(bp, nl, layer=0, platform="Foundation_1x1")
+
+
 class TestCorpusParity:
     """PathFinder must match the old router on single-cell fixtures."""
 
