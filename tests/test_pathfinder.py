@@ -257,6 +257,116 @@ def _assert_legs_legal(net: Net):
         assert all(t in net.tree_cells for t in net.terminals)
 
 
+class TestPortBandPassability:
+    """WP-N task 3e.2: the platform's port ring is ports-only in-game.
+
+    ``_platform_bounds`` returns the full port bounding box, but the
+    outermost ring of that box is buildable-area-adjacent port cells, not
+    routable interior — only the specific port cells that are net endpoints
+    should stay passable.
+    """
+
+    def test_ring_excluded_except_net_endpoints(self):
+        """Non-port ring cells are excluded; net-endpoint ports stay passable."""
+        from shapez2_tools.pathfinder import _build_passable, _platform_bounds
+
+        min_x, max_x, min_y, max_y = _platform_bounds("Foundation_1x1")
+        assert (min_x, max_x, min_y, max_y) == (2, 17, 2, 17)
+
+        nl = lift.Netlist(
+            nodes={
+                (2, 8): lift.Node(
+                    x=2, y=8, layer=0, type="BeltPortReceiverInternalVariant",
+                    kind="platform_in", rotation=0,
+                ),
+                (17, 8): lift.Node(
+                    x=17, y=8, layer=0, type="BeltPortSenderInternalVariant",
+                    kind="platform_out", rotation=0,
+                ),
+            },
+            edges=[((2, 8), (17, 8))],
+            port_edges=[((2, 8), (17, 8))],
+        )
+
+        passable = _build_passable(nl, machine_cells=set(), layer=0, platform="Foundation_1x1")
+
+        # Net-endpoint ports, on the ring, stay passable.
+        assert (2, 8, 0) in passable
+        assert (17, 8, 0) in passable
+        # Non-port ring cells (same edges, other rows/cols) are excluded.
+        assert (2, 9, 0) not in passable
+        assert (17, 9, 0) not in passable
+        assert (2, 2, 0) not in passable
+        # A geometrically valid port position that isn't a node of *this*
+        # netlist is still excluded -- it's not an endpoint here.
+        assert (8, 2, 0) not in passable
+        # Interior cells (one step in from the ring) are passable.
+        assert (3, 8, 0) in passable
+        assert (16, 8, 0) in passable
+        assert (9, 9, 0) in passable
+
+    def test_no_platform_keeps_full_bounding_box(self):
+        """Without a platform, the node-bounding-box fallback is unchanged."""
+        from shapez2_tools.pathfinder import _build_passable
+
+        nl = lift.Netlist(
+            nodes={
+                (0, 0): lift.Node(
+                    x=0, y=0, layer=0, type="BeltPortReceiverInternalVariant",
+                    kind="platform_in", rotation=0,
+                ),
+                (4, 0): lift.Node(
+                    x=4, y=0, layer=0, type="BeltPortSenderInternalVariant",
+                    kind="platform_out", rotation=0,
+                ),
+            },
+            edges=[((0, 0), (4, 0))],
+            port_edges=[((0, 0), (4, 0))],
+        )
+
+        passable = _build_passable(nl, machine_cells=set(), layer=0, platform=None)
+
+        # margin=5 around x in [0,4], y in [0,0]
+        for x in range(-5, 10):
+            for y in range(-5, 6):
+                assert (x, y, 0) in passable
+
+    def test_strip_and_reroute_platform_bounded(self):
+        """Routing with ``platform=`` set never lands a non-port belt on the ring."""
+        from shapez2_tools.pathfinder import _platform_bounds, strip_and_reroute
+        from shapez2_tools.route import _all_entities
+
+        src = Entity(type="BeltPortReceiverInternalVariant", x=2, y=8, rotation=0, layer=0)
+        sink = Entity(type="BeltPortSenderInternalVariant", x=17, y=8, rotation=0, layer=0)
+
+        bp = _make_bp([src, sink], platform="Foundation_1x1")
+        nl = lift.Netlist(
+            nodes={
+                (2, 8): lift.Node(
+                    x=2, y=8, layer=0, type=src.type, kind="platform_in", rotation=0
+                ),
+                (17, 8): lift.Node(
+                    x=17, y=8, layer=0, type=sink.type, kind="platform_out", rotation=0
+                ),
+            },
+            edges=[((2, 8), (17, 8))],
+            port_edges=[((2, 8), (17, 8))],
+        )
+
+        result_bp = strip_and_reroute(bp, nl, layer=0, platform="Foundation_1x1")
+        result_nl = lift.trace_layer(result_bp, 0)
+        assert lift.isomorphic(nl, result_nl)
+
+        min_x, max_x, min_y, max_y = _platform_bounds("Foundation_1x1")
+        port_cells = {(2, 8), (17, 8)}
+        for e in _all_entities(result_bp):
+            if e.layer != 0:
+                continue
+            on_ring = e.x in (min_x, max_x) or e.y in (min_y, max_y)
+            if on_ring:
+                assert (e.x, e.y) in port_cells, f"non-port entity on band: {e}"
+
+
 class TestRootOnPort:
     """Guard: root that cannot leave its port cell must raise."""
 

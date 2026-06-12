@@ -109,11 +109,22 @@ now derives to 4 by default (explicit override kept for the placeholder
 strips interior hop launcher/catcher entities (cells not in `netlist.nodes`
 when built with `contract_hops=True`) alongside belts; `strip_and_reroute`
 passes its netlist through. New `TestStripInteriorHops` regression test
-(Half Splitter: 290 hop endpoints stripped, 48 platform IO ports kept). Next:
-the rest of task 3 (placement model rework 3a-d, remaining 3e items —
-port-band passability, per-floor belt emission, lift-aware
-`strip_and_reroute` — and 3f hop/lift cost calibration).
+(Half Splitter: 290 hop endpoints stripped, 48 platform IO ports kept).
 275/275 pass + 2 strict xfails, `just lint` clean.
+**WP-N task 3e item 2 done (2026-06-11):** `pathfinder._build_passable`
+excludes the platform's ports-only edge ring from `passable` (except net
+endpoints); `strip_and_reroute` now calls it. **The band was load-bearing,
+not latent**: `test_single_lane_four_cutters_halves_land_on_correct_sides`
+(smallest `cutters_per_lane=4` checkpoint) now oscillates forever between
+two interior cells — a PathFinder tie-breaking pathology (symmetric costs,
+history can't break the tie), not a capacity ceiling. Marked
+`xfail(strict=True)` per the WP-N hints ("record it, don't tune around it").
+New `TestPortBandPassability` (first test to exercise `strip_and_reroute`'s
+`platform` kwarg). 277/280 pass + 3 strict xfails, `just lint` clean. Next:
+the rest of task 3 (placement model rework 3a-d, remaining 3e items —
+per-floor belt emission, lift-aware `strip_and_reroute` — and 3f hop/lift
+cost calibration); the new oscillation xfail is also fair game (PathFinder
+tie-breaker, e.g. deterministic by `net_id`).
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -1874,19 +1885,39 @@ genuinely open — that is what task 1 measures.
         UNFINISHED Half Splitter against its `contract_hops=True` netlist,
         asserts all 290 hop-endpoint cells are gone and all 48 platform IO
         ports remain. 275/275 pass + 2 strict xfails, `just lint` clean.
-      - **Port-band passability fix:** the passable set from
-        `_platform_bounds` includes the outermost interior ring (the
-        2-cell-band's inner port row, e.g. x ∈ {-18, 57} / y ∈ {2, 37}
-        on `Foundation_2x4`) — but that ring is **ports-only in-game**:
-        the human build has 48 ports and zero belts/machines there
-        (buildable area starts one cell inside; `viz._platform_geometry`'s
-        inset=3 is correct). Exclude the band from `passable` on every
-        floor except the specific port cells serving as net endpoints.
-        Latent until now — no reference fixture routes on the band (the
-        corpus sweep is clean); heavy congestion pushes routes there
-        (the task-1 2-floor run emits 56 non-port entities on the band).
-        Regression test: route, then assert no non-port entity on the
-        band.
+      - **Port-band passability fix — DONE (2026-06-11).** Added
+        `pathfinder._build_passable(netlist, machine_cells, layer,
+        platform=...)`: with a `platform`, `_platform_bounds`'s outermost
+        ring (the 2-cell-band's inner port row, e.g. x ∈ {-18, 57} /
+        y ∈ {2, 37} on `Foundation_2x4`) is excluded from `passable` except
+        for cells that are `platform_in`/`platform_out` nodes of `netlist`
+        (net endpoints) — that ring is **ports-only in-game** (the human
+        build has 48 ports and zero belts/machines there; buildable area
+        starts one cell inside, `viz._platform_geometry`'s inset=3).
+        Without `platform`, behavior is unchanged (node-bounding-box +
+        margin, no ring). `strip_and_reroute` now calls `_build_passable`
+        instead of inlining the bounding-box loop. New
+        `TestPortBandPassability` in `tests/test_pathfinder.py`: unit-tests
+        the ring exclusion on `Foundation_1x1` (non-port ring cells out,
+        net-endpoint ports + interior in, no-platform fallback unchanged),
+        plus a `strip_and_reroute(platform=...)` round-trip asserting no
+        non-port entity lands on the band — the first test to exercise
+        `strip_and_reroute`'s `platform` kwarg at all.
+        - **Finding: the band was load-bearing, not latent.**
+          `test_single_lane_four_cutters_halves_land_on_correct_sides`
+          (1 lane × 4 cutters/lane, `Foundation_1x1`, `hop_range=
+          MAX_HOP_RANGE` — the smallest `cutters_per_lane=4` checkpoint)
+          now fails: two fan nets oscillate forever between interior cells
+          (9, 8, 0) and (11, 8, 0), `MAX_ITERS=60` and `=200` both end with
+          the same single overused cell. Both cells are interior (not on
+          the excluded band), and the costs are fully symmetric for both
+          nets, so PathFinder's history pricing can never break the tie —
+          a router tie-breaking pathology, not a capacity ceiling, and not
+          specific to the port band. Marked `xfail(strict=True)` per the
+          WP-N hints ("record it, don't tune around it"); resolution is
+          either a PathFinder tie-breaker (e.g. deterministic by
+          `net_id`) or task 3e.4's lift-aware reroute. 277/280 pass + 3
+          strict xfails, `just lint` clean.
       - **Per-floor belt emission fix:** `_cell_to_entity` emits belts
         and hop endpoints with its `layer` *argument*, not the cell's own
         floor (`cell[2]`) — only lift entities use `cell[2]`. Multi-floor

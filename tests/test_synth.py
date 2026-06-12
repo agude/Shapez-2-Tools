@@ -661,6 +661,22 @@ class TestCutterSynthesize:
             else:
                 pytest.fail(f"sink {pos} is on neither west nor east face")
 
+    @pytest.mark.xfail(
+        reason=(
+            "WP-N task 3e.2 (port-band passability fix) removed the "
+            "ports-only platform-edge ring from `passable` -- routing was "
+            "silently using it as extra (illegal) capacity. With the "
+            "corrected passable set, this topology's two fan nets oscillate "
+            "forever between cells (9, 8, 0) and (11, 8, 0): both interior "
+            "cells, fully symmetric costs for both nets, so PathFinder's "
+            "history pricing can't break the tie (60 and 200 iterations "
+            "both fail identically -- not a capacity ceiling). "
+            "Router-robustness bug (PathFinder tie-breaking), not a "
+            "port-band issue; record per generator-spec.md §7.2 WP-N "
+            "hints ('record it, don't tune around it')."
+        ),
+        strict=True,
+    )
     def test_single_lane_four_cutters_halves_land_on_correct_sides(self):
         """1 lane x 4 cutters/lane on Foundation_1x1: the 1->4 split and the
         two 4->1 merges route correctly, and both sinks carry the right

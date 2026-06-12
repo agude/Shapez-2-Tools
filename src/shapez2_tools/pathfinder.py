@@ -704,6 +704,54 @@ def _platform_bounds(platform: str) -> tuple[int, int, int, int]:
     return min(xs), max(xs), min(ys), max(ys)
 
 
+def _build_passable(
+    netlist: lift.Netlist,
+    machine_cells: set[tuple[int, int]],
+    layer: int,
+    *,
+    platform: str | None = None,
+) -> set[Cell]:
+    """Build the routing graph's passable cell set.
+
+    For platform-bounded routing, ``_platform_bounds`` returns the full
+    bounding box of the port positions, but the outermost ring of that box
+    (e.g. x in {-18, 57} / y in {2, 37} on ``Foundation_2x4``) is ports-only
+    in-game: the buildable interior starts one cell inside
+    (``viz._platform_geometry``'s inset=3). The ring is excluded from
+    ``passable``, except for the specific port cells that are net endpoints
+    in ``netlist`` (``platform_in``/``platform_out`` nodes) — those remain
+    passable so the router can reach them.
+
+    Without a ``platform``, bounds come from the netlist's own node
+    positions plus a margin (synthetic test fixtures); there is no port
+    ring to exclude.
+    """
+    if platform is not None:
+        min_x, max_x, min_y, max_y = _platform_bounds(platform)
+        port_cells = {
+            pos for pos, node in netlist.nodes.items()
+            if node.kind in ("platform_in", "platform_out")
+        }
+    else:
+        all_x = [pos[0] for pos in netlist.nodes]
+        all_y = [pos[1] for pos in netlist.nodes]
+        margin = 5
+        min_x, max_x = min(all_x) - margin, max(all_x) + margin
+        min_y, max_y = min(all_y) - margin, max(all_y) + margin
+        port_cells = set()
+
+    passable: set[Cell] = set()
+    for x in range(min_x, max_x + 1):
+        for y in range(min_y, max_y + 1):
+            if (x, y) in machine_cells:
+                continue
+            on_ring = platform is not None and (x in (min_x, max_x) or y in (min_y, max_y))
+            if on_ring and (x, y) not in port_cells:
+                continue
+            passable.add((x, y, layer))
+    return passable
+
+
 def strip_and_reroute(
     bp: Blueprint,
     netlist: lift.Netlist,
@@ -730,20 +778,7 @@ def strip_and_reroute(
                     machine_cells.add((e.x + dx, e.y + dy))
 
     # Build passable set from platform bounds (preferred) or node bounding box.
-    if platform is not None:
-        min_x, max_x, min_y, max_y = _platform_bounds(platform)
-    else:
-        all_x = [pos[0] for pos in netlist.nodes]
-        all_y = [pos[1] for pos in netlist.nodes]
-        margin = 5
-        min_x, max_x = min(all_x) - margin, max(all_x) + margin
-        min_y, max_y = min(all_y) - margin, max(all_y) + margin
-
-    passable: set[Cell] = set()
-    for x in range(min_x, max_x + 1):
-        for y in range(min_y, max_y + 1):
-            if (x, y) not in machine_cells:
-                passable.add((x, y, layer))
+    passable = _build_passable(netlist, machine_cells, layer, platform=platform)
 
     # Build nets
     nets, cell_out_dir, cell_in_dir = build_nets(netlist, layer=layer)
