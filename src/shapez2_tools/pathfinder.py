@@ -474,7 +474,6 @@ def _get_lift_emit_table() -> dict[
 def _cell_to_entity(
     cell: Cell,
     tree_edges: list[tuple[Cell, Cell]],
-    layer: int,
     hop_edges: set[tuple[Cell, Cell]] | None = None,
     lift_edges: set[tuple[Cell, Cell]] | None = None,
 ) -> Entity | None:
@@ -523,13 +522,13 @@ def _cell_to_entity(
                 return Entity(
                     x=cell[0], y=cell[1],
                     type="BeltPortSenderInternalVariant",
-                    rotation=r, layer=layer,
+                    rotation=r, layer=cell[2],
                 )
             if dst == cell:
                 return Entity(
                     x=cell[0], y=cell[1],
                     type="BeltPortReceiverInternalVariant",
-                    rotation=r, layer=layer,
+                    rotation=r, layer=cell[2],
                 )
 
     in_dirs: set[tuple[int, int]] = set()
@@ -556,19 +555,16 @@ def _cell_to_entity(
         )
 
     variant, r = entry
-    return Entity(x=cell[0], y=cell[1], type=variant, rotation=r, layer=layer)
+    return Entity(x=cell[0], y=cell[1], type=variant, rotation=r, layer=cell[2])
 
 
-def emit_entities(
-    nets: list[Net],
-    layer: int = 0,
-) -> list[Entity]:
+def emit_entities(nets: list[Net]) -> list[Entity]:
     """Convert routed nets to belt entities."""
     entities: list[Entity] = []
     for net in nets:
         for cell in net.tree_cells:
             ent = _cell_to_entity(
-                cell, net.tree_edges, layer,
+                cell, net.tree_edges,
                 hop_edges=net.hop_edges,
                 lift_edges=net.lift_edges,
             )
@@ -884,7 +880,7 @@ def strip_and_reroute(
     for net in routable:
         for cell in sorted(net.tree_cells, key=lambda c: (c[1], c[0], c[2])):
             ent = _cell_to_entity(
-                cell, net.tree_edges, layer,
+                cell, net.tree_edges,
                 hop_edges=net.hop_edges,
                 lift_edges=net.lift_edges,
             )

@@ -218,7 +218,7 @@ class TestCrossingNets:
                 if cell in roots_and_terms:
                     continue
                 ent = _cell_to_entity(
-                    cell, net.tree_edges, cell[2],
+                    cell, net.tree_edges,
                     hop_edges=net.hop_edges,
                     lift_edges=net.lift_edges,
                 )

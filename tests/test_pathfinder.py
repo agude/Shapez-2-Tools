@@ -10,7 +10,13 @@ import pytest
 from shapez2_tools import lift
 from shapez2_tools.blueprint import Blueprint
 from shapez2_tools.generator import Entity
-from shapez2_tools.pathfinder import Net, RoutingError, RoutingGraph, pathfinder_route
+from shapez2_tools.pathfinder import (
+    Net,
+    RoutingError,
+    RoutingGraph,
+    _cell_to_entity,
+    pathfinder_route,
+)
 
 REF = Path(__file__).resolve().parent.parent / "data" / "reference"
 
@@ -501,6 +507,39 @@ class TestEmit:
         ents1 = [(e.x, e.y, e.type, e.rotation) for e in _all_entities(bp1)]
         ents2 = [(e.x, e.y, e.type, e.rotation) for e in _all_entities(bp2)]
         assert ents1 == ents2
+
+
+class TestPerFloorEmit:
+    """WP-N task 3e: _cell_to_entity emits each cell on its own floor
+    (cell[2]), not a caller-supplied layer -- needed for lift-aware routing
+    where a net's tree spans multiple floors."""
+
+    def test_floor_one_cell_emitted_on_floor_one(self):
+        """A via cell on floor 1 (reached via a lift edge from floor 0)
+        emits a belt entity on layer 1."""
+        passable = {(0, 0, 0), (0, 0, 1), (1, 0, 1), (2, 0, 1)}
+        net = Net(net_id=0, kind="fanout", root=(0, 0, 0), terminals=[(2, 0, 1)])
+        graph = RoutingGraph(passable=passable, lift_enabled=True)
+        assert pathfinder_route([net], graph)
+
+        ent = _cell_to_entity(
+            (1, 0, 1), net.tree_edges,
+            hop_edges=net.hop_edges, lift_edges=net.lift_edges,
+        )
+        assert ent is not None
+        assert ent.layer == 1
+
+    def test_hop_endpoints_emitted_on_their_own_floor(self):
+        """Hop sender/receiver entities land on the hop's floor, not floor 0."""
+        hop_edges = {((1, 1, 1), (4, 1, 1))}
+
+        sender = _cell_to_entity((1, 1, 1), [], hop_edges=hop_edges)
+        receiver = _cell_to_entity((4, 1, 1), [], hop_edges=hop_edges)
+
+        assert sender is not None and sender.layer == 1
+        assert receiver is not None and receiver.layer == 1
+        assert sender.type == "BeltPortSenderInternalVariant"
+        assert receiver.type == "BeltPortReceiverInternalVariant"
 
 
 class TestHop:

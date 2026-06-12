@@ -120,11 +120,24 @@ two interior cells — a PathFinder tie-breaking pathology (symmetric costs,
 history can't break the tie), not a capacity ceiling. Marked
 `xfail(strict=True)` per the WP-N hints ("record it, don't tune around it").
 New `TestPortBandPassability` (first test to exercise `strip_and_reroute`'s
-`platform` kwarg). 277/280 pass + 3 strict xfails, `just lint` clean. Next:
-the rest of task 3 (placement model rework 3a-d, remaining 3e items —
-per-floor belt emission, lift-aware `strip_and_reroute` — and 3f hop/lift
-cost calibration); the new oscillation xfail is also fair game (PathFinder
-tie-breaker, e.g. deterministic by `net_id`).
+`platform` kwarg). 277/280 pass + 3 strict xfails, `just lint` clean.
+**WP-N task 3e per-floor belt emission fix done (2026-06-11):**
+`_cell_to_entity` no longer takes a `layer` argument — every emitted entity
+(belts, junctions, hop sender/receiver) uses the cell's own floor (`cell[2]`)
+instead of a caller-supplied single layer. Previously only the lift-entry
+branch did this; the hop and plain-belt branches stamped `layer` (always 0
+today, since `strip_and_reroute` builds a single-floor `passable` set), so a
+multi-floor tree would have silently emitted every floor-1 cell onto floor 0.
+No behavior change yet (current routing is single-floor, so `cell[2] ==
+layer` always held) — this unblocks the next item, lift-aware
+`strip_and_reroute`, without a latent floor bug. `emit_entities` dropped its
+now-unused `layer` param too. New `TestPerFloorEmit` (2 tests: a layer-1 via
+cell from a lift-crossing route, and hop sender/receiver entities on a
+non-zero floor). 279/279 pass + 3 strict xfails, `just lint` clean. Next:
+the rest of task 3 (placement model rework 3a-d, lift-aware
+`strip_and_reroute`, and 3f hop/lift cost calibration); the oscillation
+xfail is also fair game (PathFinder tie-breaker, e.g. deterministic by
+`net_id`).
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
