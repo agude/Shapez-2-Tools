@@ -101,6 +101,14 @@ argument instead of the cell's floor, and the hop/lift cost model inverts
 human practice (router prefers an empty floor 1 over launcher/catcher
 jumps; floor 1 is not free in the real 48-lane design) — all folded into
 WP-N tasks 3e/3f. Details: §7.2 WP-N task 1.
+**WP-N task 2 done (2026-06-11):** `synth.MACHINE_RATES` (machine type → belt
+fraction, measured from the corpus) + `per_lane()`; `CutterSpec.cutters_per_lane`
+now derives to 4 by default (explicit override kept for the placeholder
+1-cutter/lane tests). Netlist-level only, independent of task 1. Next: task 3
+(placement model rework — blocks/columns instead of rows, drop the 2-member
+adjacency and cross-group total order, scope facing constraints, crossing
+budget capacity side, plus the routing-plumbing fixes 3e/3f task 1 surfaced).
+273/273 pass + 2 strict xfails, `just lint` clean.
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -1793,16 +1801,23 @@ genuinely open — that is what task 1 measures.
      they're stripped). The decision — tasks 3–4 target lift-aware 3-D —
      stands, now for the right reasons.
 
-2. **Generalize replication** (independent of task 1; netlist-level only —
-   blocker 2's work proved lift/interpret need no changes for N-way
-   shared-node fans). Every machine runs below belt speed (machines.md
-   "Throughput"), so every op needs N machines per lane behind a 1→N
-   split / N→1 merge. Add a rate table (machine type → belt fraction;
-   cutter = 1/4) next to the op tables in `synth.py`; derive
-   `per_lane = ceil(lane_rate / machine_rate)` in spec lowering;
-   `CutterSpec.cutters_per_lane` becomes the derived default (keep the
-   explicit override for tests). Rates we have not measured go to
-   QUESTIONS.md — do not guess silently.
+2. **Generalize replication — DONE (2026-06-11).** Added `MACHINE_RATES`
+   (machine type → belt fraction) next to `OP_TYPES` in `synth.py`, measured
+   from the corpus: rotators 1/2 (`quarter_rotate_{180,cw,ccw}.spz2bp`, 8
+   rotators / 4 lanes), `half_destroy` 1/3 (`quarter_destroy_west_half.spz2bp`,
+   12 cutters / 4 lanes — matches machines.md's "1 → 3 → 1"), cutter fan 1/4
+   (§2a Half Splitter arithmetic). `per_lane(machine_type) =
+   ceil(1 / MACHINE_RATES[machine_type])`. `CutterSpec.cutters_per_lane` is now
+   `int | None = None`, derived to `per_lane(CUTTER_FAN_TYPE) = 4` in
+   `__post_init__` when omitted; existing call sites that need the
+   placeholder 1-cutter/lane topology (still the only placeable shape until
+   task 3 lands) now pass `cutters_per_lane=1` explicitly. Only `OP_TYPES`/
+   cutter rates were needed, all measured — no QUESTIONS.md entry required.
+   `Spec.throughput` is untouched (out of scope: a single shared value across
+   a series chain's stages doesn't map cleanly onto per-stage rates, and its
+   existing explicit values already match the table for every current use).
+   273/273 pass + 2 strict xfails (4 new tests in `TestMachineRates`),
+   `just lint` clean.
 
 3. **Rework the placement model** (`place.py`):
    a. **Delete the 2-member adjacency** (problem 1 above). No

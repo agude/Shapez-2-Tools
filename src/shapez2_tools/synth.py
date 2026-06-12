@@ -28,6 +28,7 @@ Examples::
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -54,6 +55,27 @@ CUTTER_FAN_TYPE = "CutterDefaultInternalVariantMirrored"
 
 SRC_TYPE = "BeltPortReceiverInternalVariant"
 SINK_TYPE = "BeltPortSenderInternalVariant"
+
+# Per-machine throughput as a fraction of full belt speed (machines.md
+# "Throughput"): a full lane needs `per_lane()` of these running in parallel
+# behind a 1->N split / N->1 merge. Measured from the corpus:
+#   - rotators: 8 machines / 4 lanes in quarter_rotate_{180,cw,ccw}.spz2bp.
+#   - half_destroy: 12 machines / 4 lanes in quarter_destroy_west_half.spz2bp
+#     (matches machines.md's "1 -> 3 -> 1").
+#   - cutter fan: the Half Splitter's 1->4 split / 4 cutters / two 4->1
+#     merges (generator-spec.md §2a "Machine arithmetic").
+MACHINE_RATES: dict[str, float] = {
+    OP_TYPES["rotate_180"]: 1 / 2,
+    OP_TYPES["rotate_cw"]: 1 / 2,
+    OP_TYPES["rotate_ccw"]: 1 / 2,
+    OP_TYPES["half_destroy"]: 1 / 3,
+    CUTTER_FAN_TYPE: 1 / 4,
+}
+
+
+def per_lane(machine_type: str) -> int:
+    """Machines of `machine_type` needed in parallel to saturate one lane."""
+    return math.ceil(1 / MACHINE_RATES[machine_type])
 
 
 @dataclass(frozen=True)
@@ -198,18 +220,26 @@ class CutterSpec:
 
     Each lane: one south-face source (``SOURCE_FACE``) feeds
     ``cutters_per_lane`` parallel ``CutterDefault`` machines (1-in/2-out,
-    each fed the same source — a 1->N split tree, real Half Splitter
-    arithmetic uses 4: cutter throughput = 1/4 belt). Every cutter's
+    each fed the same source — a 1->N split tree). Every cutter's
     west-half output is ``Region``-pinned to the platform's western faces
     and its east-half output to the eastern faces (§2a `side_regions`),
     merging into one sink per side per lane (an N->1 merge tree) — the Half
-    Splitter's side semantics. ``lanes=16, cutters_per_lane=4`` on
-    ``Foundation_2x4`` is the Half Splitter (north-star gate 2).
+    Splitter's side semantics. ``lanes=16`` on ``Foundation_2x4`` is the Half
+    Splitter (north-star gate 2).
+
+    ``cutters_per_lane`` defaults to ``per_lane(CUTTER_FAN_TYPE)`` (4, the
+    real Half Splitter's throughput-correct fan-out — §2a "Machine
+    arithmetic"); pass it explicitly to override (e.g. tests pinning the
+    placeholder 1-cutter/lane topology).
     """
 
     lanes: int
     platform: str
-    cutters_per_lane: int = 1
+    cutters_per_lane: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.cutters_per_lane is None:
+            object.__setattr__(self, "cutters_per_lane", per_lane(CUTTER_FAN_TYPE))
 
     def validate(self) -> None:
         with open(_DATA / "platforms.json") as f:

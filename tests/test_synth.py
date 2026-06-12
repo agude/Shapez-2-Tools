@@ -8,6 +8,7 @@ from shapez2_tools.generator import functional_entities
 from shapez2_tools.shapes import Shape
 from shapez2_tools.synth import (
     CUTTER_FAN_TYPE,
+    MACHINE_RATES,
     SINK_TYPE,
     SRC_TYPE,
     CutterSpec,
@@ -17,6 +18,7 @@ from shapez2_tools.synth import (
     netlist_from_cutter_spec,
     netlist_from_diagonal_spec,
     netlist_from_spec,
+    per_lane,
     synthesize,
     synthesize_cutter,
     synthesize_diagonal,
@@ -543,12 +545,30 @@ class TestDiagonalSynthesize4Pair:
 # ---------------------------------------------------------------------------
 
 
+class TestMachineRates:
+    """WP-N task 2: per-machine throughput table + derived fan-out counts."""
+
+    def test_cutter_rate_is_one_quarter(self):
+        assert MACHINE_RATES[CUTTER_FAN_TYPE] == pytest.approx(1 / 4)
+
+    def test_per_lane_cutter_is_four(self):
+        assert per_lane(CUTTER_FAN_TYPE) == 4
+
+    def test_cutter_spec_defaults_to_derived_cutters_per_lane(self):
+        spec = CutterSpec(lanes=1, platform="Foundation_1x1")
+        assert spec.cutters_per_lane == 4
+
+    def test_cutter_spec_explicit_override_kept(self):
+        spec = CutterSpec(lanes=1, platform="Foundation_1x1", cutters_per_lane=1)
+        assert spec.cutters_per_lane == 1
+
+
 class TestCutterNetlist:
     """Unit tests for the cutter-fan abstract netlist builder."""
 
     def test_two_lane_topology(self):
         """2 lanes: 2 sources, 2 cutters, 4 sinks, 6 edges."""
-        spec = CutterSpec(lanes=2, platform="Foundation_1x1")
+        spec = CutterSpec(lanes=2, platform="Foundation_1x1", cutters_per_lane=1)
         abstract = netlist_from_cutter_spec(spec)
 
         by_kind: dict[str, list] = {}
@@ -608,7 +628,7 @@ class TestCutterSynthesize:
     """End-to-end: synthesize the cutter fan, then validate + interpret."""
 
     def test_single_lane_validates_at_zero_unmatched(self):
-        spec = CutterSpec(lanes=1, platform="Foundation_1x1")
+        spec = CutterSpec(lanes=1, platform="Foundation_1x1", cutters_per_lane=1)
         result = synthesize_cutter(spec)
         assert lift.validate(result) == []
         assert lift.unmatched_legs(result, 0) == 0
@@ -618,7 +638,7 @@ class TestCutterSynthesize:
         from shapez2_tools import interpret, shapes
         from shapez2_tools.place import _edge_ports, _load_platform
 
-        spec = CutterSpec(lanes=1, platform="Foundation_1x1")
+        spec = CutterSpec(lanes=1, platform="Foundation_1x1", cutters_per_lane=1)
         result = synthesize_cutter(spec)
         nl = lift.trace_layer(result, 0)
 
@@ -728,7 +748,7 @@ class TestCutterSynthesize:
         from shapez2_tools import interpret, shapes
         from shapez2_tools.place import _load_platform, _port_groups, side_regions
 
-        spec = CutterSpec(lanes=4, platform="Foundation_2x4")
+        spec = CutterSpec(lanes=4, platform="Foundation_2x4", cutters_per_lane=1)
         result = synthesize_cutter(spec, hop_range=4)
         assert lift.validate(result) == []
         assert lift.unmatched_legs(result, 0) == 0
