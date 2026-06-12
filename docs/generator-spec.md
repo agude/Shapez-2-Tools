@@ -104,11 +104,16 @@ WP-N tasks 3e/3f. Details: §7.2 WP-N task 1.
 **WP-N task 2 done (2026-06-11):** `synth.MACHINE_RATES` (machine type → belt
 fraction, measured from the corpus) + `per_lane()`; `CutterSpec.cutters_per_lane`
 now derives to 4 by default (explicit override kept for the placeholder
-1-cutter/lane tests). Netlist-level only, independent of task 1. Next: task 3
-(placement model rework — blocks/columns instead of rows, drop the 2-member
-adjacency and cross-group total order, scope facing constraints, crossing
-budget capacity side, plus the routing-plumbing fixes 3e/3f task 1 surfaced).
-273/273 pass + 2 strict xfails, `just lint` clean.
+1-cutter/lane tests). Netlist-level only, independent of task 1.
+**WP-N task 3e item 1 done (2026-06-11):** `strip_belts(bp, layer, netlist=...)`
+strips interior hop launcher/catcher entities (cells not in `netlist.nodes`
+when built with `contract_hops=True`) alongside belts; `strip_and_reroute`
+passes its netlist through. New `TestStripInteriorHops` regression test
+(Half Splitter: 290 hop endpoints stripped, 48 platform IO ports kept). Next:
+the rest of task 3 (placement model rework 3a-d, remaining 3e items —
+port-band passability, per-floor belt emission, lift-aware
+`strip_and_reroute` — and 3f hop/lift cost calibration).
+275/275 pass + 2 strict xfails, `just lint` clean.
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -1849,12 +1854,26 @@ genuinely open — that is what task 1 measures.
       counting-argument message when `group_inversions > capacity`.
    e. **Routing plumbing surfaced by task 1 + the 2-floor viz review**
       (in `route.py`/`pathfinder.py`, small but load-bearing):
-      - **Interior-hop stripping fix** (the task-1 correction's bug):
-        `strip_belts`/`strip_and_reroute` must strip `PortSender/
-        Receiver` entities *not on the platform boundary ring* — they are
-        hop endpoints (routing), not platform IO. Add a regression test:
-        lift + strip the UNFINISHED Half Splitter and assert no interior
-        `BeltPort*` entity survives, and none lands in the obstacle set.
+      - **Interior-hop stripping fix — DONE (2026-06-11).**
+        `strip_belts` gained an optional `netlist` parameter:
+        platform_in/platform_out entities whose cell isn't a node of
+        `netlist` are stripped alongside belts. `strip_and_reroute` passes
+        its `netlist` through. Without a `netlist`, behavior is unchanged
+        (all ports kept) — a position-only check (`_platform_port_positions`
+        membership, "on the boundary ring") was tried first and rejected:
+        synthetic test fixtures place port entities at placeholder
+        coordinates that don't match real platform geometry, so a
+        geometry-only rule strips legitimate ports. Netlist-membership is
+        the correct signal — `lift.trace_layer(..., contract_hops=True)`
+        already excludes hop endpoints from `nodes`, so passing that
+        netlist makes `strip_belts` agree. One existing test
+        (`TestRootOnPort::test_root_on_port_cell_raises`) used an
+        off-netlist `PortSender` as a generic obstacle; changed to a plain
+        machine type (obstacles need not be ports). New regression test
+        `TestStripInteriorHops` in `tests/test_route.py`: strips the
+        UNFINISHED Half Splitter against its `contract_hops=True` netlist,
+        asserts all 290 hop-endpoint cells are gone and all 48 platform IO
+        ports remain. 275/275 pass + 2 strict xfails, `just lint` clean.
       - **Port-band passability fix:** the passable set from
         `_platform_bounds` includes the outermost interior ring (the
         2-cell-band's inner port row, e.g. x ∈ {-18, 57} / y ∈ {2, 37}

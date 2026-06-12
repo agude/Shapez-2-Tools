@@ -716,7 +716,7 @@ def strip_and_reroute(
 
     Drop-in replacement for ``route.reroute_with_junctions``.
     """
-    stripped = strip_belts(bp, layer=layer)
+    stripped = strip_belts(bp, layer=layer, netlist=netlist)
     kept = [e for e in _all_entities(stripped) if e.layer == layer]
 
     # Machine/port positions → obstacles (not passable)

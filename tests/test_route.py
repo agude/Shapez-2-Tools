@@ -13,6 +13,8 @@ from shapez2_tools import lift
 from shapez2_tools.blueprint import Blueprint
 
 REF = Path(__file__).resolve().parent.parent / "data" / "reference"
+BLUEPRINTS = Path.home() / "Projects" / "shapez_2_blueprints"
+HALF_SPLITTER = BLUEPRINTS / "UNFINISHED Half Splitter.spz2bp"
 
 CLOSED_FIXTURES = [
     "quarter_rotate_180.spz2bp",
@@ -516,4 +518,52 @@ class TestMultiCellRouting:
         edge_set = {(tuple(a), tuple(b)) for a, b in rerouted.edges}
         assert ((5, 5), (8, 5)) in edge_set
         assert ((5, 5), (8, 4)) in edge_set
+
+
+class TestStripInteriorHops:
+    """WP-N task 3e: interior hop launcher/catchers are routing primitives,
+    not platform IO — strip_belts must remove them when given a netlist
+    that has contracted them out (contract_hops=True)."""
+
+    @pytest.mark.skipif(not HALF_SPLITTER.exists(), reason="Half Splitter not found")
+    def test_strip_removes_interior_hops_half_splitter(self):
+        """No interior hop entity survives strip_belts (290 endpoints), and
+        the 48 platform IO ports remain."""
+        from shapez2_tools import route
+
+        bp = Blueprint.from_file(HALF_SPLITTER)
+        nl = lift.trace_layer(bp, 0, contract_hops=True)
+
+        port_positions = lift._platform_port_positions(bp)
+        hop_pairs = lift._resolve_hops(bp, 0, port_positions)
+        hop_cells = {pos for pair in hop_pairs for pos in pair}
+        assert len(hop_cells) == 290
+
+        stripped = route.strip_belts(bp, layer=0, netlist=nl)
+
+        # Stripped means absent from `kept` entirely, so strip_and_reroute's
+        # machine_cells (built from kept) never marks these positions as
+        # obstacles either.
+        kept_positions = {(e.x, e.y) for e in route._all_entities(stripped) if e.layer == 0}
+        assert hop_cells.isdisjoint(kept_positions)
+
+        port_nodes = {
+            pos for pos, n in nl.nodes.items() if n.kind in ("platform_in", "platform_out")
+        }
+        assert len(port_nodes) == 48
+        assert port_nodes <= kept_positions
+
+    def test_strip_without_netlist_keeps_all_ports(self):
+        """Without a netlist, strip_belts only removes belts (old behavior)."""
+        from shapez2_tools import route
+        from shapez2_tools.generator import Entity
+
+        src = Entity(type="BeltPortReceiverInternalVariant", x=0, y=0, rotation=0, layer=0)
+        sink = Entity(type="BeltPortSenderInternalVariant", x=5, y=0, rotation=0, layer=0)
+        bp = route.entities_to_blueprint([src, sink], platform="Foundation_1x1")
+
+        stripped = route.strip_belts(bp, layer=0)
+        positions = {(e.x, e.y) for e in route._all_entities(stripped) if e.layer == 0}
+        assert (0, 0) in positions
+        assert (5, 0) in positions
 

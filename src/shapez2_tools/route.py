@@ -713,12 +713,29 @@ def _find_path(
     return path
 
 
-def strip_belts(bp: Blueprint, layer: int) -> Blueprint:
-    """Remove belt entities from a blueprint, keeping machines and ports."""
+def strip_belts(bp: Blueprint, layer: int, netlist: lift.Netlist | None = None) -> Blueprint:
+    """Remove belt entities from a blueprint, keeping machines and ports.
+
+    If ``netlist`` is given, also strip platform_in/platform_out-typed
+    entities whose cell is not a node of ``netlist`` — interior hop
+    launcher/catcher endpoints contracted out by
+    ``lift.trace_layer(..., contract_hops=True)`` are routing primitives,
+    not platform IO, and PathFinder re-derives them as needed. Without a
+    netlist, ``lift.kind()`` can't distinguish the two, so all
+    platform_in/platform_out entities are kept (old behavior).
+    """
     kept = []
     for e in _all_entities(bp):
-        if e.layer == layer and lift.kind(e.type) == "belt":
-            continue  # skip belt
+        if e.layer == layer:
+            k = lift.kind(e.type)
+            if k == "belt":
+                continue  # skip belt
+            if (
+                netlist is not None
+                and k in ("platform_in", "platform_out")
+                and (e.x, e.y) not in netlist.nodes
+            ):
+                continue  # skip interior hop endpoint
         kept.append(e)
     return _rebuild_blueprint(bp, kept)
 

@@ -266,8 +266,10 @@ class TestRootOnPort:
 
         src = Entity(type="BeltPortReceiverInternalVariant", x=0, y=0, rotation=0, layer=0)
         sink = Entity(type="BeltPortSenderInternalVariant", x=5, y=0, rotation=0, layer=0)
-        # Block the src's offset cell (1, 0) with an unrelated port
-        blocker = Entity(type="BeltPortSenderInternalVariant", x=1, y=0, rotation=2, layer=0)
+        # Block the src's offset cell (1, 0) with an unrelated machine. (Not a
+        # PortSender/Receiver: those not in `nl.nodes` are now stripped as
+        # interior hop endpoints — see strip_belts.)
+        blocker = Entity(type="BlockerMachineInternalVariant", x=1, y=0, rotation=2, layer=0)
 
         bp = _make_bp([src, sink, blocker])
         nl = lift.Netlist(
