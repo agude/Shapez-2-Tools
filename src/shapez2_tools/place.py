@@ -247,6 +247,71 @@ def group_inversions(pairs: list[tuple[int, int]]) -> int:
     )
 
 
+class CrossingBudgetExceeded(ValueError):
+    """Raised when a netlist's group inversions exceed routing capacity (§2a)."""
+
+
+def _check_crossing_budget(abstract: dict) -> None:
+    """Reject early if group-pinned ports create more inversions than routable.
+
+    Extracts group-level source→sink pairs by tracing edges through machines,
+    counts inversions, and compares to the empirically derived capacity
+    (WP-N task 3d: all inversion counts up to C(n,2) converge on
+    Foundation_2x4 with 4 groups at hop_range=5, single floor).
+    """
+    node_by_id = {n["id"]: n for n in abstract["nodes"]}
+    edge_out: dict[str, list[str]] = defaultdict(list)
+    for src_id, dst_id in abstract["edges"]:
+        edge_out[src_id].append(dst_id)
+
+    group_pinned_sources = [
+        n for n in abstract["nodes"]
+        if n["kind"] == "platform_in" and n.get("pin") == "group"
+    ]
+    if not group_pinned_sources:
+        return
+
+    def _reachable_sink_groups(start_id: str) -> set[int]:
+        visited: set[str] = set()
+        frontier = [start_id]
+        groups: set[int] = set()
+        while frontier:
+            nid = frontier.pop(0)
+            if nid in visited:
+                continue
+            visited.add(nid)
+            n = node_by_id[nid]
+            if n["kind"] == "platform_out" and n.get("pin") == "group":
+                groups.add(n["target"][1])
+                continue
+            for child in edge_out.get(nid, []):
+                frontier.append(child)
+        return groups
+
+    pairs: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for src in group_pinned_sources:
+        src_g = src["target"][1]
+        for sink_g in _reachable_sink_groups(src["id"]):
+            pair = (src_g, sink_g)
+            if pair not in seen:
+                pairs.append(pair)
+                seen.add(pair)
+
+    if not pairs:
+        return
+
+    inversions = group_inversions(pairs)
+    n_groups = max(max(s, k) for s, k in pairs) + 1
+    capacity = n_groups * (n_groups - 1) // 2
+    if inversions > capacity:
+        raise CrossingBudgetExceeded(
+            f"group permutation has {inversions} inversions but routing "
+            f"capacity for {n_groups} groups is {capacity} "
+            f"(empirical: WP-N task 3d)"
+        )
+
+
 def _assign_pinned_ports(
     plat: dict, nodes: list[dict],
 ) -> tuple[dict[str, tuple[int, int]], dict[str, int]]:
@@ -335,6 +400,10 @@ def place(
     all_sources = [n for n in abstract["nodes"] if n["kind"] == "platform_in"]
     all_sinks = [n for n in abstract["nodes"] if n["kind"] == "platform_out"]
     machines = [n for n in abstract["nodes"] if n["kind"] == "machine"]
+
+    # Crossing budget gate (§2a): reject early if group-pinned ports create
+    # more inversions than the router can handle.
+    _check_crossing_budget(abstract)
 
     # Locked/Group-pinned ports (§5) are assigned first, independent of the
     # Free ordering below.

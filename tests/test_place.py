@@ -303,6 +303,75 @@ class TestGroupInversions:
         assert group_inversions([(0, 3), (1, 2), (2, 1), (3, 0)]) == 6
 
 
+class TestCrossingBudget:
+    """§2a crossing budget: reject early when inversions exceed capacity."""
+
+    def test_full_reversal_within_budget(self):
+        """4 groups, full reversal (6 inversions) is within capacity C(4,2)=6."""
+        from shapez2_tools.place import _check_crossing_budget
+
+        nodes = []
+        edges = []
+        for g in range(4):
+            src = f"src{g}"
+            sink = f"sink{g}"
+            mid = f"m{g}"
+            nodes.append({
+                "id": src, "type": "BeltPortReceiverInternalVariant",
+                "kind": "platform_in", "pin": "group", "target": (1, g),
+            })
+            nodes.append({
+                "id": sink, "type": "BeltPortSenderInternalVariant",
+                "kind": "platform_out", "pin": "group", "target": (3, 3 - g),
+            })
+            nodes.append({
+                "id": mid, "type": "RotatorHalfInternalVariant",
+                "kind": "machine",
+            })
+            edges.append((src, mid))
+            edges.append((mid, sink))
+        _check_crossing_budget({"nodes": nodes, "edges": edges})
+
+    def test_no_group_pins_skips_check(self):
+        """Netlists without group pins pass the gate unconditionally."""
+        from shapez2_tools.place import _check_crossing_budget
+
+        abstract = {
+            "nodes": [
+                {"id": "src0", "type": "BeltPortReceiverInternalVariant",
+                 "kind": "platform_in"},
+                {"id": "snk0", "type": "BeltPortSenderInternalVariant",
+                 "kind": "platform_out"},
+            ],
+            "edges": [("src0", "snk0")],
+        }
+        _check_crossing_budget(abstract)
+
+    def test_identity_permutation_zero_inversions(self):
+        """Identity permutation has 0 inversions, always within budget."""
+        from shapez2_tools.place import _check_crossing_budget
+
+        nodes = []
+        edges = []
+        for g in range(4):
+            src, sink, mid = f"src{g}", f"sink{g}", f"m{g}"
+            nodes.append({
+                "id": src, "type": "BeltPortReceiverInternalVariant",
+                "kind": "platform_in", "pin": "group", "target": (1, g),
+            })
+            nodes.append({
+                "id": sink, "type": "BeltPortSenderInternalVariant",
+                "kind": "platform_out", "pin": "group", "target": (3, g),
+            })
+            nodes.append({
+                "id": mid, "type": "RotatorHalfInternalVariant",
+                "kind": "machine",
+            })
+            edges.append((src, mid))
+            edges.append((mid, sink))
+        _check_crossing_budget({"nodes": nodes, "edges": edges})
+
+
 class TestPinnedPorts:
     """§5: ``Group``/``Locked`` pins place ports independent of the Free
     monotone ordering."""
