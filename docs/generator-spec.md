@@ -2159,10 +2159,12 @@ genuinely open — that is what task 1 measures.
   16 source→machine edges per group cross the same x-buckets, forcing
   channel height ≥ 16 and pushing machines to y=19 (same root cause as the
   4-lane failure, now at group level). **Next steps:**
-  1. **Per-group density accounting:** count density per source-group's
-     x-region rather than globally — edges from different groups don't
-     compete for the same channel area. Alternatively, switch the density
-     constraint from hard to soft (penalty-based).
+  1. **Per-group density accounting:** only count edges whose source
+     x-interval overlaps each bucket — with group-pinned sources spatially
+     separated, edges from different groups don't compete for the same
+     channel area. Fallback: soft density (penalty instead of hard
+     constraint) if per-group breaks on platforms where groups aren't
+     well-separated. See Q9.
   2. **16-lane end-to-end test:** once density is resolved, promote the
      placement-only test to full synthesis → routing → interpret.
   3. **Close the 4-lane unmatched leg:** the 4-lane result has 1 unmatched

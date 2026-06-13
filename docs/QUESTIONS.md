@@ -95,14 +95,18 @@ group's x-region. For 4 lanes × 4 groups = 1 source/group, max density = 4 and
 machines land at y=8 (near sinks). For 16 lanes × 4 groups = 4 sources/group,
 max density = 16 and machines get pushed to y=19 again.
 
-**Design question:** should the density constraint be:
-- **(a) Per-group:** only count edges from sources whose x-interval actually
-  overlaps the bucket (already partially done by `_covers_bucket`, but the
-  channel height is a single global variable — the bottleneck);
-- **(b) Softened:** convert from hard constraint to penalty in the objective,
-  letting the solver trade density overflows against wire length; or
-- **(c) Multi-channel:** model per-group channel heights (each source-group's
-  fan-out uses a different vertical slice of the routing area)?
+**Plan:** **(a) Per-group density** first — only count edges whose source
+x-interval actually overlaps each bucket. With group-pinned sources spatially
+separated on Foundation_2x4, edges from different groups don't compete for the
+same channel area, so the real per-bucket density is ~4 (one group's fan-out),
+not 16. Smallest change, correctly models the geometry when groups are
+well-separated. **(b) Soft density** as fallback — if (a) breaks on denser
+platforms where groups aren't spatially separated, convert the hard constraint
+to a penalty (`max(0, count - channel_height) * weight`). Never causes
+INFEASIBLE, but loses the guarantee that placement respects routing capacity.
+Option (c) multi-channel rejected: too complex, and the cutter topology routes
+across the full platform width (both west and east sinks), violating the
+disjoint-slice assumption.
 
 Not blocking 4-lane work. Blocks the 16-lane Half Splitter gate.
 
