@@ -599,6 +599,11 @@ def place(
     # downstream neighbour (positive dot product between output direction and
     # the vector from machine to neighbour). Input must face toward upstream.
     #
+    # WP-N task 3c scoping: for edges to/from off-primary-face ports (Region/
+    # Group/Locked sinks on west/east, or extra-face sources), replace "face
+    # toward the literal (x, y)" with "face the primary flow direction."  The
+    # sideways haul is the router's job.
+    #
     # Output direction at R=0,1,2,3 is E(1,0), N(0,1), W(-1,0), S(0,-1).
     # Dot product = out_dx*(vx-ux) + out_dy*(vy-uy) >= 1.
     # Encode via element constraints on R → direction components.
@@ -607,49 +612,67 @@ def place(
     in_dx_table = [-1, 0, 1, 0]  # input is opposite: W, S, E, N
     in_dy_table = [0, -1, 0, 1]
 
+    flow_r = 1 if input_y < output_y else 3
+    primary_src_pos = set(_edge_ports(plat, SOURCE_FACE))
+    primary_sink_pos = set(_edge_ports(plat, SINK_FACE))
+
     for ei, (src_id, dst_id) in enumerate(abstract["edges"]):
         src_node = node_by_id[src_id]
         dst_node = node_by_id[dst_id]
 
-        # Source output must face toward dst.
+        # Source output must face toward dst (or flow direction if dst is
+        # off the primary sink face).
         if src_node["kind"] == "machine":
-            sx = m_x[src_id]
-            sy = m_y[src_id]
-            dx = _node_x(dst_id, dst_node, port_pos, m_x, model)
-            dy = _node_y(dst_id, dst_node, port_pos, m_y, model)
-            _add_output_faces_toward(
-                model,
-                m_r[src_id],
-                sx,
-                sy,
-                dx,
-                dy,
-                out_dx_table,
-                out_dy_table,
-                grid_w,
-                grid_h,
-                f"eout_{ei}",
-            )
+            if (
+                dst_node["kind"] == "platform_out"
+                and port_pos.get(dst_id) not in primary_sink_pos
+            ):
+                model.add(m_r[src_id] == flow_r)
+            else:
+                sx = m_x[src_id]
+                sy = m_y[src_id]
+                dx = _node_x(dst_id, dst_node, port_pos, m_x, model)
+                dy = _node_y(dst_id, dst_node, port_pos, m_y, model)
+                _add_output_faces_toward(
+                    model,
+                    m_r[src_id],
+                    sx,
+                    sy,
+                    dx,
+                    dy,
+                    out_dx_table,
+                    out_dy_table,
+                    grid_w,
+                    grid_h,
+                    f"eout_{ei}",
+                )
 
-        # Dst input must face toward src.
+        # Dst input must face toward src (or flow direction if src is
+        # off the primary source face).
         if dst_node["kind"] == "machine":
-            dx2 = m_x[dst_id]
-            dy2 = m_y[dst_id]
-            sx2 = _node_x(src_id, src_node, port_pos, m_x, model)
-            sy2 = _node_y(src_id, src_node, port_pos, m_y, model)
-            _add_output_faces_toward(
-                model,
-                m_r[dst_id],
-                dx2,
-                dy2,
-                sx2,
-                sy2,
-                in_dx_table,
-                in_dy_table,
-                grid_w,
-                grid_h,
-                f"ein_{ei}",
-            )
+            if (
+                src_node["kind"] == "platform_in"
+                and port_pos.get(src_id) not in primary_src_pos
+            ):
+                model.add(m_r[dst_id] == flow_r)
+            else:
+                dx2 = m_x[dst_id]
+                dy2 = m_y[dst_id]
+                sx2 = _node_x(src_id, src_node, port_pos, m_x, model)
+                sy2 = _node_y(src_id, src_node, port_pos, m_y, model)
+                _add_output_faces_toward(
+                    model,
+                    m_r[dst_id],
+                    dx2,
+                    dy2,
+                    sx2,
+                    sy2,
+                    in_dx_table,
+                    in_dy_table,
+                    grid_w,
+                    grid_h,
+                    f"ein_{ei}",
+                )
 
     # Fan-out blocks: machines sharing a source form a vertical block with a
     # shared x-interval.  Cross-block x-ranges are ordered by source x so
@@ -709,7 +732,10 @@ def place(
             model.add(block_hi_x[left_sid] + 1 <= block_lo_x[right_sid])
 
     # Minimum spacing between connected nodes: at least 2 Manhattan distance
-    # (room for one belt cell between machine and its source/sink).
+    # (room for one belt cell between machine and its source/sink).  Edges to
+    # off-primary-face ports need 3 so the machine's input/output routes don't
+    # collide at the sink's approach cell (the flow-direction facing constraint
+    # no longer implicitly separates them by forcing y toward the sink).
     for ei, (src_id, dst_id) in enumerate(abstract["edges"]):
         src_node = node_by_id[src_id]
         dst_node = node_by_id[dst_id]
@@ -719,11 +745,23 @@ def place(
         dx = _node_x(dst_id, dst_node, port_pos, m_x, model)
         dy = _node_y(dst_id, dst_node, port_pos, m_y, model)
 
+        min_spacing = 2
+        if (
+            dst_node["kind"] == "platform_out"
+            and port_pos.get(dst_id) not in primary_sink_pos
+        ):
+            min_spacing = 3
+        elif (
+            src_node["kind"] == "platform_in"
+            and port_pos.get(src_id) not in primary_src_pos
+        ):
+            min_spacing = 3
+
         abs_dx = model.new_int_var(0, grid_w, f"spc_adx_{ei}")
         abs_dy = model.new_int_var(0, grid_h, f"spc_ady_{ei}")
         model.add_abs_equality(abs_dx, sx - dx)
         model.add_abs_equality(abs_dy, sy - dy)
-        model.add(abs_dx + abs_dy >= 2)
+        model.add(abs_dx + abs_dy >= min_spacing)
 
     # Objective: minimize total wire length.
     # For multi-cell machines, also add second-cell distances so the solver

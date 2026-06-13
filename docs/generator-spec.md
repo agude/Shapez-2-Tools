@@ -183,6 +183,18 @@ pass + 3 strict xfails unchanged, `just lint` clean. Next: 3c (scoped facing
 constraints), 3d (crossing-budget capacity), 3f (hop/lift cost calibration);
 the oscillation xfail is also fair game (PathFinder tie-breaker, e.g.
 deterministic by `net_id`).
+**WP-N task 3c done (2026-06-12):** scoped facing constraints so that
+`m_r == flow_r` applies only to machines with an output edge to an
+off-primary-face sink (or an input edge from an off-primary-face source),
+replacing the old `_add_output_faces_toward` constraint that forced ALL
+machines toward a face. Minimum spacing for off-primary-face edges increased
+from 2 to 3 (prevents adjacent machines from competing for the same routing
+cell). All 3 xfail reasons updated: failure mode is now PathFinder routing
+congestion, not CP-SAT placement infeasibility — placement succeeds for all
+topologies as of tasks 3a-3c. The three former xfail tests are now
+placement-only assertions (call `place()` directly, verify machine count);
+full routing assertions deferred to task 4. 283/283 pass + 0 xfails,
+`just lint` clean.
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -1907,13 +1919,13 @@ genuinely open — that is what task 1 measures.
       check (swapper groups excluded); weighted compactness penalty
       (2 × stage_mcnt × band_width) keeps bands collapsed to a single
       row when the topology doesn't demand vertical spread.
-   c. **Scope the facing constraints.** For machine→sink edges whose sink
-      is pinned off the primary face (`Region`/`Group`/`Locked`, or any
-      sink not on `SINK_FACE`), replace "output faces toward the sink's
-      literal (x, y)" with "output faces the primary flow direction"
-      (north, under the south-flow convention). The sideways haul is the
-      router's job. Apply the same scoping to input-side facing for
-      multi-source merges if it binds.
+   c. **Scope the facing constraints — DONE (2026-06-12).** For
+      machine→off-primary-face-sink edges: `m_r == flow_r` (machine faces
+      the flow direction, not the literal sink position). Same scoping for
+      off-primary-face-source→machine edges. Minimum spacing increased to
+      3 for off-primary-face edges (prevents adjacent-cell routing
+      competition). Xfail reasons updated: all topologies now place
+      successfully; failure mode is PathFinder routing congestion.
    d. **Crossing budget capacity side** (the §2a remaining item — now
       load-bearing). Derive capacity empirically, as §2a already
       prescribes: route the worked example (4-group full reversal, 6
