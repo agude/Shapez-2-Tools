@@ -506,6 +506,15 @@ def place(
     if not machines:
         return _build_netlist(abstract, port_pos, port_rot, {})
 
+    # Detect off-primary-face sinks early (used by both band constraints
+    # and the balance objective).
+    primary_sink_positions = set(_edge_ports(plat, SINK_FACE))
+    off_face_sink_ys = [
+        port_pos[n["id"]][1] for n in abstract["nodes"]
+        if n["kind"] == "platform_out" and n["id"] in port_pos
+        and port_pos[n["id"]] not in primary_sink_positions
+    ]
+
     # --- Stage computation (WP-M row model → WP-N band model) ---
     stages = _compute_stages(abstract)
     n_stages = max(stages.values()) + 1
@@ -535,7 +544,12 @@ def place(
         # Northward flow (the south→north convention): band 0 nearest the
         # south sources (low y), bands ascend toward the north sinks.
         model.add(band_lo[0] >= input_y + 3)
-        model.add(band_hi[-1] <= output_y - 3)
+        if off_face_sink_ys:
+            max_sink_y = max(off_face_sink_ys)
+            band_ceil = max(max_sink_y + 8, input_y + 3 + 3 * n_stages)
+            model.add(band_hi[-1] <= min(band_ceil, output_y - 3))
+        else:
+            model.add(band_hi[-1] <= output_y - 3)
         for s in range(n_stages - 1):
             model.add(band_lo[s + 1] >= band_hi[s] + 3)
 
@@ -903,13 +917,25 @@ def place(
             total_wire.append(a2dx)
             total_wire.append(a2dy)
 
-    # Band balance: prefer bands near the vertical center so routing channels
-    # on both sides have roughly equal height.
-    mid_y = (input_y + output_y) // 2
+    # Band balance: prefer bands near the vertical center.  When all sinks
+    # are on the primary (north) face, the center is the face midpoint.
+    # When off-primary-face sinks exist (west/east Region pins), use the
+    # midpoint between sources and actual average sink y — the face
+    # midpoint pulls machines far from the real endpoints, wasting routing
+    # budget.  Only applied when enough interior height exists (the band
+    # must clear the port ring by ≥ 2 cells on each side).
+    if off_face_sink_ys:
+        avg_sink_y = sum(off_face_sink_ys) // len(off_face_sink_ys)
+        mid_y = (input_y + avg_sink_y) // 2
+    else:
+        mid_y = (input_y + output_y) // 2
+    bal_weight = len(off_face_sink_ys) if off_face_sink_ys else 1
     for s in range(n_stages):
         bal = model.new_int_var(0, 2 * grid_h, f"bal_{s}")
         model.add_abs_equality(bal, band_lo[s] + band_hi[s] - 2 * mid_y)
-        total_wire.append(bal)
+        wbal = model.new_int_var(0, bal_weight * 2 * grid_h, f"wbal_{s}")
+        model.add(wbal == bal * bal_weight)
+        total_wire.append(wbal)
 
     # Band compactness: prefer tight bands (collapse to a single row when the
     # topology doesn't need vertical spread).  Weight proportional to 2×
@@ -927,7 +953,33 @@ def place(
             model.add(sbw == w * bw)
             total_wire.append(sbw)
 
+    # Ring avoidance: small penalty for machines on the port-ring x-columns.
+    # The _build_passable ring exclusion blocks non-port cells on these
+    # columns, so a machine there can't have routable I/O cells.  The
+    # penalty is soft (doesn't restrict the domain) to keep tight layouts
+    # feasible when every column is needed.
+    port_xs = [p[0] for p in plat["ports"]]
+    ring_xs = {min(port_xs), max(port_xs)}
+    for mid in m_x:
+        for rx in ring_xs:
+            on_ring = model.new_bool_var(f"ring_{mid}_{rx}")
+            model.add(m_x[mid] == rx).only_enforce_if(on_ring)
+            model.add(m_x[mid] != rx).only_enforce_if(on_ring.negated())
+            total_wire.append(on_ring * 4)
+
     model.minimize(sum(total_wire))
+
+    # Search strategy: when off-face sinks pull the balance target low, tell
+    # the solver to branch on y-variables with low values first.  Without
+    # this, CP-SAT's default search finds a feasible solution in the high-y
+    # region and can't escape within the time limit.
+    if off_face_sink_ys:
+        y_vars = list(band_lo) + list(band_hi) + [m_y[mid] for mid in m_y]
+        model.add_decision_strategy(
+            y_vars,
+            cp_model.CHOOSE_FIRST,
+            cp_model.SELECT_MIN_VALUE,
+        )
 
     # Solve.
     solver = cp_model.CpSolver()

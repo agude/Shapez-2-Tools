@@ -1,8 +1,9 @@
 # Blueprint Synthesis — Plan
 
 **Status:** Draft, updated 2026-06-13. **Gate 1 passes; gate 2 placement
-feasible at all scales, routing converges at 1-lane × 4-cutter, blocked at
-4+ lanes by output-clearance/routing tension — active work is WP-N (§7.2).**
+feasible at all scales, routing converges at 1-lane and 4-lane × 4-cutter
+(source group-pinning + off-face-aware placement landed), blocked at 16-lane
+by density-constraint/source-clustering tension — active work post WP-N.**
 Gate 1: `test_synth_diagonal_full_belt_2x4` (8-pair diagonal on Foundation_2x4,
 32/32 edges, validates + interprets with hops). Gate 2:
 `test_half_splitter_2x4_placement_feasible` (16 lanes × 4 cutters/lane,
@@ -233,6 +234,39 @@ at scale is the tension between correctness (clearance required) and
 routability (clearance-spread placement exceeds router capacity).** Next step:
 routability-aware placement objectives or router improvements. 289/289 pass,
 `just lint` clean.
+
+**WP-N task 6 done (2026-06-13):** root-cause fix for 4-lane routing failure
+plus router ordering improvements. Three changes:
+
+1. **Source group-pinning** (`synth.py`): `netlist_from_cutter_spec` now pins
+   each source to a distinct port group (round-robin `i % n_src_groups`)
+   when the platform has multiple groups. Previously all 4 sources were
+   assigned to the first group (x=-12,-11,-10,-9); all 16 source→machine
+   edges crossed the same x-buckets, forcing the density constraint to
+   require channel height ≥ 16, which pushed machines to y=19 — far from the
+   actual sinks at y=8-11. With sources spread to x=-12, 8, 28, 48, max
+   bucket density drops to 4, machines land at y=8, and routing converges in
+   ~3s.
+
+2. **Off-face-aware placement** (`place.py`): band ceiling capped at
+   `max(max_sink_y + 8, input_y + 3 + 3 * n_stages)` when off-face sinks
+   exist (vs. unconditional `output_y - 3`); balance target shifted from
+   face midpoint to `(input_y + avg_sink_y) // 2` with weight proportional
+   to off-face sink count; ring-column avoidance penalty; low-y decision
+   strategy.
+
+3. **Router net ordering** (`pathfinder.py`): initial sort by descending HPWL
+   (longest bounding-box nets first); per-iteration critical-net-first
+   resorting (nets using overused cells route first).
+
+**Result:** 4-lane × 4-cutter synthesis → routing → validate succeeds (1
+unmatched leg, ~13s total). Machines at y=8 (vs. y=19 before), objective
+2952 (vs. 4672). 289/289 pass.
+
+**Remaining scaling wall:** the 16-lane Half Splitter puts 4 sources per
+group (16 lanes ÷ 4 groups), recreating the same density bottleneck at
+smaller scale (max bucket density 16 per group). The density constraint is
+the next target — see §7.3.
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -2057,19 +2091,33 @@ genuinely open — that is what task 1 measures.
    correctness). `lift_enabled` plumbed through
    `synthesize_cutter`/`_lower`/`synthesize`. `_MAX_RETRIES` raised 3→5.
    **1-lane × 4-cutter promoted to full end-to-end** (synthesis → routing
-   → lift → interpret, correct halves, 0.1s). **4-lane and 16-lane remain
-   placement-only**: output clearance spreads machines beyond the router's
-   convergence capacity even with lifts (4-lane: 7 overused cells after
-   60 iterations, ~411s). The blocker is the tension between correctness
-   (clearance required) and routability (clearance-spread placement
-   exceeds router capacity). Next step: routability-aware placement
-   objectives or router improvements.
+   → lift → interpret, correct halves, 0.1s). 4-lane and 16-lane remained
+   placement-only (output clearance spread machines beyond router capacity
+   at the time). Superseded by task 6.
 
 5. **Housekeeping — DONE (2026-06-13).** Updated §0 status header
    (289/289, gate-2 state), §2a crossing budget (capacity side landed),
    §7.2 tasks 3d/3f/4 (all DONE), §7.3 scaling arc. I7 metric (synthesized
    belts vs. human build) deferred — requires re-running the task-1
    experiment with the fixed interior-hop stripping; not blocking.
+
+6. **4-lane routing convergence — DONE (2026-06-13).** Root cause:
+   all 4 sources assigned to the first port group (x=-12,-11,-10,-9);
+   16 source→machine edges crossed the same x-buckets, forcing the density
+   constraint to require channel height ≥ 16, pushing machines to y=19 —
+   far from sinks at y=8-11. Three fixes:
+   - **Source group-pinning** (`synth.py`): pin each source to a distinct
+     port group (`i % n_src_groups`). Sources land at x=-12, 8, 28, 48;
+     max bucket density drops to 4; machines land at y=8.
+   - **Off-face-aware placement** (`place.py`): band ceiling capped near
+     actual sink y; balance target shifted to `(input_y + avg_sink_y)/2`;
+     ring-column avoidance penalty; low-y decision strategy.
+   - **Router net ordering** (`pathfinder.py`): initial sort by descending
+     HPWL; per-iteration critical-net-first resorting.
+   **Result:** 4-lane × 4-cutter synthesis → routing → validate succeeds
+   (~13s, 1 unmatched leg). Objective: 2952 (was 4672). 289/289 pass.
+   **Remaining wall for 16-lane:** 4 sources per group recreates density
+   bottleneck at group level — see §7.3 next steps.
 
 **Hints / expected failure modes:**
 - If CP-SAT is still infeasible after 3a–3c, bisect by re-enabling
@@ -2103,15 +2151,22 @@ genuinely open — that is what task 1 measures.
   arises; none block the diagonal-extractor north star.
 - New deps (§6): A/H add `networkx`; D adds `OR-Tools`. Nothing else.
 - **Scaling arc (updated 2026-06-13): ~~I~~ ✓ → {~~J~~ ✓, ~~K~~ ✓, ~~L~~ ✓} →
-  ~~M~~ ✓ → **N (tasks 1–5 done; gate 2 at 1-lane end-to-end, 4+lane
-  placement-only)** → north star** (the Half Splitter + the 48→96
-  full-belt diagonal extractor). Gate 1 passes; gate 2 placement feasible
-  at all scales (1/4/16 lanes × 4 cutters/lane); 1-lane full end-to-end
-  (synthesis → routing → interpret, correct halves). 4+ lane routing
-  blocked by output-clearance/routability tension. WP-N tasks 3a–3f and 4
-  done. **Current blocker:** output clearance spreads multi-cell machines
-  beyond the router's convergence capacity at 4+ lanes (even with lifts).
-  Next step: routability-aware placement objectives or router improvements.
+  ~~M~~ ✓ → ~~N~~ ✓ (tasks 1–6 done; gate 2 at 4-lane end-to-end) → north
+  star** (the Half Splitter + the 48→96 full-belt diagonal extractor).
+  Gate 1 passes; gate 2 routing converges at 1-lane and 4-lane × 4
+  cutters/lane (synthesis → routing → validate). 16-lane blocked by
+  density-constraint/source-clustering: with 4 sources per port group, all
+  16 source→machine edges per group cross the same x-buckets, forcing
+  channel height ≥ 16 and pushing machines to y=19 (same root cause as the
+  4-lane failure, now at group level). **Next steps:**
+  1. **Per-group density accounting:** count density per source-group's
+     x-region rather than globally — edges from different groups don't
+     compete for the same channel area. Alternatively, switch the density
+     constraint from hard to soft (penalty-based).
+  2. **16-lane end-to-end test:** once density is resolved, promote the
+     placement-only test to full synthesis → routing → interpret.
+  3. **Close the 4-lane unmatched leg:** the 4-lane result has 1 unmatched
+     leg — investigate and fix (likely a minor routing/emit artifact).
   WP-L's region-internal flow ordering remains open and non-blocking.
 
 ### 7.4 Test infrastructure to build first

@@ -280,7 +280,9 @@ def netlist_from_cutter_spec(spec: CutterSpec) -> dict:
     spec.validate()
     with open(_DATA / "platforms.json") as f:
         platforms = json.load(f)
-    western, eastern = side_regions(platforms[spec.platform])
+    plat = platforms[spec.platform]
+    western, eastern = side_regions(plat)
+    n_src_groups = len(_port_groups(plat, SOURCE_FACE))
 
     nodes: list[dict] = []
     edges: list[tuple[str, str]] = []
@@ -290,7 +292,11 @@ def netlist_from_cutter_spec(spec: CutterSpec) -> dict:
         sink_w = f"sink{i}_w"
         sink_e = f"sink{i}_e"
 
-        nodes.append({"id": src, "type": SRC_TYPE, "kind": "platform_in"})
+        src_node: dict = {"id": src, "type": SRC_TYPE, "kind": "platform_in"}
+        if n_src_groups > 1:
+            src_node["pin"] = "group"
+            src_node["target"] = (SOURCE_FACE, i % n_src_groups)
+        nodes.append(src_node)
         nodes.append({
             "id": sink_w, "type": SINK_TYPE, "kind": "platform_out",
             "pin": "region", "target": western,

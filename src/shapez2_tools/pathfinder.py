@@ -346,6 +346,14 @@ def _grow_tree(
     }
 
 
+def _net_hpwl(net: Net) -> int:
+    """Half-perimeter wire length (bounding box) of a net's terminals + root."""
+    all_cells = [net.root] + net.terminals
+    xs = [c[0] for c in all_cells]
+    ys = [c[1] for c in all_cells]
+    return (max(xs) - min(xs)) + (max(ys) - min(ys))
+
+
 def pathfinder_route(
     nets: list[Net], graph: RoutingGraph, *, raise_on_failure: bool = True
 ) -> bool:
@@ -355,7 +363,7 @@ def pathfinder_route(
     is True (the default for production callers), raises ``RoutingError``
     carrying the overused cells so WP-M can use them as placement feedback.
     """
-    nets_sorted = sorted(nets, key=lambda n: n.net_id)
+    nets_sorted = sorted(nets, key=lambda n: (-_net_hpwl(n), n.net_id))
     pres_fac = PRES_FAC_INIT
 
     for _iteration in range(MAX_ITERS):
@@ -375,6 +383,17 @@ def pathfinder_route(
         overused = [c for c, s in graph.occ.items() if len(s) > 1]
         if not overused:
             return True
+
+        # Reorder: nets using overused cells route first next iteration
+        overused_set = set(overused)
+        nets_sorted = sorted(
+            nets,
+            key=lambda n: (
+                0 if n.tree_cells & overused_set else 1,
+                -_net_hpwl(n),
+                n.net_id,
+            ),
+        )
 
         # Update history
         for c in overused:

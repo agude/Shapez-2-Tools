@@ -86,6 +86,26 @@ figure above).
 - Must the catcher's rotation equal the sender's (all 145 match here), or is
   that a builder habit?
 
+## 9. Density constraint scaling for 16-lane Half Splitter
+The `place.py` density constraint counts **all** source→machine edges crossing
+each x-bucket globally, then requires the channel height (band_lo - input_y - 1)
+to exceed the max count. With source group-pinning, each port group contributes
+at most `lanes_per_group × cutters_per_lane` edges to the buckets near that
+group's x-region. For 4 lanes × 4 groups = 1 source/group, max density = 4 and
+machines land at y=8 (near sinks). For 16 lanes × 4 groups = 4 sources/group,
+max density = 16 and machines get pushed to y=19 again.
+
+**Design question:** should the density constraint be:
+- **(a) Per-group:** only count edges from sources whose x-interval actually
+  overlaps the bucket (already partially done by `_covers_bucket`, but the
+  channel height is a single global variable — the bottleneck);
+- **(b) Softened:** convert from hard constraint to penalty in the objective,
+  letting the solver trade density overflows against wire length; or
+- **(c) Multi-channel:** model per-group channel heights (each source-group's
+  fan-out uses a different vertical slice of the routing area)?
+
+Not blocking 4-lane work. Blocks the 16-lane Half Splitter gate.
+
 ## 8. Lift calibration — RESOLVED (no fixture needed; see Resolved)
 Calibrated empirically from the 12-to-12 Balancer (46 lifts, 3 floors) — same
 approach that bypassed Q7 for WP-K. All 16 variants verified at 0 unmatched
