@@ -30,8 +30,9 @@ PRES_FAC_INIT = 0.5
 PRES_FAC_MULT = 1.8
 HIST_GAIN = 1.0
 MAX_ITERS = 60
-HOP_PENALTY = 2.0
+HOP_PENALTY = 1.5
 LIFT_COST = 3.0
+SYMMETRY_BREAK = 1e-4
 
 LEGAL_LEG_PATTERNS: set[tuple[int, int]] = {
     (1, 1),
@@ -195,7 +196,8 @@ def _grow_tree(
 
                     occ_set = graph.occ.get(nb, set())
                     overuse = max(0, len(occ_set - {net.net_id}) + 1 - 1)
-                    enter = (graph.base.get(nb, BASE) + graph.hist.get(nb, 0.0)) * (
+                    bias = (hash(nb) ^ net.net_id) % 997 * SYMMETRY_BREAK
+                    enter = (graph.base.get(nb, BASE) + graph.hist.get(nb, 0.0) + bias) * (
                         1 + pres_fac * overuse
                     )
                     new_cost = cost + enter
@@ -242,7 +244,8 @@ def _grow_tree(
                                 occ_set = graph.occ.get(nb, set())
                                 overuse = max(0, len(occ_set - {net.net_id}) + 1 - 1)
                                 hop_base = hdist * BASE + HOP_PENALTY
-                                enter = (hop_base + graph.hist.get(nb, 0.0)) * (
+                                bias = (hash(nb) ^ net.net_id) % 997 * SYMMETRY_BREAK
+                                enter = (hop_base + graph.hist.get(nb, 0.0) + bias) * (
                                     1 + pres_fac * overuse
                                 )
                                 new_cost = cost + enter
@@ -263,7 +266,8 @@ def _grow_tree(
                             continue
                         occ_set = graph.occ.get(nb, set())
                         overuse = max(0, len(occ_set - {net.net_id}) + 1 - 1)
-                        enter = (LIFT_COST + graph.hist.get(nb, 0.0)) * (
+                        bias = (hash(nb) ^ net.net_id) % 997 * SYMMETRY_BREAK
+                        enter = (LIFT_COST + graph.hist.get(nb, 0.0) + bias) * (
                             1 + pres_fac * overuse
                         )
                         new_cost = cost + enter
