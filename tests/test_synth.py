@@ -374,7 +374,8 @@ class TestMultiCellPlacement:
 
         outputs = interpret.interpret(nl, inputs)
         out_shapes = {str(outputs[p]) for p, _ in sinks}
-        assert "Ru--Ru--" in out_shapes or "--Ru--Ru" in out_shapes
+        assert "Ru--Ru--" in out_shapes
+        assert "--Ru--Ru" in out_shapes
 
 
 class TestDiagonalNetlist:

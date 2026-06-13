@@ -742,7 +742,7 @@ def place(
     in_dy_table = [0, -1, 0, 1]
 
     assert input_y < output_y, "south-to-north flow convention violated"
-    flow_r = 1 if input_y < output_y else 3
+    flow_r = 1
     primary_src_pos = set(_edge_ports(plat, SOURCE_FACE))
     primary_sink_pos = set(_edge_ports(plat, SINK_FACE))
 
