@@ -696,28 +696,47 @@ class TestCutterSynthesize:
             else:
                 pytest.fail(f"sink {pos} is on neither west nor east face")
 
-    def test_single_lane_four_cutters_placement_feasible(self):
-        """WP-N 3a-3c: CP-SAT finds a feasible placement for 1 lane x
-        4 cutters/lane on Foundation_1x1.  Full routing is not yet
-        convergent (PathFinder tie-breaking); task 4 will add the
-        end-to-end assertion."""
-        from shapez2_tools.place import place
+    def test_single_lane_four_cutters_halves_land_on_correct_sides(self):
+        """1 lane x 4 cutters/lane on Foundation_1x1: full end-to-end
+        synthesis, routing, and interpret.  The 1->4 split and two 4->1
+        merges converge with hops + symmetry-breaking (WP-N task 4)."""
+        from shapez2_tools import interpret, shapes
+        from shapez2_tools.place import _edge_ports, _load_platform
 
-        # TODO(task-4): restore end-to-end interpret + half-assignment assertions
         spec = CutterSpec(lanes=1, platform="Foundation_1x1", cutters_per_lane=4)
-        abstract = _monotone_sort(netlist_from_cutter_spec(spec), spec.platform)
-        nl = place(abstract, spec.platform)
-        machines = [n for n in nl.nodes.values() if n.kind == "machine"]
-        assert len(machines) == spec.lanes * spec.cutters_per_lane
+        result = synthesize_cutter(spec, hop_range=lift.MAX_HOP_RANGE)
+        assert lift.validate(result) == []
+        assert lift.unmatched_legs(result, 0) == 0
+
+        nl = lift.trace_layer(result, 0, contract_hops=True)
+        assert len(nl.edges) == 3 * spec.lanes * spec.cutters_per_lane
+
+        plat = _load_platform(spec.platform)
+        west_ports = set(_edge_ports(plat, 0))
+        east_ports = set(_edge_ports(plat, 2))
+
+        src_pos = next(p for p, n in nl.nodes.items() if n.kind == "platform_in")
+        shape = Shape.parse("RuCuSuWu")
+        out = interpret.interpret(nl, {src_pos: shape})
+        east_half, west_half = shapes.cut(shape)
+
+        sinks = {p: n for p, n in nl.nodes.items() if n.kind == "platform_out"}
+        assert len(sinks) == 2
+        for pos in sinks:
+            if pos in west_ports:
+                assert out[pos] == west_half
+            elif pos in east_ports:
+                assert out[pos] == east_half
+            else:
+                pytest.fail(f"sink {pos} is on neither west nor east face")
 
     def test_four_lane_four_cutters_2x4_placement_feasible(self):
-        """WP-N 3a-3c: CP-SAT finds a feasible placement for 4 lanes x
-        4 cutters/lane on Foundation_2x4 (64 cutter cells).  Full routing
-        not yet convergent at this scale; task 4 will add the end-to-end
-        assertion."""
+        """4 lanes x 4 cutters/lane on Foundation_2x4 (64 cutter cells):
+        placement feasible, routing not yet convergent (output clearance
+        spreads machines beyond the router's current capacity, even with
+        lifts).  Blocked on routability-aware placement objectives."""
         from shapez2_tools.place import place
 
-        # TODO(task-4): restore end-to-end interpret + half-assignment assertions
         spec = CutterSpec(lanes=4, platform="Foundation_2x4", cutters_per_lane=4)
         abstract = _monotone_sort(netlist_from_cutter_spec(spec), spec.platform)
         nl = place(abstract, spec.platform)
@@ -762,13 +781,12 @@ class TestCutterSynthesize:
                 pytest.fail(f"sink {pos} is outside both Region pins")
 
     def test_half_splitter_2x4_placement_feasible(self):
-        """WP-N 3a-3c: CP-SAT finds a feasible placement for the full
-        Half Splitter (16 lanes x 4 cutters/lane on Foundation_2x4,
-        256 cutter cells).  Full routing not yet convergent at this
-        scale; task 4 will add the end-to-end assertion."""
+        """Full Half Splitter (16 lanes x 4 cutters/lane on Foundation_2x4,
+        256 cutter cells): placement feasible, routing not yet convergent.
+        Same blocker as the 4-lane case — output clearance vs. routing
+        capacity."""
         from shapez2_tools.place import place
 
-        # TODO(task-4): restore end-to-end interpret + half-assignment assertions
         spec = CutterSpec(lanes=16, platform="Foundation_2x4", cutters_per_lane=4)
         abstract = _monotone_sort(netlist_from_cutter_spec(spec), spec.platform)
         nl = place(abstract, spec.platform)

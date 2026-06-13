@@ -312,11 +312,12 @@ def netlist_from_cutter_spec(spec: CutterSpec) -> dict:
 
 def synthesize_cutter(
     spec: CutterSpec, layer: int = 0, *, hop_range: int = 0,
+    lift_enabled: bool = False,
 ) -> Blueprint:
     """Synthesize a cutter-fan blueprint from a spec (§2a, north-star gate 2)."""
     return _lower(
         netlist_from_cutter_spec(spec), spec.platform, layer,
-        hop_range=hop_range,
+        hop_range=hop_range, lift_enabled=lift_enabled,
     )
 
 
@@ -348,11 +349,12 @@ def _monotone_sort(abstract: dict, platform: str) -> dict:
     return {"nodes": sources + machines + sinks, "edges": abstract["edges"]}
 
 
-_MAX_RETRIES = 3
+_MAX_RETRIES = 5
 
 
 def _lower(
     abstract: dict, platform: str, layer: int = 0, *, hop_range: int = 0,
+    lift_enabled: bool = False,
 ) -> Blueprint:
     """Lower an abstract netlist to a blueprint: sort → place → route → blueprint.
 
@@ -380,7 +382,7 @@ def _lower(
         try:
             return reroute_with_junctions(
                 stripped, placed, layer=layer, hop_range=hop_range,
-                platform=platform,
+                platform=platform, lift_enabled=lift_enabled,
             )
         except RoutingError as err:
             if attempt == _MAX_RETRIES:
@@ -389,9 +391,11 @@ def _lower(
                 forbidden.add((x, y))
 
 
-def synthesize(spec: Spec, layer: int = 0, *, hop_range: int = 0) -> Blueprint:
+def synthesize(spec: Spec, layer: int = 0, *, hop_range: int = 0,
+               lift_enabled: bool = False) -> Blueprint:
     """Synthesize a blueprint from a spec."""
-    return _lower(netlist_from_spec(spec), spec.platform, layer, hop_range=hop_range)
+    return _lower(netlist_from_spec(spec), spec.platform, layer,
+                  hop_range=hop_range, lift_enabled=lift_enabled)
 
 
 def synthesize_quotient(spec: Spec) -> Blueprint:

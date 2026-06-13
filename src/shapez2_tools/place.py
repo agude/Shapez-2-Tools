@@ -519,6 +519,40 @@ def place(
         model.add(flat2 == sx * h + sy)
         flat_positions.append(flat2)
 
+    # Output clearance for multi-cell fan-out groups: within each group of
+    # multi-cell machines sharing a source, machine pairs at the same x-column
+    # (anchor or second cell) must have y-spacing >= 2.  Without this, stacked
+    # cutters create physical chains where one cutter's output feeds another's
+    # input — a functional correctness issue.
+    fanout_groups: dict[str, list[str]] = defaultdict(list)
+    for src_id, dst_id in abstract["edges"]:
+        if node_by_id[dst_id]["kind"] == "machine":
+            fanout_groups[src_id].append(dst_id)
+    for _src, members in fanout_groups.items():
+        mc_members = [mid for mid in members
+                      if _is_multi_cell(node_by_id[mid]["type"]) and mid in m_x]
+        if len(mc_members) < 2:
+            continue
+        for i in range(len(mc_members)):
+            for j in range(i + 1, len(mc_members)):
+                ai, aj = mc_members[i], mc_members[j]
+                abs_dy = model.new_int_var(0, grid_h, f"mcdy_{ai}_{aj}")
+                model.add_abs_equality(abs_dy, m_y[ai] - m_y[aj])
+                same_x = model.new_bool_var(f"samex_{ai}_{aj}")
+                model.add(m_x[ai] == m_x[aj]).only_enforce_if(same_x)
+                model.add(m_x[ai] != m_x[aj]).only_enforce_if(same_x.negated())
+                model.add(abs_dy >= 2).only_enforce_if(same_x)
+                if ai in second_x:
+                    same_sx = model.new_bool_var(f"samesx_{ai}_{aj}")
+                    model.add(second_x[ai] == m_x[aj]).only_enforce_if(same_sx)
+                    model.add(second_x[ai] != m_x[aj]).only_enforce_if(same_sx.negated())
+                    model.add(abs_dy >= 2).only_enforce_if(same_sx)
+                if aj in second_x:
+                    same_xs = model.new_bool_var(f"samexs_{ai}_{aj}")
+                    model.add(m_x[ai] == second_x[aj]).only_enforce_if(same_xs)
+                    model.add(m_x[ai] != second_x[aj]).only_enforce_if(same_xs.negated())
+                    model.add(abs_dy >= 2).only_enforce_if(same_xs)
+
     # Also exclude port positions from ALL occupied cells.
     for pos in port_pos.values():
         fixed_flat = pos[0] * h + pos[1]
