@@ -703,6 +703,7 @@ class TestCutterSynthesize:
         end-to-end assertion."""
         from shapez2_tools.place import place
 
+        # TODO(task-4): restore end-to-end interpret + half-assignment assertions
         spec = CutterSpec(lanes=1, platform="Foundation_1x1", cutters_per_lane=4)
         abstract = _monotone_sort(netlist_from_cutter_spec(spec), spec.platform)
         nl = place(abstract, spec.platform)
@@ -716,6 +717,7 @@ class TestCutterSynthesize:
         assertion."""
         from shapez2_tools.place import place
 
+        # TODO(task-4): restore end-to-end interpret + half-assignment assertions
         spec = CutterSpec(lanes=4, platform="Foundation_2x4", cutters_per_lane=4)
         abstract = _monotone_sort(netlist_from_cutter_spec(spec), spec.platform)
         nl = place(abstract, spec.platform)
@@ -766,6 +768,7 @@ class TestCutterSynthesize:
         scale; task 4 will add the end-to-end assertion."""
         from shapez2_tools.place import place
 
+        # TODO(task-4): restore end-to-end interpret + half-assignment assertions
         spec = CutterSpec(lanes=16, platform="Foundation_2x4", cutters_per_lane=4)
         abstract = _monotone_sort(netlist_from_cutter_spec(spec), spec.platform)
         nl = place(abstract, spec.platform)

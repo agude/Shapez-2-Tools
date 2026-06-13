@@ -612,6 +612,7 @@ def place(
     in_dx_table = [-1, 0, 1, 0]  # input is opposite: W, S, E, N
     in_dy_table = [0, -1, 0, 1]
 
+    assert input_y < output_y, "south-to-north flow convention violated"
     flow_r = 1 if input_y < output_y else 3
     primary_src_pos = set(_edge_ports(plat, SOURCE_FACE))
     primary_sink_pos = set(_edge_ports(plat, SINK_FACE))
@@ -625,7 +626,7 @@ def place(
         if src_node["kind"] == "machine":
             if (
                 dst_node["kind"] == "platform_out"
-                and port_pos.get(dst_id) not in primary_sink_pos
+                and port_pos[dst_id] not in primary_sink_pos
             ):
                 model.add(m_r[src_id] == flow_r)
             else:
@@ -652,7 +653,7 @@ def place(
         if dst_node["kind"] == "machine":
             if (
                 src_node["kind"] == "platform_in"
-                and port_pos.get(src_id) not in primary_src_pos
+                and port_pos[src_id] not in primary_src_pos
             ):
                 model.add(m_r[dst_id] == flow_r)
             else:
@@ -748,12 +749,12 @@ def place(
         min_spacing = 2
         if (
             dst_node["kind"] == "platform_out"
-            and port_pos.get(dst_id) not in primary_sink_pos
+            and port_pos[dst_id] not in primary_sink_pos
         ):
             min_spacing = 3
         elif (
             src_node["kind"] == "platform_in"
-            and port_pos.get(src_id) not in primary_src_pos
+            and port_pos[src_id] not in primary_src_pos
         ):
             min_spacing = 3
 
