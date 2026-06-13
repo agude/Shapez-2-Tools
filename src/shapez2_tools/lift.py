@@ -298,6 +298,7 @@ class _Cell:
     anchor: tuple[int, int]
     is_belt: bool
     out_layer_delta: int = 0
+    is_lift_exit: bool = False
 
 
 @dataclass(frozen=True)
@@ -357,7 +358,8 @@ def _occupancy(
             if e.layer == layer:
                 occ[anchor] = _Cell(ins, frozenset(), anchor, True)
             elif e.layer + delta == layer:
-                occ[anchor] = _Cell(frozenset(), outs, anchor, True)
+                occ[anchor] = _Cell(frozenset(), outs, anchor, True,
+                                    is_lift_exit=True)
             else:
                 for dl in range(sign, delta, sign):
                     if e.layer + dl == layer:
@@ -378,16 +380,32 @@ def _occupancy(
 
 
 def unmatched_legs(bp: Blueprint, layer: int) -> int:
-    """Count routing legs with no matching partner (0 means well-formed)."""
+    """Count routing legs with no matching partner (0 means well-formed).
+
+    Lift exit cells (the destination floor of a lift entity) are excluded from
+    counting: they have no physical entity on this floor — the lift entity on
+    the source floor realizes both the entry and exit connections.  Adjacent
+    cells whose output points toward a lift exit are also excluded, since the
+    lift entity occupies that position.
+    """
     occ = _occupancy(bp, layer)
+    lift_exit_pos = {(x, y) for (x, y), c in occ.items() if c.is_lift_exit}
     bad = 0
     for (x, y), c in occ.items():
+        if c.is_lift_exit:
+            continue
         for d in c.outs:
-            n = occ.get((x + d[0], y + d[1]))
+            target = (x + d[0], y + d[1])
+            if target in lift_exit_pos:
+                continue
+            n = occ.get(target)
             if not (n and _neg(d) in n.ins):
                 bad += 1
         for d in c.ins:
-            n = occ.get((x + d[0], y + d[1]))
+            source = (x + d[0], y + d[1])
+            if source in lift_exit_pos:
+                continue
+            n = occ.get(source)
             if not (n and _neg(d) in n.outs):
                 bad += 1
     return bad

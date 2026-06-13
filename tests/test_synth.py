@@ -730,16 +730,18 @@ class TestCutterSynthesize:
             else:
                 pytest.fail(f"sink {pos} is on neither west nor east face")
 
-    def test_four_lane_four_cutters_2x4_placement_feasible(self):
+    def test_four_lane_four_cutters_2x4_routes(self):
         """4 lanes x 4 cutters/lane on Foundation_2x4 (64 cutter cells):
-        placement feasible, routing not yet convergent (output clearance
-        spreads machines beyond the router's current capacity, even with
-        lifts).  Blocked on routability-aware placement objectives."""
-        from shapez2_tools.place import place
-
+        synthesis → routing → validate (lift-enabled). L0 unmatched legs = 0
+        (lift-exit exclusion handles cross-floor connections). L1 has 2
+        remaining: consecutive hop catchers whose outputs conflict (emit
+        model assigns receiver entities that don't accept adjacent input)."""
         spec = CutterSpec(lanes=4, platform="Foundation_2x4", cutters_per_lane=4)
-        abstract = _monotone_sort(netlist_from_cutter_spec(spec), spec.platform)
-        nl = place(abstract, spec.platform)
+        result = synthesize_cutter(spec, hop_range=5, lift_enabled=True)
+
+        assert lift.unmatched_legs(result, 0) == 0
+
+        nl = lift.trace_layer(result, 0, contract_hops=True)
         machines = [n for n in nl.nodes.values() if n.kind == "machine"]
         assert len(machines) == spec.lanes * spec.cutters_per_lane
 

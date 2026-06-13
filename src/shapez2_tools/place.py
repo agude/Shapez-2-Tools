@@ -676,7 +676,12 @@ def place(
             ch_h.append(band_lo[s + 1] - band_hi[s] - 1)
         ch_h.append(output_y - band_hi[-1] - 1)
 
-    ch_edges: dict[int, list[tuple]] = defaultdict(list)
+    # ch_edges keyed by (channel_index, group_key): group_key is the source's
+    # group index for group-pinned platform_in edges (channel 0), else None.
+    # Per-group density: edges from spatially separated source groups route
+    # through different horizontal slices of the channel, so they don't compete
+    # for the same vertical capacity — apply density independently per group.
+    ch_edges: dict[tuple[int, int | None], list[tuple]] = defaultdict(list)
     for sid, did in abstract["edges"]:
         sn, dn = node_by_id[sid], node_by_id[did]
         if sn["kind"] == "platform_in" and sid not in primary_port_ids:
@@ -687,30 +692,37 @@ def place(
         xd = _node_x(did, dn, port_pos, m_x, model)
         if sn["kind"] == "platform_in":
             ci = 0
+            grp = sn.get("target", (None, None))[1] if sn.get("pin") == "group" else None
         elif sn["kind"] == "machine":
             ci = stages[sid] + 1
+            grp = None
         else:
             continue
-        ch_edges[ci].append((xs, xd))
+        ch_edges[(ci, grp)].append((xs, xd))
 
     for ci in range(n_stages + 1):
-        edges_ci = ch_edges.get(ci, [])
-        if not edges_ci:
-            continue
-        for b in range(n_bkt):
-            bl = bkt_lo + b * _BUCKET_WIDTH
-            bh = min(bl + _BUCKET_WIDTH - 1, bkt_hi)
-            terms: list = []
-            fixed = 0
-            for ei, (xs, xd) in enumerate(edges_ci):
-                c = _covers_bucket(model, xs, xd, bl, bh, f"d{ci}b{b}e{ei}")
-                if isinstance(c, bool):
-                    if c:
-                        fixed += 1
-                else:
-                    terms.append(c)
-            if terms or fixed > 0:
-                model.add(sum(terms) + fixed <= ch_h[ci])
+        group_keys = sorted(
+            {g for c, g in ch_edges if c == ci},
+            key=lambda g: (g is not None, g),
+        )
+        for grp in group_keys:
+            edges_cg = ch_edges.get((ci, grp), [])
+            if not edges_cg:
+                continue
+            for b in range(n_bkt):
+                bl = bkt_lo + b * _BUCKET_WIDTH
+                bh = min(bl + _BUCKET_WIDTH - 1, bkt_hi)
+                terms: list = []
+                fixed = 0
+                for ei, (xs, xd) in enumerate(edges_cg):
+                    c = _covers_bucket(model, xs, xd, bl, bh, f"d{ci}g{grp}b{b}e{ei}")
+                    if isinstance(c, bool):
+                        if c:
+                            fixed += 1
+                    else:
+                        terms.append(c)
+                if terms or fixed > 0:
+                    model.add(sum(terms) + fixed <= ch_h[ci])
 
     # Rotation constraints: a machine's output must face *toward* its
     # downstream neighbour (positive dot product between output direction and

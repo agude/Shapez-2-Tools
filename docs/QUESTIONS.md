@@ -86,29 +86,15 @@ figure above).
 - Must the catcher's rotation equal the sender's (all 145 match here), or is
   that a builder habit?
 
-## 9. Density constraint scaling for 16-lane Half Splitter
-The `place.py` density constraint counts **all** source→machine edges crossing
-each x-bucket globally, then requires the channel height (band_lo - input_y - 1)
-to exceed the max count. With source group-pinning, each port group contributes
-at most `lanes_per_group × cutters_per_lane` edges to the buckets near that
-group's x-region. For 4 lanes × 4 groups = 1 source/group, max density = 4 and
-machines land at y=8 (near sinks). For 16 lanes × 4 groups = 4 sources/group,
-max density = 16 and machines get pushed to y=19 again.
-
-**Plan:** **(a) Per-group density** first — only count edges whose source
-x-interval actually overlaps each bucket. With group-pinned sources spatially
-separated on Foundation_2x4, edges from different groups don't compete for the
-same channel area, so the real per-bucket density is ~4 (one group's fan-out),
-not 16. Smallest change, correctly models the geometry when groups are
-well-separated. **(b) Soft density** as fallback — if (a) breaks on denser
-platforms where groups aren't spatially separated, convert the hard constraint
-to a penalty (`max(0, count - channel_height) * weight`). Never causes
-INFEASIBLE, but loses the guarantee that placement respects routing capacity.
-Option (c) multi-channel rejected: too complex, and the cutter topology routes
-across the full platform width (both west and east sinks), violating the
-disjoint-slice assumption.
-
-Not blocking 4-lane work. Blocks the 16-lane Half Splitter gate.
+## 9. Density constraint scaling for 16-lane Half Splitter — RESOLVED
+**Resolved 2026-06-13** via per-group density accounting (plan option (a)).
+`ch_edges` key changed from `channel_index` to `(channel_index, group_key)`;
+source→machine edges in channel 0 are partitioned by the source's group-pin
+index. Edges from different source groups are constrained independently per
+x-bucket. With group-pinned sources spatially separated on Foundation_2x4,
+per-bucket density drops from 16 (global) to ~4 (one group's fan-out);
+machines land at y=7-13 (was y=19). All 289 tests pass. Soft density (option
+(b)) was not needed.
 
 ## 8. Lift calibration — RESOLVED (no fixture needed; see Resolved)
 Calibrated empirically from the 12-to-12 Balancer (46 lifts, 3 floors) — same

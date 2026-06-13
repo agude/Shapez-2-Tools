@@ -95,6 +95,15 @@ def _direction(src: Cell, dst: Cell) -> tuple[int, int]:
     return (dst[0] - src[0], dst[1] - src[1])
 
 
+def _unit_direction(src: Cell, dst: Cell) -> tuple[int, int]:
+    dx, dy = dst[0] - src[0], dst[1] - src[1]
+    if dx:
+        dx = 1 if dx > 0 else -1
+    if dy:
+        dy = 1 if dy > 0 else -1
+    return (dx, dy)
+
+
 _DIR_TO_ROT: dict[tuple[int, int], int] = {E: 0, N: 1, W: 2, S: 3}
 
 
@@ -210,11 +219,14 @@ def _grow_tree(
                 if allow_hops and graph.hop_range > 0:
                     cx, cy, cl = cell
                     # No hops from cells reached via hops (can't overlay
-                    # launcher + catcher on the same cell).
+                    # launcher + catcher on the same cell), and no hops from
+                    # lift exits (lift entity already occupies the cell).
                     _skip_hops = False
                     if cell in prev:
                         p = prev[cell]
                         if abs(cx - p[0]) + abs(cy - p[1]) > 1:
+                            _skip_hops = True
+                        elif p[2] != cl:
                             _skip_hops = True
                     if _skip_hops:
                         pass
@@ -516,10 +528,19 @@ def _cell_to_entity(
                 out_dir = None
                 for s2, d2 in tree_edges:
                     if d2 == cell and s2[2] == cell[2]:
-                        in_dir = _direction(cell, s2)
+                        in_dir = _unit_direction(cell, s2)
                     if s2 == dst:
                         if d2[2] == dst[2]:
-                            out_dir = _direction(dst, d2)
+                            out_dir = _unit_direction(dst, d2)
+                if hop_edges:
+                    if in_dir is None:
+                        for s2, d2 in hop_edges:
+                            if d2 == cell:
+                                in_dir = _unit_direction(cell, s2)
+                    if out_dir is None:
+                        for s2, d2 in hop_edges:
+                            if s2 == dst:
+                                out_dir = _unit_direction(dst, d2)
                 delta = dst[2] - src[2]
                 if in_dir is not None and out_dir is not None:
                     key = (frozenset({in_dir}), frozenset({out_dir}), delta)

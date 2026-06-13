@@ -1,18 +1,18 @@
 # Blueprint Synthesis — Plan
 
-**Status:** Draft, updated 2026-06-13. **Gate 1 passes; gate 2 placement
-feasible at all scales, routing converges at 1-lane and 4-lane × 4-cutter
-(source group-pinning + off-face-aware placement landed), blocked at 16-lane
-by density-constraint/source-clustering tension — active work post WP-N.**
+**Status:** Draft, updated 2026-06-13. **Gate 1 passes; gate 2 routing
+converges at 1-lane, 4-lane × 1-cutter (0 unmatched legs, correct halves),
+and 4-lane × 4-cutter (routing converges, L0 unmatched legs = 0, L1 has 2
+remaining hop-catcher artifacts). Per-group density accounting + lift-exit
+exclusion landed. 16-lane routing failed (unreachable terminal after 1128s) —
+routing capacity, not placement.**
 Gate 1: `test_synth_diagonal_full_belt_2x4` (8-pair diagonal on Foundation_2x4,
 32/32 edges, validates + interprets with hops). Gate 2:
 `test_half_splitter_2x4_placement_feasible` (16 lanes × 4 cutters/lane,
 placement-only); `test_single_lane_four_cutters_halves_land_on_correct_sides`
 (1 lane × 4 cutters/lane, full end-to-end: synthesis → routing → interpret,
-correct halves). The 4-lane and 16-lane cases place successfully but routing
-doesn't converge even with lifts — the output-clearance constraint (needed
-to prevent stacked cutters from chaining shapes) spreads machines beyond the
-router's current capacity.
+correct halves); `test_four_lane_four_cutters_2x4_routes` (4-lane × 4-cutter,
+full synthesis → routing → lift trace, 16 machines placed).
 Row model + feedback loop landed, hop direction constraints landed, A\*
 heuristic landed (3.9× routing speedup), multi-face port support landed,
 `Group`/`Locked`/`Region` sink pinning landed, `CutterSpec` landed (cutter fan
@@ -263,10 +263,32 @@ plus router ordering improvements. Three changes:
 unmatched leg, ~13s total). Machines at y=8 (vs. y=19 before), objective
 2952 (vs. 4672). 289/289 pass.
 
-**Remaining scaling wall:** the 16-lane Half Splitter puts 4 sources per
-group (16 lanes ÷ 4 groups), recreating the same density bottleneck at
-smaller scale (max bucket density 16 per group). The density constraint is
-the next target — see §7.3.
+**Per-group density and lift-hop emit fixes (2026-06-13):** three changes
+resolving §7.3 steps 1 and 3.
+
+1. **Per-group density accounting** (`place.py`): density constraints now
+   partition source→machine edges in channel 0 by source group index.
+   `ch_edges` key changed from `channel_index` to `(channel_index,
+   group_key)`. With group-pinned sources spatially separated, per-bucket
+   density drops from 16 (global) to ~4 (one group's fan-out); 16-lane
+   machines land at y=7-13 (was y=19). Resolves Q9.
+
+2. **Lift-hop entity emission** (`pathfinder.py`): three bugs fixed in
+   `_cell_to_entity`: (a) added `_unit_direction` — hop edges span multiple
+   cells, producing non-unit vectors `(5,0)` that didn't match the lift emit
+   table; (b) lift in/out direction detection now checks `hop_edges` as
+   fallback for the continuation after a lift exit; (c) `_grow_tree` no
+   longer allows hops from lift exit cells (detects predecessor on a
+   different floor).
+
+3. **4-lane × 4-cutter test upgraded** from placement-only to full synthesis
+   → routing → lift trace (`test_four_lane_four_cutters_2x4_routes`).
+
+**Remaining:** lift exit cells on the extra floor have directional output in
+`_occupancy` but no physical belt entity — `unmatched_legs` counts these as
+gaps. The routing tree is valid (0 overused cells); the emit model can't
+represent the lift entity's cross-floor exit + same-floor continuation.
+289/289 pass, lint clean.
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -2153,22 +2175,56 @@ genuinely open — that is what task 1 measures.
 - **Scaling arc (updated 2026-06-13): ~~I~~ ✓ → {~~J~~ ✓, ~~K~~ ✓, ~~L~~ ✓} →
   ~~M~~ ✓ → ~~N~~ ✓ (tasks 1–6 done; gate 2 at 4-lane end-to-end) → north
   star** (the Half Splitter + the 48→96 full-belt diagonal extractor).
-  Gate 1 passes; gate 2 routing converges at 1-lane and 4-lane × 4
-  cutters/lane (synthesis → routing → validate). 16-lane blocked by
-  density-constraint/source-clustering: with 4 sources per port group, all
-  16 source→machine edges per group cross the same x-buckets, forcing
-  channel height ≥ 16 and pushing machines to y=19 (same root cause as the
-  4-lane failure, now at group level). **Next steps:**
-  1. **Per-group density accounting:** only count edges whose source
-     x-interval overlaps each bucket — with group-pinned sources spatially
-     separated, edges from different groups don't compete for the same
-     channel area. Fallback: soft density (penalty instead of hard
-     constraint) if per-group breaks on platforms where groups aren't
-     well-separated. See Q9.
-  2. **16-lane end-to-end test:** once density is resolved, promote the
-     placement-only test to full synthesis → routing → interpret.
-  3. **Close the 4-lane unmatched leg:** the 4-lane result has 1 unmatched
-     leg — investigate and fix (likely a minor routing/emit artifact).
+  Gate 1 passes; gate 2 routing converges at 1-lane, 4-lane × 1-cutter
+  (0 unmatched, correct halves), and 4-lane × 4-cutter (routing converges,
+  16 machines placed). **Done (2026-06-13):**
+  1. **Per-group density accounting (§7.3 step 1).** Density constraints
+     now partition source→machine edges by source group: edges from different
+     groups route through separate horizontal channel slices and are
+     constrained independently. With group-pinned sources spatially separated,
+     per-bucket density drops from 16 (global) to ~4 (one group's fan-out),
+     machines land at y=7-13 (vs y=19). All 289 tests pass. `ch_edges` key
+     changed from `channel_index` to `(channel_index, group_key)`.
+  2. **Lift-hop entity emission fixes (§7.3 step 3, partial).** Three bugs
+     in `_cell_to_entity` fixed: (a) `_unit_direction` added — hop edges span
+     multiple cells, producing non-unit vectors `(5,0)` that didn't match the
+     lift emit table's unit directions `(1,0)`; (b) `_cell_to_entity`'s lift
+     in/out direction scan now checks `hop_edges` as fallback when `tree_edges`
+     don't contain the continuation (lift exit → hop sender at the destination);
+     (c) no-hop-from-lift-exit constraint added to `_grow_tree` — prevents
+     placing a hop sender at a lift exit cell (same physical cell, two entities).
+     **Lift-exit limitation resolved** in step 4 below.
+  3. **4-lane × 4-cutter test upgraded** from placement-only to full synthesis
+     → routing → lift trace. Routing converges in ~10s with lifts.
+  4. **Lift-exit unmatched legs fixed.** Added `is_lift_exit` flag to `_Cell`;
+     `_occupancy` marks lift exit cells (destination floor of a lift entity).
+     `unmatched_legs` now skips output checks from/toward lift exit cells —
+     their cross-floor connections are realized by the lift entity on the
+     source floor, not by a same-floor entity. Result: 4-lane × 4-cutter
+     L0 unmatched legs dropped from 4 to 0; L1 from 9 to 2. The 2 remaining
+     L1 legs are a different category: consecutive hop catchers whose outputs
+     conflict (the emit model assigns `BeltPortReceiverInternalVariant` which
+     has `ins=frozenset()` — items arrive via hop flight, not adjacent cells).
+     Test upgraded to assert `unmatched_legs(result, 0) == 0`.
+  5. **16-lane routing failed.** Per-group density fix resolved placement
+     (machines at y=7-13), but routing failed in 1128s: `net 25 (fanin):
+     terminal (11, 14, 0) unreachable from tree of 57 cells`. The routing
+     graph at 16 lanes (48 nets on Foundation_2x4) exceeds PathFinder's
+     capacity — the negotiated-congestion loop can't find paths when the
+     passable set is too congested. Separate from the density issue; needs
+     either (a) a larger platform, (b) routing improvements (better
+     heuristics, more iterations), or (c) decomposition (route groups of
+     lanes independently).
+  **Next steps:**
+  6. **Fix consecutive hop-catcher emit artifact.** When `_cell_to_entity`
+     finds a hop destination, it unconditionally emits a receiver entity,
+     ignoring any step-edge connectivity at that cell. Consecutive catchers
+     on L1 get receiver entities that don't accept adjacent-cell input. Fix
+     requires `_cell_to_entity` to combine hop and step-edge legs, or the
+     routing to avoid placing catchers at cells with step-edge neighbors.
+  7. **16-lane routing capacity.** Investigate scaling options: larger
+     platform (Foundation_3x4), routing improvements, or lane-group
+     decomposition.
   WP-L's region-internal flow ordering remains open and non-blocking.
 
 ### 7.4 Test infrastructure to build first
