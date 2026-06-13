@@ -164,9 +164,24 @@ INFEASIBLE. New `test_single_lane_two_cutters_halves_land_on_correct_sides`
 legs, and both sinks carry the correct half. The `>=2 lanes` xfails are
 untouched — that INFEASIBLE comes from the separate cross-group-ordering
 constraint (problem 2), not this one. 283/283 pass + 3 strict xfails, `just
-lint` clean. Next: the rest of task 3 (3b-d: blocks not rows, scoped facing
-constraints, crossing-budget capacity) and 3f hop/lift cost calibration; the
-oscillation xfail is also fair game (PathFinder tie-breaker, e.g.
+lint` clean.
+**WP-N task 3b done (2026-06-12):** replaced the single `row_y` per stage
+with a stage **band** (`band_lo`/`band_hi`) — each machine gets its own y
+variable bounded by its stage's band, routing channels are between bands, and
+a weighted compactness penalty (2× stage machine count × band height) keeps
+bands collapsed to a single row when the topology doesn't need vertical
+spread. Fan-out groups become **blocks** with `block_lo_x`/`block_hi_x`
+derived from `min_equality`/`max_equality` over member x-positions (including
+second cells of multi-cell machines); cross-block ordering by source x
+(`block_hi[i] + 1 <= block_lo[i+1]`). The block filter was lowered from
+`>= 2` machine children to `>= 1` (single-cutter-per-lane groups now get
+ordering constraints, preventing vertical stacking that blocked second-cell
+output routes); groups whose machines appear in multiple blocks are excluded
+(swapper topology: two sources feed the same machine). Subsumes problem 3
+(16-column × 4-tall human layout now admitted by the band model). 283/283
+pass + 3 strict xfails unchanged, `just lint` clean. Next: 3c (scoped facing
+constraints), 3d (crossing-budget capacity), 3f (hop/lift cost calibration);
+the oscillation xfail is also fair game (PathFinder tie-breaker, e.g.
 deterministic by `net_id`).
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
@@ -1882,16 +1897,16 @@ genuinely open — that is what task 1 measures.
    a. **Delete the 2-member adjacency — DONE (2026-06-11).** No
       replacement — proximity is already rewarded by the wire-length
       objective. See the §0 entry for the fix and its regression test.
-   b. **Blocks, not rows, for replication groups.** Each fan-out group
-      (one lane's cutters) becomes a contiguous vertical block: shared
-      block `x`-interval (`lo_g`/`hi_g` from member positions), members
-      stacked in y within the stage band. Keep left-to-right ordering of
-      *blocks* by source x (`hi_g(i) <= lo_g(i+1)`) — that part is
-      correct and matches the human's columnar lanes. Drop every
-      implication from machine order to *sink* position. This subsumes
-      problem 3: relax "one `row_y` per stage" to a band of rows where a
-      stage contains blocks (the simplest encoding that admits the
-      16-column × 4-tall human layout wins; do not over-engineer).
+   b. **Blocks, not rows, for replication groups — DONE (2026-06-12).**
+      See the §0 entry for the full description. Summary: `row_y` per
+      stage → `band_lo`/`band_hi` pair; each machine gets its own y
+      variable within the band; pairwise fan-group ordering → block
+      `lo_x`/`hi_x` via `min_equality`/`max_equality` (including
+      second cells), cross-block ordering `hi[i]+1 <= lo[i+1]`; block
+      filter lowered to `>= 1` machine child with an exclusive-ownership
+      check (swapper groups excluded); weighted compactness penalty
+      (2 × stage_mcnt × band_width) keeps bands collapsed to a single
+      row when the topology doesn't demand vertical spread.
    c. **Scope the facing constraints.** For machine→sink edges whose sink
       is pinned off the primary face (`Region`/`Group`/`Locked`, or any
       sink not on `SINK_FACE`), replace "output faces toward the sink's

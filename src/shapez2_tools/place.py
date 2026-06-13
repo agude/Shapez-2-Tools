@@ -1,14 +1,15 @@
-"""Machine placement via OR-Tools CP-SAT (WP-D + WP-M row model).
+"""Machine placement via OR-Tools CP-SAT (WP-D + WP-M + WP-N band model).
 
 Given an abstract netlist (node types/kinds + edges, no coordinates) and a
 platform, assigns (x, y, rotation) to each node using constraint programming.
 Sources and sinks are fixed at platform-edge positions; machines are placed
 in the interior with no-overlap and wire-length minimization.
 
-Machines are assigned to **stage rows**: each stage (depth from sources) maps
-to a single y-coordinate shared by all machines at that depth. Routing channels
-between rows have a minimum height of 2 cells, replacing the hand-tuned
-y-stagger and port-row margin constraints from WP-D.
+Machines are assigned to **stage bands**: each stage (depth from sources) maps
+to a y-interval (band_lo, band_hi) and each machine gets its own y within its
+stage's band.  Routing channels between bands have a minimum height of 2 cells.
+Fan-out groups (machines sharing a source) form **blocks** with a shared
+x-interval; cross-block ordering by source x prevents lateral overlap.
 
 Multi-cell machines (cutters, swappers) occupy a second cell whose position
 depends on rotation. The solver tracks both cells for overlap avoidance and
@@ -436,44 +437,52 @@ def place(
     if not machines:
         return _build_netlist(abstract, port_pos, port_rot, {})
 
-    # --- Stage computation (WP-M row model) ---
+    # --- Stage computation (WP-M row model → WP-N band model) ---
     stages = _compute_stages(abstract)
     n_stages = max(stages.values()) + 1
 
     # --- CP-SAT model ---
     model = cp_model.CpModel()
 
-    # Row y-positions: one variable per stage.  All machines at the same
-    # stage share a single y.  Routing channels between rows (and between
-    # ports and the nearest row) must be at least 2 cells tall.
-    row_y: list[cp_model.IntVar] = [
-        model.new_int_var(y_min, y_max, f"row_y_{r}") for r in range(n_stages)
+    # Stage bands: each stage gets a y-interval [band_lo, band_hi].  Each
+    # machine has its own y within its stage's band.  Routing channels between
+    # bands (and between ports and the nearest band) must be >= 2 cells tall.
+    band_lo: list[cp_model.IntVar] = [
+        model.new_int_var(y_min, y_max, f"band_lo_{s}") for s in range(n_stages)
     ]
+    band_hi: list[cp_model.IntVar] = [
+        model.new_int_var(y_min, y_max, f"band_hi_{s}") for s in range(n_stages)
+    ]
+    for s in range(n_stages):
+        model.add(band_hi[s] >= band_lo[s])
 
     if input_y > output_y:
-        # Southward flow: row 0 nearest sources (high y), last row nearest sinks.
-        model.add(row_y[0] <= input_y - 3)
-        model.add(row_y[-1] >= output_y + 3)
-        for r in range(n_stages - 1):
-            model.add(row_y[r] >= row_y[r + 1] + 3)
+        # Southward flow: band 0 nearest sources (high y), last band nearest sinks.
+        model.add(band_hi[0] <= input_y - 3)
+        model.add(band_lo[-1] >= output_y + 3)
+        for s in range(n_stages - 1):
+            model.add(band_lo[s] >= band_hi[s + 1] + 3)
     else:
-        # Northward flow (the south→north convention): row 0 nearest the
-        # south sources (low y), rows ascend toward the north sinks.
-        model.add(row_y[0] >= input_y + 3)
-        model.add(row_y[-1] <= output_y - 3)
-        for r in range(n_stages - 1):
-            model.add(row_y[r + 1] >= row_y[r] + 3)
+        # Northward flow (the south→north convention): band 0 nearest the
+        # south sources (low y), bands ascend toward the north sinks.
+        model.add(band_lo[0] >= input_y + 3)
+        model.add(band_hi[-1] <= output_y - 3)
+        for s in range(n_stages - 1):
+            model.add(band_lo[s + 1] >= band_hi[s] + 3)
 
-    # Machine variables: x is free within interior, y is the stage row,
-    # r is rotation 0–3.
+    # Machine variables: x is free within interior, y is within the stage
+    # band, r is rotation 0–3.
     m_x: dict[str, cp_model.IntVar] = {}
     m_y: dict[str, cp_model.IntVar] = {}
     m_r: dict[str, cp_model.IntVar] = {}
 
     for m in machines:
         mid = m["id"]
+        s = stages[mid]
         m_x[mid] = model.new_int_var(x_min, x_max, f"x_{mid}")
-        m_y[mid] = row_y[stages[mid]]
+        m_y[mid] = model.new_int_var(y_min, y_max, f"y_{mid}")
+        model.add(m_y[mid] >= band_lo[s])
+        model.add(m_y[mid] <= band_hi[s])
         m_r[mid] = model.new_int_var(0, 3, f"r_{mid}")
 
     # No overlap: all occupied cells must be distinct.
@@ -540,15 +549,15 @@ def place(
     n_bkt = (bkt_hi - bkt_lo + _BUCKET_WIDTH) // _BUCKET_WIDTH + 1
 
     if input_y > output_y:
-        ch_h = [input_y - row_y[0] - 1]
-        for r in range(n_stages - 1):
-            ch_h.append(row_y[r] - row_y[r + 1] - 1)
-        ch_h.append(row_y[-1] - output_y - 1)
+        ch_h = [input_y - band_hi[0] - 1]
+        for s in range(n_stages - 1):
+            ch_h.append(band_lo[s] - band_hi[s + 1] - 1)
+        ch_h.append(band_lo[-1] - output_y - 1)
     else:
-        ch_h = [row_y[0] - input_y - 1]
-        for r in range(n_stages - 1):
-            ch_h.append(row_y[r + 1] - row_y[r] - 1)
-        ch_h.append(output_y - row_y[-1] - 1)
+        ch_h = [band_lo[0] - input_y - 1]
+        for s in range(n_stages - 1):
+            ch_h.append(band_lo[s + 1] - band_hi[s] - 1)
+        ch_h.append(output_y - band_hi[-1] - 1)
 
     ch_edges: dict[int, list[tuple]] = defaultdict(list)
     for sid, did in abstract["edges"]:
@@ -642,38 +651,62 @@ def place(
                 f"ein_{ei}",
             )
 
-    # Fan-group structure: machines sharing a source (fan-out) form a group.
-    # Cross-group x-ranges must not overlap so routes don't cross through
-    # other groups' machines. Proximity within a group is already rewarded
-    # by the wire-length objective; no adjacency constraint is needed.
+    # Fan-out blocks: machines sharing a source form a vertical block with a
+    # shared x-interval.  Cross-block x-ranges are ordered by source x so
+    # routes don't cross through other blocks' machines.
     fan_out_groups: defaultdict[str, list[str]] = defaultdict(list)
     for sid, did in abstract["edges"]:
         fan_out_groups[sid].append(did)
 
-    # Cross-group ordering: fan-out groups ordered by their source's
-    # x-position so routes don't cross. A source at lower x should feed
-    # machines at lower x than a source at higher x.
-    fanout_src_ids = [
+    # Candidate blocks: port sources with at least one machine child.
+    candidate_src_ids = [
         sid
         for sid in fan_out_groups
-        if sum(1 for m in fan_out_groups[sid] if node_by_id[m]["kind"] == "machine") >= 2
+        if node_by_id[sid]["kind"] == "platform_in"
+        and sum(1 for m in fan_out_groups[sid] if node_by_id[m]["kind"] == "machine") >= 1
     ]
-    # Sort source IDs by their assigned x-position.
     fanout_by_src: dict[str, list[str]] = {}
     src_x_for_id: dict[str, int] = {}
-    for sid in fanout_src_ids:
+    for sid in candidate_src_ids:
         fanout_by_src[sid] = [m for m in fan_out_groups[sid] if node_by_id[m]["kind"] == "machine"]
         src_x_for_id[sid] = port_pos[sid][0]
+    # Exclude groups whose machines are shared with other groups (e.g.
+    # swapper: two sources feed the same machine — can't assign it to
+    # disjoint blocks).
+    machine_owner_count: dict[str, int] = defaultdict(int)
+    for sid in candidate_src_ids:
+        for mid in fanout_by_src[sid]:
+            machine_owner_count[mid] += 1
+    fanout_src_ids = [
+        sid for sid in candidate_src_ids
+        if all(machine_owner_count[mid] == 1 for mid in fanout_by_src[sid])
+    ]
     sorted_src_ids = sorted(fanout_src_ids, key=lambda s: src_x_for_id[s])
 
+    # Per-block x-range variables (including second cells for multi-cell machines).
+    block_lo_x: dict[str, cp_model.IntVar] = {}
+    block_hi_x: dict[str, cp_model.IntVar] = {}
+    for sid in sorted_src_ids:
+        members = fanout_by_src[sid]
+        all_x_vars = []
+        for mid in members:
+            if mid in m_x:
+                all_x_vars.append(m_x[mid])
+            if mid in second_x:
+                all_x_vars.append(second_x[mid])
+        if all_x_vars:
+            lo = model.new_int_var(x_min, x_max, f"blo_{sid}")
+            hi = model.new_int_var(x_min, x_max, f"bhi_{sid}")
+            model.add_min_equality(lo, all_x_vars)
+            model.add_max_equality(hi, all_x_vars)
+            block_lo_x[sid] = lo
+            block_hi_x[sid] = hi
+
     for i in range(len(sorted_src_ids) - 1):
-        left_group = fanout_by_src[sorted_src_ids[i]]
-        right_group = fanout_by_src[sorted_src_ids[i + 1]]
-        # Ordered non-overlapping: left group's machines left of right group.
-        for a in left_group:
-            for b in right_group:
-                if a in m_x and b in m_x:
-                    model.add(m_x[a] + 1 <= m_x[b])
+        left_sid = sorted_src_ids[i]
+        right_sid = sorted_src_ids[i + 1]
+        if left_sid in block_hi_x and right_sid in block_lo_x:
+            model.add(block_hi_x[left_sid] + 1 <= block_lo_x[right_sid])
 
     # Minimum spacing between connected nodes: at least 2 Manhattan distance
     # (room for one belt cell between machine and its source/sink).
@@ -728,13 +761,29 @@ def place(
             total_wire.append(a2dx)
             total_wire.append(a2dy)
 
-    # Row balance: prefer rows near the vertical center so routing channels
-    # on both sides of the machine rows have roughly equal height.
+    # Band balance: prefer bands near the vertical center so routing channels
+    # on both sides have roughly equal height.
     mid_y = (input_y + output_y) // 2
-    for r in range(n_stages):
-        bal = model.new_int_var(0, grid_h, f"bal_{r}")
-        model.add_abs_equality(bal, row_y[r] - mid_y)
+    for s in range(n_stages):
+        bal = model.new_int_var(0, 2 * grid_h, f"bal_{s}")
+        model.add_abs_equality(bal, band_lo[s] + band_hi[s] - 2 * mid_y)
         total_wire.append(bal)
+
+    # Band compactness: prefer tight bands (collapse to a single row when the
+    # topology doesn't need vertical spread).  Weight proportional to 2×
+    # the stage's machine count so the penalty outweighs the per-lane wire
+    # savings from spreading (which is ~2 units per lane).
+    stage_mcnt = [0] * n_stages
+    for m in machines:
+        stage_mcnt[stages[m["id"]]] += 1
+    for s in range(n_stages):
+        bw = model.new_int_var(0, y_max - y_min, f"bw_{s}")
+        model.add(bw == band_hi[s] - band_lo[s])
+        w = 2 * stage_mcnt[s]
+        if w > 0:
+            sbw = model.new_int_var(0, w * (y_max - y_min), f"sbw_{s}")
+            model.add(sbw == w * bw)
+            total_wire.append(sbw)
 
     model.minimize(sum(total_wire))
 
