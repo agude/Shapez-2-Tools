@@ -542,17 +542,21 @@ def _cell_to_entity(
                             if s2 == dst:
                                 out_dir = _unit_direction(dst, d2)
                 delta = dst[2] - src[2]
-                if in_dir is not None and out_dir is not None:
-                    key = (frozenset({in_dir}), frozenset({out_dir}), delta)
-                    table = _get_lift_emit_table()
-                    entry = table.get(key)
-                    if entry is not None:
-                        variant, r = entry
-                        return Entity(
-                            x=cell[0], y=cell[1], type=variant,
-                            rotation=r, layer=cell[2],
-                        )
-                return None
+                if in_dir is None or out_dir is None:
+                    return None
+                key = (frozenset({in_dir}), frozenset({out_dir}), delta)
+                table = _get_lift_emit_table()
+                entry = table.get(key)
+                if entry is None:
+                    raise RoutingError(
+                        f"No lift variant for in={in_dir} out={out_dir} "
+                        f"delta={delta} at cell {cell}"
+                    )
+                variant, r = entry
+                return Entity(
+                    x=cell[0], y=cell[1], type=variant,
+                    rotation=r, layer=cell[2],
+                )
             if dst == cell:
                 return None
 

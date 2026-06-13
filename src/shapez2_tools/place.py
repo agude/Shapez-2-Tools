@@ -700,6 +700,13 @@ def place(
             continue
         ch_edges[(ci, grp)].append((xs, xd))
 
+    # Invariant: per-group constraints are correct only when source groups
+    # occupy spatially disjoint x-ranges (their edges don't compete for the
+    # same channel area). This holds for group-pinned sources on Foundation_*
+    # platforms where each group maps to a separate port cluster. If groups
+    # ever share an x-range, a combined constraint across all groups would
+    # also be needed — but that would re-introduce the density bottleneck
+    # that per-group partitioning was designed to avoid.
     for ci in range(n_stages + 1):
         group_keys = sorted(
             {g for c, g in ch_edges if c == ci},
