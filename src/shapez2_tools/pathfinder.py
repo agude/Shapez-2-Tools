@@ -159,7 +159,10 @@ def _grow_tree(
         # Tree cells are seeds but not intermediate expansion targets.
         tx, ty, tl = terminal
         def _h(c: Cell) -> float:
-            return (abs(c[0] - tx) + abs(c[1] - ty)) * BASE
+            h = (abs(c[0] - tx) + abs(c[1] - ty)) * BASE
+            if c[2] != tl:
+                h += LIFT_COST
+            return h
 
         def _search(allow_hops: bool) -> tuple[bool, dict[Cell, float], dict[Cell, Cell]]:
             dist: dict[Cell, float] = {}
@@ -419,6 +422,8 @@ def pathfinder_route(
     own_ids = {n.net_id for n in nets}
     nets_sorted = sorted(nets, key=lambda n: (-_net_hpwl(n), n.net_id))
     pres_fac = PRES_FAC_INIT
+    _STALL_WINDOW = 15
+    prev_overuse_counts: list[int] = []
 
     for _iteration in range(max_iters):
         for net in nets_sorted:
@@ -430,13 +435,18 @@ def pathfinder_route(
             for c in net.tree_cells:
                 graph.occ[c].add(net.net_id)
 
-        # Convergence: only count cells where at least one occupant is ours.
         overused = [
             c for c, s in graph.occ.items()
             if len(s) > 1 and (s & own_ids)
         ]
         if not overused:
             return True
+
+        prev_overuse_counts.append(len(overused))
+        if len(prev_overuse_counts) > _STALL_WINDOW:
+            recent = prev_overuse_counts[-_STALL_WINDOW:]
+            if min(recent) >= recent[0]:
+                break
 
         overused_set = set(overused)
         nets_sorted = sorted(
