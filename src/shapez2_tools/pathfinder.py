@@ -135,6 +135,12 @@ def _grow_tree(
     hop_cells: set[Cell] = set()
     lift_cells: set[Cell] = set()
     cell_approach: dict[Cell, tuple[int, int]] = {}
+    # Cells that will become hop receivers in item flow.  For fanout nets
+    # that's the growth-direction hop destination (pc); for fanin nets it's
+    # the growth-direction hop source (prev_cell, because the edge flip
+    # turns the growth sender into the item-flow receiver).  Adjacent
+    # receivers create unmatched legs (receiver entity has ins=∅).
+    item_recv_cells: set[Cell] = set()
 
     # When the root was offset from its port cell, a boundary edge will be
     # appended after routing. Pre-seed the incoming count so the root can
@@ -228,6 +234,21 @@ def _grow_tree(
                             _skip_hops = True
                         elif p[2] != cl:
                             _skip_hops = True
+                    # For fanin nets, the hop *sender* becomes the
+                    # item-flow *receiver* (edge flip).  A receiver
+                    # entity has ins=∅ — it can't accept from adjacent
+                    # cells.  Block hops from cells that already have
+                    # outgoing step edges (which flip into incoming) or
+                    # that are adjacent to an existing receiver (whose
+                    # output would point at this new receiver).
+                    if not _skip_hops and net.kind == "fanin":
+                        if cell_out[cell] > 0:
+                            _skip_hops = True
+                        else:
+                            for _dx2, _dy2 in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                                if (cx + _dx2, cy + _dy2, cl) in item_recv_cells:
+                                    _skip_hops = True
+                                    break
                     if _skip_hops:
                         pass
                     else:
@@ -253,6 +274,17 @@ def _grow_tree(
                                 te = net.terminal_exit.get(nb)
                                 if te is not None and (dx, dy) != te:
                                     continue
+                                # No adjacent receivers (fanout): the hop
+                                # destination becomes a receiver; skip if
+                                # any neighbor is already a receiver.
+                                if net.kind != "fanin":
+                                    _adj_recv = False
+                                    for _dx2, _dy2 in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                                        if (nb[0] + _dx2, nb[1] + _dy2, cl) in item_recv_cells:
+                                            _adj_recv = True
+                                            break
+                                    if _adj_recv:
+                                        continue
                                 occ_set = graph.occ.get(nb, set())
                                 overuse = max(0, len(occ_set - {net.net_id}) + 1 - 1)
                                 hop_base = hdist * BASE + HOP_PENALTY
@@ -331,6 +363,10 @@ def _grow_tree(
             elif md > 1:
                 hop_cells.add(prev_cell)
                 hop_cells.add(pc)
+                if net.kind == "fanin":
+                    item_recv_cells.add(prev_cell)
+                else:
+                    item_recv_cells.add(pc)
             if md == 1:
                 cell_approach[pc] = (dx, dy)
             elif md > 1 and pc[2] == prev_cell[2]:

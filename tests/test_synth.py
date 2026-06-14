@@ -733,14 +733,14 @@ class TestCutterSynthesize:
 
     def test_four_lane_four_cutters_2x4_routes(self):
         """4 lanes x 4 cutters/lane on Foundation_2x4 (64 cutter cells):
-        synthesis → routing → validate (lift-enabled). L0 unmatched legs = 0
-        (lift-exit exclusion handles cross-floor connections). L1 has 2
-        remaining: consecutive hop catchers whose outputs conflict (emit
-        model assigns receiver entities that don't accept adjacent input)."""
+        synthesis → routing → validate (lift-enabled). Both floors at 0
+        unmatched legs (hop-receiver adjacency constraint prevents the
+        consecutive-catcher artifact)."""
         spec = CutterSpec(lanes=4, platform="Foundation_2x4", cutters_per_lane=4)
         result = synthesize_cutter(spec, hop_range=5, lift_enabled=True)
 
         assert lift.unmatched_legs(result, 0) == 0
+        assert lift.unmatched_legs(result, 1) == 0
 
         nl = lift.trace_layer(result, 0, contract_hops=True)
         machines = [n for n in nl.nodes.values() if n.kind == "machine"]

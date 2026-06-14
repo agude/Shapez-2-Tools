@@ -2,10 +2,10 @@
 
 **Status:** Draft, updated 2026-06-13. **Gate 1 passes; gate 2 routing
 converges at 1-lane, 4-lane × 1-cutter (0 unmatched legs, correct halves),
-and 4-lane × 4-cutter (routing converges, L0 unmatched legs = 0, L1 has 2
-remaining hop-catcher artifacts). Per-group density accounting + lift-exit
-exclusion landed. 16-lane routing failed (unreachable terminal after 1128s) —
-routing capacity, not placement.**
+and 4-lane × 4-cutter (routing converges, both floors 0 unmatched legs —
+hop-receiver adjacency constraint resolved the consecutive-catcher artifact).
+Per-group density accounting + lift-exit exclusion landed. 16-lane routing
+failed (unreachable terminal after 1128s) — routing capacity, not placement.**
 Gate 1: `test_synth_diagonal_full_belt_2x4` (8-pair diagonal on Foundation_2x4,
 32/32 edges, validates + interprets with hops). Gate 2:
 `test_half_splitter_2x4_placement_feasible` (16 lanes × 4 cutters/lane,
@@ -288,6 +288,21 @@ resolving §7.3 steps 1 and 3.
 `_occupancy` but no physical belt entity — `unmatched_legs` counts these as
 gaps. The routing tree is valid (0 overused cells); the emit model can't
 represent the lift entity's cross-floor exit + same-floor continuation.
+
+**Hop-receiver adjacency constraint (2026-06-13, §7.3 step 6):** fixed the
+consecutive hop-catcher artifact.  Root cause: for fanin nets, the hop
+*sender* in growth direction becomes the item-flow *receiver* after the edge
+flip — and `BeltPortReceiverInternalVariant` has `ins=∅` (no adjacent-cell
+input).  If a growth-direction hop sender already had outgoing step edges (from
+earlier terminal paths), those flip into incoming step edges — items arriving
+from adjacent belts that the receiver can't accept.  Fix in `_grow_tree`:
+(1) for fanin nets, block hops from cells with `cell_out > 0` (existing
+step-edge outputs would flip into unmatched inputs) and from cells adjacent
+to existing item-flow receivers; (2) for fanout nets, block hop destinations
+adjacent to existing item-flow receivers.  `item_recv_cells` tracks cells
+that become receivers in item flow (growth-direction destination for fanout,
+growth-direction source for fanin).  4-lane × 4-cutter L1 unmatched legs:
+2 → 0.  Test upgraded to assert `unmatched_legs(result, 1) == 0`.
 289/289 pass, lint clean.
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
@@ -2215,13 +2230,19 @@ genuinely open — that is what task 1 measures.
      either (a) a larger platform, (b) routing improvements (better
      heuristics, more iterations), or (c) decomposition (route groups of
      lanes independently).
+  **Done (2026-06-13):**
+  6. **Hop-receiver adjacency constraint.** Root cause: for fanin nets, the
+     hop sender in growth direction becomes the item-flow receiver after the
+     edge flip, and `BeltPortReceiverInternalVariant` has `ins=∅`.  If the
+     sender already had outgoing step edges (from earlier terminal paths),
+     they flip into incoming step edges that the receiver can't accept.  Fix
+     in `_grow_tree`: (a) for fanin nets, block hops from cells with existing
+     step-edge outputs (`cell_out > 0`) or adjacent to existing receivers;
+     (b) for fanout nets, block hop destinations adjacent to existing
+     receivers.  `item_recv_cells` set tracks cells that become receivers in
+     item flow.  4-lane × 4-cutter L1 unmatched: 2 → 0; test upgraded to
+     assert both floors at 0.  289/289 pass, lint clean.
   **Next steps:**
-  6. **Fix consecutive hop-catcher emit artifact.** When `_cell_to_entity`
-     finds a hop destination, it unconditionally emits a receiver entity,
-     ignoring any step-edge connectivity at that cell. Consecutive catchers
-     on L1 get receiver entities that don't accept adjacent-cell input. Fix
-     requires `_cell_to_entity` to combine hop and step-edge legs, or the
-     routing to avoid placing catchers at cells with step-edge neighbors.
   7. **16-lane routing capacity.** Investigate scaling options: larger
      platform (Foundation_3x4), routing improvements, or lane-group
      decomposition.
