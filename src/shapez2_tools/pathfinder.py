@@ -404,7 +404,11 @@ def _net_hpwl(net: Net) -> int:
 
 
 def pathfinder_route(
-    nets: list[Net], graph: RoutingGraph, *, raise_on_failure: bool = True
+    nets: list[Net],
+    graph: RoutingGraph,
+    *,
+    raise_on_failure: bool = True,
+    max_iters: int = MAX_ITERS,
 ) -> bool:
     """Run the PathFinder negotiated-congestion loop.
 
@@ -412,28 +416,28 @@ def pathfinder_route(
     is True (the default for production callers), raises ``RoutingError``
     carrying the overused cells so WP-M can use them as placement feedback.
     """
+    own_ids = {n.net_id for n in nets}
     nets_sorted = sorted(nets, key=lambda n: (-_net_hpwl(n), n.net_id))
     pres_fac = PRES_FAC_INIT
 
-    for _iteration in range(MAX_ITERS):
+    for _iteration in range(max_iters):
         for net in nets_sorted:
-            # Rip up: release this net's cells
             for c in net.tree_cells:
                 graph.occ[c].discard(net.net_id)
 
-            # Reroute
             _grow_tree(net, graph, pres_fac)
 
-            # Claim new cells
             for c in net.tree_cells:
                 graph.occ[c].add(net.net_id)
 
-        # Check convergence
-        overused = [c for c, s in graph.occ.items() if len(s) > 1]
+        # Convergence: only count cells where at least one occupant is ours.
+        overused = [
+            c for c, s in graph.occ.items()
+            if len(s) > 1 and (s & own_ids)
+        ]
         if not overused:
             return True
 
-        # Reorder: nets using overused cells route first next iteration
         overused_set = set(overused)
         nets_sorted = sorted(
             nets,
@@ -444,15 +448,17 @@ def pathfinder_route(
             ),
         )
 
-        # Update history
         for c in overused:
             graph.hist[c] = graph.hist.get(c, 0.0) + HIST_GAIN * (len(graph.occ[c]) - 1)
         pres_fac *= PRES_FAC_MULT
 
-    overused = [c for c, s in graph.occ.items() if len(s) > 1]
+    overused = [
+        c for c, s in graph.occ.items()
+        if len(s) > 1 and (s & own_ids)
+    ]
     if raise_on_failure:
         raise RoutingError(
-            f"PathFinder failed after {MAX_ITERS} iterations; "
+            f"PathFinder failed after {max_iters} iterations; "
             f"{len(overused)} overused cells",
             overused=overused,
         )
