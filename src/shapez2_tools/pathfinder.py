@@ -542,14 +542,15 @@ def _route_by_group(
     """Route nets group-by-group with retained inter-group occupancy.
 
     Each group is routed via ``pathfinder_route`` while previous groups'
-    cells remain occupied in the graph.  The convergence check inside
-    ``pathfinder_route`` sees cross-group occupancies as overuse,
-    steering the current group away from previous groups' paths.
+    cells remain occupied in the graph.  History is cleared between
+    groups so prior intra-group iteration history doesn't pollute
+    subsequent groups.
 
-    After all groups converge, a quick joint check verifies no
-    cross-group overlaps remain (they shouldn't — each group routed
-    around the prior ones).  If any remain, falls back to a full
-    joint ``pathfinder_route`` on all nets.
+    Per-group failures are tolerated: long east-west routes from one
+    group may cross another group's routing channels, creating
+    cross-group interference that no single group can resolve.  After
+    all groups run, a joint ``pathfinder_route`` on all nets handles
+    residual overlaps.
     """
     groups: dict[int, list[Net]] = {}
     ungrouped: list[Net] = []
@@ -560,35 +561,18 @@ def _route_by_group(
             ungrouped.append(net)
 
     for g_idx in sorted(groups):
-        ok = pathfinder_route(
-            groups[g_idx], graph, raise_on_failure=False,
-        )
-        if not ok and raise_on_failure:
-            overused = [c for c, s in graph.occ.items() if len(s) > 1]
-            raise RoutingError(
-                f"Group {g_idx} failed; {len(overused)} overused cells",
-                overused=overused,
-            )
-        elif not ok:
-            return False
+        graph.hist.clear()
+        pathfinder_route(groups[g_idx], graph, raise_on_failure=False)
 
     if ungrouped:
-        ok = pathfinder_route(
-            ungrouped, graph, raise_on_failure=False,
-        )
-        if not ok and raise_on_failure:
-            overused = [c for c, s in graph.occ.items() if len(s) > 1]
-            raise RoutingError(
-                f"Ungrouped nets failed; {len(overused)} overused cells",
-                overused=overused,
-            )
-        elif not ok:
-            return False
+        graph.hist.clear()
+        pathfinder_route(ungrouped, graph, raise_on_failure=False)
 
     overused = [c for c, s in graph.occ.items() if len(s) > 1]
     if not overused:
         return True
 
+    graph.hist.clear()
     return pathfinder_route(nets, graph, raise_on_failure=raise_on_failure)
 
 

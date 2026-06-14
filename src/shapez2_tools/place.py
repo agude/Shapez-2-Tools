@@ -537,14 +537,14 @@ def place(
     for s in range(n_stages):
         model.add(band_hi[s] >= band_lo[s])
         # Minimum band height: when a stage has many machines on a large
-        # platform, the output clearance constraint stacks them vertically
-        # with 2-cell gaps, creating narrow routing channels.  Force the
-        # band tall enough for routing channels between machine rows.
+        # platform, the output clearance constraint (y-spacing >= 3)
+        # stacks them vertically with 2-cell gaps.  Force the band tall
+        # enough for routing channels between machine rows.
         mc = stage_counts[s]
         interior_h = plat.get("interior", plat.get("grid_size", [0, 0]))[1]
         if mc > 16 and interior_h >= 30:
             est_rows = max(2, (mc + 15) // 16)
-            min_height = 3 * est_rows - 2
+            min_height = 4 * est_rows - 3
             model.add(band_hi[s] - band_lo[s] >= min_height)
 
     if input_y > output_y:
@@ -617,9 +617,10 @@ def place(
 
     # Output clearance for multi-cell fan-out groups: within each group of
     # multi-cell machines sharing a source, machine pairs at the same x-column
-    # (anchor or second cell) must have y-spacing >= 2.  Without this, stacked
-    # cutters create physical chains where one cutter's output feeds another's
-    # input — a functional correctness issue.
+    # (anchor or second cell) must have y-spacing >= 3.  At spacing 2, the
+    # single cell between machines is both the output approach of one and the
+    # input approach of the next — two nets share a terminal cell that can't
+    # host both flows.  Spacing 3 leaves 2 routing cells between machines.
     fanout_groups: dict[str, list[str]] = defaultdict(list)
     for src_id, dst_id in abstract["edges"]:
         if node_by_id[dst_id]["kind"] == "machine":
@@ -637,17 +638,17 @@ def place(
                 same_x = model.new_bool_var(f"samex_{ai}_{aj}")
                 model.add(m_x[ai] == m_x[aj]).only_enforce_if(same_x)
                 model.add(m_x[ai] != m_x[aj]).only_enforce_if(same_x.negated())
-                model.add(abs_dy >= 2).only_enforce_if(same_x)
+                model.add(abs_dy >= 3).only_enforce_if(same_x)
                 if ai in second_x:
                     same_sx = model.new_bool_var(f"samesx_{ai}_{aj}")
                     model.add(second_x[ai] == m_x[aj]).only_enforce_if(same_sx)
                     model.add(second_x[ai] != m_x[aj]).only_enforce_if(same_sx.negated())
-                    model.add(abs_dy >= 2).only_enforce_if(same_sx)
+                    model.add(abs_dy >= 3).only_enforce_if(same_sx)
                 if aj in second_x:
                     same_xs = model.new_bool_var(f"samexs_{ai}_{aj}")
                     model.add(m_x[ai] == second_x[aj]).only_enforce_if(same_xs)
                     model.add(m_x[ai] != second_x[aj]).only_enforce_if(same_xs.negated())
-                    model.add(abs_dy >= 2).only_enforce_if(same_xs)
+                    model.add(abs_dy >= 3).only_enforce_if(same_xs)
 
     # Also exclude port positions from ALL occupied cells.
     for pos in port_pos.values():
