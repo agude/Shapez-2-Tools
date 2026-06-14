@@ -783,11 +783,25 @@ class TestCutterSynthesize:
             else:
                 pytest.fail(f"sink {pos} is outside both Region pins")
 
+    def test_eight_lane_four_cutters_2x4_routes(self):
+        """8 lanes x 4 cutters/lane on Foundation_2x4 (32 machines):
+        synthesis → routing → validate (lift-enabled).  Placement is
+        unseeded so L1 unmatched legs may be 0 or small; routing
+        convergence and machine count are the hard assertions."""
+        spec = CutterSpec(lanes=8, platform="Foundation_2x4", cutters_per_lane=4)
+        result = synthesize_cutter(spec, hop_range=5, lift_enabled=True)
+
+        assert lift.unmatched_legs(result, 1) <= 2
+
+        nl = lift.trace_layer(result, 0, contract_hops=True)
+        machines = [n for n in nl.nodes.values() if n.kind == "machine"]
+        assert len(machines) == spec.lanes * spec.cutters_per_lane
+
     def test_half_splitter_2x4_placement_feasible(self):
         """Full Half Splitter (16 lanes x 4 cutters/lane on Foundation_2x4,
-        256 cutter cells): placement feasible, routing not yet convergent.
-        Same blocker as the 4-lane case — output clearance vs. routing
-        capacity."""
+        64 machines): placement feasible, routing not yet convergent —
+        48 nets exceed PathFinder's convergence capacity (21 overused
+        cells after 60 iterations)."""
         from shapez2_tools.place import place
 
         spec = CutterSpec(lanes=16, platform="Foundation_2x4", cutters_per_lane=4)

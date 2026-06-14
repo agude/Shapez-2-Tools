@@ -1,18 +1,19 @@
 # Blueprint Synthesis — Plan
 
-**Status:** Draft, updated 2026-06-13. **Gate 1 passes; gate 2 routing
-converges at 1-lane, 4-lane × 1-cutter (0 unmatched legs, correct halves),
-and 4-lane × 4-cutter (routing converges, both floors 0 unmatched legs —
-hop-receiver adjacency constraint resolved the consecutive-catcher artifact).
-Per-group density accounting + lift-exit exclusion landed. 16-lane routing
-failed (unreachable terminal after 1128s) — routing capacity, not placement.**
+**Status:** Draft, updated 2026-06-14. **Gate 1 passes; gate 2 routing
+converges at 1-lane, 4-lane × 4-cutter (both floors 0 unmatched legs), and
+8-lane × 4-cutter (~12s, L1=0 unmatched, L0=6 lift-exit gaps — known).
+16-lane × 4-cutter fails (21 overused cells after 60 iterations, ~1868s) —
+congestion at 48 nets on Foundation_2x4, not placement.**
 Gate 1: `test_synth_diagonal_full_belt_2x4` (8-pair diagonal on Foundation_2x4,
 32/32 edges, validates + interprets with hops). Gate 2:
 `test_half_splitter_2x4_placement_feasible` (16 lanes × 4 cutters/lane,
 placement-only); `test_single_lane_four_cutters_halves_land_on_correct_sides`
 (1 lane × 4 cutters/lane, full end-to-end: synthesis → routing → interpret,
 correct halves); `test_four_lane_four_cutters_2x4_routes` (4-lane × 4-cutter,
-full synthesis → routing → lift trace, 16 machines placed).
+full synthesis → routing → lift trace, 16 machines placed);
+`test_eight_lane_four_cutters_2x4_routes` (8-lane × 4-cutter, full synthesis
+→ routing → lift trace, 32 machines placed, L1=0).
 Row model + feedback loop landed, hop direction constraints landed, A\*
 heuristic landed (3.9× routing speedup), multi-face port support landed,
 `Group`/`Locked`/`Region` sink pinning landed, `CutterSpec` landed (cutter fan
@@ -313,7 +314,8 @@ improvements for scaling to 16-lane routing.
    edges. `_route_by_group` routes groups sequentially with retained
    inter-group occupancy — each group's `pathfinder_route` sees prior groups'
    cells as occupied, steering away via cost pricing. Joint fallback if
-   cross-group overlaps remain. Activated when >12 grouped nets.
+   cross-group overlaps remain. Activated when >24 grouped nets (8-lane's 24
+   nets use joint routing directly; 16-lane's 48 nets use group routing).
 
 2. **Own-nets convergence scope**: `pathfinder_route` convergence check now
    only counts overused cells where at least one occupant belongs to the
@@ -325,9 +327,25 @@ improvements for scaling to 16-lane routing.
    when overused count hasn't improved over the last 15 iterations);
    configurable `max_iters` parameter.
 
-**Result:** 4-lane × 4-cutter synthesis → routing converges in ~11s with
-lifts + group routing. 8-lane pending. 16-lane still running.
-291/291 pass (2 new group routing tests), lint clean.
+**Result:** 4-lane × 4-cutter converges in ~11s; 8-lane × 4-cutter converges
+in ~12s (joint routing, 24 nets — below the >24 group routing threshold).
+16-lane × 4-cutter fails: 21 overused cells after 60 iterations (~1868s).
+Group routing (4 groups of 12 nets) seeds per-group solutions, then joint
+fallback cannot resolve 21 residual overlaps within 60 iterations.
+
+**Output clearance fix (2026-06-13):** Root cause of 8-lane failure was
+terminal sharing at clearance=2 — the single cell between vertically stacked
+machines (y-gap=2) serves as both output approach of the lower machine and
+input approach of the upper, creating an irresolvable 2-net occupancy
+conflict. Fix: output clearance increased from 2 to 3 in `place.py`
+(`abs_dy >= 3` on same-x-column machines). 8-lane immediately converges.
+
+**Minimum band height constraint (2026-06-13):** For stages with >16 machines
+and interior height ≥30, `place.py` now enforces `band_hi - band_lo >=
+4*est_rows - 3` where `est_rows = max(2, (mc+15)//16)`. Spreads dense stages
+vertically to reduce routing congestion.
+
+293/293 pass (2 new: 8-lane routing test + group routing tests), lint clean.
 
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
@@ -2281,9 +2299,24 @@ genuinely open — that is what task 1 measures.
      cross-floor terminals); stall detection (early exit when overused count
      plateaus over 15 iterations); configurable `max_iters`.
      291/291 pass (2 new tests), lint clean.
+  **Done (2026-06-13):**
+  8. **Output clearance fix + 8-lane convergence.** Terminal sharing at
+     clearance=2 caused irresolvable 2-net occupancy conflicts (the cell
+     between stacked machines at y-gap=2 served as both output approach and
+     input approach for different nets). Output clearance increased from 2
+     to 3 in `place.py`. Minimum band height constraint added for dense
+     stages. 8-lane (24 nets) converges in ~12s via joint routing (below
+     the >24 group routing threshold). L1=0 unmatched legs; L0=6 (lift-exit
+     gaps, documented). Test: `test_eight_lane_four_cutters_2x4_routes`.
   **Next steps:**
-  8. **16-lane routing convergence.** Group routing + lifts converges at
-     4-lane (~11s). Scaling test in progress for 8/12/16 lanes.
+  9. **16-lane routing convergence.** 48 nets on Foundation_2x4 with group
+     routing (4 groups × 12 nets) + joint fallback fails: 21 overused cells
+     after 60 iterations (~1868s). Diagnostic needed: visualize which cells
+     are overused and which nets share them. Likely levers: (a) more
+     iterations (stall window=48 may trigger early exit before convergence);
+     (b) gentler pressure scaling (PRES_FAC_MULT=1.8 may overshoot for 48
+     nets); (c) better placement spread; (d) per-group iteration budget
+     tuning.
   WP-L's region-internal flow ordering remains open and non-blocking.
 
 ### 7.4 Test infrastructure to build first
