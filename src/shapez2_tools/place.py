@@ -531,8 +531,21 @@ def place(
     band_hi: list[cp_model.IntVar] = [
         model.new_int_var(y_min, y_max, f"band_hi_{s}") for s in range(n_stages)
     ]
+    stage_counts = [0] * n_stages
+    for m in machines:
+        stage_counts[stages[m["id"]]] += 1
     for s in range(n_stages):
         model.add(band_hi[s] >= band_lo[s])
+        # Minimum band height: when a stage has many machines on a large
+        # platform, the output clearance constraint stacks them vertically
+        # with 2-cell gaps, creating narrow routing channels.  Force the
+        # band tall enough for routing channels between machine rows.
+        mc = stage_counts[s]
+        interior_h = plat.get("interior", plat.get("grid_size", [0, 0]))[1]
+        if mc > 16 and interior_h >= 30:
+            est_rows = max(2, (mc + 15) // 16)
+            min_height = 3 * est_rows - 2
+            model.add(band_hi[s] - band_lo[s] >= min_height)
 
     if input_y > output_y:
         # Southward flow: band 0 nearest sources (high y), last band nearest sinks.
