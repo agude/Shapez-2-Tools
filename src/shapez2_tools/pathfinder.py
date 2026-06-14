@@ -64,6 +64,7 @@ class Net:
     tree_edges: list[tuple[Cell, Cell]] = field(default_factory=list)
     hop_edges: set[tuple[Cell, Cell]] = field(default_factory=set)
     lift_edges: set[tuple[Cell, Cell]] = field(default_factory=set)
+    group: int | None = None
 
 
 @dataclass
@@ -456,6 +457,123 @@ def pathfinder_route(
             overused=overused,
         )
     return False
+
+
+# ---------------------------------------------------------------------------
+# Lane-group decomposition (§7.3 step 7)
+# ---------------------------------------------------------------------------
+
+
+def _assign_net_groups(
+    nets: list[Net],
+    netlist: lift.Netlist,
+    platform: str,
+) -> None:
+    """Assign each net to a source port group for lane-group decomposition.
+
+    Traces netlist edges forward from sources to propagate group membership
+    to machines and sinks.  Each net inherits the group of whichever netlist
+    node its root or terminals correspond to.
+    """
+    from shapez2_tools.place import SOURCE_FACE, _load_platform, _port_groups
+
+    plat = _load_platform(platform)
+    src_groups = _port_groups(plat, SOURCE_FACE)
+    if len(src_groups) <= 1:
+        return
+
+    group_centers = [
+        sum(p[0] for p in g) / len(g) for g in src_groups
+    ]
+
+    node_group: dict[tuple, int] = {}
+    for pos, node in netlist.nodes.items():
+        if node.kind == "platform_in":
+            node_group[pos] = min(
+                range(len(group_centers)),
+                key=lambda g: abs(group_centers[g] - pos[0]),
+            )
+
+    changed = True
+    while changed:
+        changed = False
+        for src, dst in netlist.edges:
+            if src in node_group and dst not in node_group:
+                node_group[dst] = node_group[src]
+                changed = True
+
+    for net in nets:
+        root_2d = (net.root[0], net.root[1])
+        if root_2d in node_group:
+            net.group = node_group[root_2d]
+            continue
+        for t in net.terminals:
+            t_2d = (t[0], t[1])
+            if t_2d in node_group:
+                net.group = node_group[t_2d]
+                break
+
+
+GROUP_FREEZE_HIST = 5.0
+
+
+def _route_by_group(
+    nets: list[Net],
+    graph: RoutingGraph,
+    *,
+    raise_on_failure: bool = True,
+) -> bool:
+    """Route nets group-by-group with retained inter-group occupancy.
+
+    Each group is routed via ``pathfinder_route`` while previous groups'
+    cells remain occupied in the graph.  The convergence check inside
+    ``pathfinder_route`` sees cross-group occupancies as overuse,
+    steering the current group away from previous groups' paths.
+
+    After all groups converge, a quick joint check verifies no
+    cross-group overlaps remain (they shouldn't — each group routed
+    around the prior ones).  If any remain, falls back to a full
+    joint ``pathfinder_route`` on all nets.
+    """
+    groups: dict[int, list[Net]] = {}
+    ungrouped: list[Net] = []
+    for net in nets:
+        if net.group is not None:
+            groups.setdefault(net.group, []).append(net)
+        else:
+            ungrouped.append(net)
+
+    for g_idx in sorted(groups):
+        ok = pathfinder_route(
+            groups[g_idx], graph, raise_on_failure=False,
+        )
+        if not ok and raise_on_failure:
+            overused = [c for c, s in graph.occ.items() if len(s) > 1]
+            raise RoutingError(
+                f"Group {g_idx} failed; {len(overused)} overused cells",
+                overused=overused,
+            )
+        elif not ok:
+            return False
+
+    if ungrouped:
+        ok = pathfinder_route(
+            ungrouped, graph, raise_on_failure=False,
+        )
+        if not ok and raise_on_failure:
+            overused = [c for c, s in graph.occ.items() if len(s) > 1]
+            raise RoutingError(
+                f"Ungrouped nets failed; {len(overused)} overused cells",
+                overused=overused,
+            )
+        elif not ok:
+            return False
+
+    overused = [c for c, s in graph.occ.items() if len(s) > 1]
+    if not overused:
+        return True
+
+    return pathfinder_route(nets, graph, raise_on_failure=raise_on_failure)
 
 
 # ---------------------------------------------------------------------------
@@ -884,6 +1002,11 @@ def strip_and_reroute(
     # Build nets
     nets, cell_out_dir, cell_in_dir = build_nets(netlist, layer=layer)
 
+    # Assign lane groups before translating roots/terminals (positions still
+    # match netlist node positions at this point).
+    if platform is not None:
+        _assign_net_groups(nets, netlist, platform)
+
     # Translate root/terminal to routing cells (one step from the port in
     # its output/input direction), matching the A* router's convention.
     # Store original port positions for boundary edges after routing.
@@ -961,7 +1084,12 @@ def strip_and_reroute(
         routable.append(net)
 
     graph = RoutingGraph(passable=passable, hop_range=hop_range, lift_enabled=lift_enabled)
-    pathfinder_route(routable, graph)
+
+    grouped = [n for n in routable if n.group is not None]
+    if len(grouped) > 12:
+        _route_by_group(routable, graph)
+    else:
+        pathfinder_route(routable, graph)
 
     # Add boundary edges connecting port cells to the tree's root/terminal
     # routing cells so the emit table can resolve correct belt types.

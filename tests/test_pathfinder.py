@@ -744,6 +744,63 @@ class TestLiftAwareStripAndReroute:
             strip_and_reroute(bp, nl, layer=0, platform="Foundation_1x1")
 
 
+class TestLaneGroupRouting:
+    """Lane-group decomposition (§7.3 step 7)."""
+
+    def test_group_routing_avoids_cross_group_overlap(self):
+        """Four groups of 2 nets each, crossing in the middle.
+
+        Groups are spatially separated (left/right) with their nets needing
+        to cross the center.  Group routing should keep groups' cells
+        disjoint despite the shared bottleneck.
+        """
+        from shapez2_tools.pathfinder import _route_by_group
+
+        passable = {(x, y, 0) for x in range(12) for y in range(8)}
+        nets = []
+        for g in range(4):
+            base_y = g * 2
+            n1 = Net(net_id=g * 2, kind="fanout",
+                     root=(0, base_y, 0), terminals=[(11, base_y, 0)])
+            n1.group = g
+            n2 = Net(net_id=g * 2 + 1, kind="fanout",
+                     root=(0, base_y + 1, 0), terminals=[(11, base_y + 1, 0)])
+            n2.group = g
+            nets.extend([n1, n2])
+
+        graph = RoutingGraph(passable=passable)
+        ok = _route_by_group(nets, graph, raise_on_failure=False)
+        assert ok
+
+        for i, a in enumerate(nets):
+            for b in nets[i + 1:]:
+                if a.group != b.group:
+                    shared = a.tree_cells & b.tree_cells
+                    assert not shared, (
+                        f"net {a.net_id} (g{a.group}) and net {b.net_id} "
+                        f"(g{b.group}) share {len(shared)} cells"
+                    )
+
+    def test_group_assignment_propagates(self):
+        """_assign_net_groups propagates group membership through netlist edges."""
+        from shapez2_tools.pathfinder import _assign_net_groups, build_nets
+        from shapez2_tools.place import place
+        from shapez2_tools.synth import CutterSpec, _monotone_sort, netlist_from_cutter_spec
+
+        spec = CutterSpec(lanes=4, platform="Foundation_2x4", cutters_per_lane=4)
+        abstract = _monotone_sort(netlist_from_cutter_spec(spec), spec.platform)
+        nl = place(abstract, spec.platform)
+        nets, _, _ = build_nets(nl, layer=0)
+        _assign_net_groups(nets, nl, spec.platform)
+
+        assert all(n.group is not None for n in nets)
+        from collections import Counter
+        groups = Counter(n.group for n in nets)
+        assert len(groups) == 4
+        for g, count in groups.items():
+            assert count == 3, f"group {g} has {count} nets, expected 3"
+
+
 class TestCorpusParity:
     """PathFinder must match the old router on single-cell fixtures."""
 
