@@ -422,7 +422,7 @@ def pathfinder_route(
     own_ids = {n.net_id for n in nets}
     nets_sorted = sorted(nets, key=lambda n: (-_net_hpwl(n), n.net_id))
     pres_fac = PRES_FAC_INIT
-    _STALL_WINDOW = 15
+    _STALL_WINDOW = max(15, len(nets) // 2)
     prev_overuse_counts: list[int] = []
 
     for _iteration in range(max_iters):

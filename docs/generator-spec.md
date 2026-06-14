@@ -305,6 +305,30 @@ growth-direction source for fanin).  4-lane × 4-cutter L1 unmatched legs:
 2 → 0.  Test upgraded to assert `unmatched_legs(result, 1) == 0`.
 289/289 pass, lint clean.
 
+**Lane-group decomposition (2026-06-13, §7.3 step 7):** three routing
+improvements for scaling to 16-lane routing.
+
+1. **Lane-group routing** (`pathfinder.py`): `_assign_net_groups` assigns each
+   net to a source port group by propagating group membership through netlist
+   edges. `_route_by_group` routes groups sequentially with retained
+   inter-group occupancy — each group's `pathfinder_route` sees prior groups'
+   cells as occupied, steering away via cost pricing. Joint fallback if
+   cross-group overlaps remain. Activated when >12 grouped nets.
+
+2. **Own-nets convergence scope**: `pathfinder_route` convergence check now
+   only counts overused cells where at least one occupant belongs to the
+   current routing set. Prevents per-group routing from stalling on
+   cross-group occupancy it cannot rip up.
+
+3. **Routing speedups**: lift-aware A\* heuristic (adds `LIFT_COST` when cell
+   and terminal are on different floors); stall detection (early termination
+   when overused count hasn't improved over the last 15 iterations);
+   configurable `max_iters` parameter.
+
+**Result:** 4-lane × 4-cutter synthesis → routing converges in ~11s with
+lifts + group routing. 8-lane pending. 16-lane still running.
+291/291 pass (2 new group routing tests), lint clean.
+
 **North star:** synthesize *dense, compact, single-platform* blueprints from a
 functional spec — e.g. "on a 2×8 full belt, extract both diagonals and pin the
 upper-left diagonal to the 4 left outputs and the upper-right to the 4 right."
@@ -2188,8 +2212,9 @@ genuinely open — that is what task 1 measures.
   arises; none block the diagonal-extractor north star.
 - New deps (§6): A/H add `networkx`; D adds `OR-Tools`. Nothing else.
 - **Scaling arc (updated 2026-06-13): ~~I~~ ✓ → {~~J~~ ✓, ~~K~~ ✓, ~~L~~ ✓} →
-  ~~M~~ ✓ → ~~N~~ ✓ (tasks 1–6 done; gate 2 at 4-lane end-to-end) → north
-  star** (the Half Splitter + the 48→96 full-belt diagonal extractor).
+  ~~M~~ ✓ → ~~N~~ ✓ (tasks 1–7 done; gate 2 at 4-lane end-to-end, group
+  routing landed) → north star** (the Half Splitter + the 48→96 full-belt
+  diagonal extractor).
   Gate 1 passes; gate 2 routing converges at 1-lane, 4-lane × 1-cutter
   (0 unmatched, correct halves), and 4-lane × 4-cutter (routing converges,
   16 machines placed). **Done (2026-06-13):**
@@ -2242,10 +2267,23 @@ genuinely open — that is what task 1 measures.
      receivers.  `item_recv_cells` set tracks cells that become receivers in
      item flow.  4-lane × 4-cutter L1 unmatched: 2 → 0; test upgraded to
      assert both floors at 0.  289/289 pass, lint clean.
+  **Done (2026-06-13):**
+  7. **Lane-group decomposition (§7.3 step 7).** Three improvements for
+     scaling routing to 16 lanes:
+     (a) `_assign_net_groups` + `_route_by_group` in `pathfinder.py`: nets
+     partitioned by source port group; groups routed sequentially with
+     retained inter-group occupancy (later groups see earlier groups' cells
+     as occupied, steering away via congestion pricing). Joint fallback for
+     residual cross-group overlaps. Activated when >12 grouped nets.
+     (b) `pathfinder_route` convergence check scoped to own nets — prevents
+     per-group routing from stalling on cross-group occupancy.
+     (c) Routing speedups: lift-aware heuristic (adds LIFT\_COST for
+     cross-floor terminals); stall detection (early exit when overused count
+     plateaus over 15 iterations); configurable `max_iters`.
+     291/291 pass (2 new tests), lint clean.
   **Next steps:**
-  7. **16-lane routing capacity.** Investigate scaling options: larger
-     platform (Foundation_3x4), routing improvements, or lane-group
-     decomposition.
+  8. **16-lane routing convergence.** Group routing + lifts converges at
+     4-lane (~11s). Scaling test in progress for 8/12/16 lanes.
   WP-L's region-internal flow ordering remains open and non-blocking.
 
 ### 7.4 Test infrastructure to build first
