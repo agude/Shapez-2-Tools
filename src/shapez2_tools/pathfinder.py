@@ -31,7 +31,7 @@ PRES_FAC_MULT = 1.8
 HIST_GAIN = 1.0
 MAX_ITERS = 60
 HOP_PENALTY = 1.5
-LIFT_COST = 3.0
+LIFT_COST = 2.0
 SYMMETRY_BREAK = 1e-4
 
 LEGAL_LEG_PATTERNS: set[tuple[int, int]] = {
@@ -422,7 +422,7 @@ def pathfinder_route(
     own_ids = {n.net_id for n in nets}
     nets_sorted = sorted(nets, key=lambda n: (-_net_hpwl(n), n.net_id))
     pres_fac = PRES_FAC_INIT
-    _STALL_WINDOW = max(15, len(nets) // 2)
+    _STALL_WINDOW = max(15, len(nets))
     prev_overuse_counts: list[int] = []
 
     for _iteration in range(max_iters):
@@ -1102,7 +1102,7 @@ def strip_and_reroute(
     graph = RoutingGraph(passable=passable, hop_range=hop_range, lift_enabled=lift_enabled)
 
     grouped = [n for n in routable if n.group is not None]
-    if len(grouped) > 12:
+    if len(grouped) > 24:
         _route_by_group(routable, graph)
     else:
         pathfinder_route(routable, graph)
