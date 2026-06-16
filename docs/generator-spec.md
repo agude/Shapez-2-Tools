@@ -1,10 +1,14 @@
 # Blueprint Synthesis — Plan
 
-**Status:** Draft, updated 2026-06-14. **Gate 1 passes; gate 2 routing
+**Status:** Draft, updated 2026-06-15. **Gate 1 passes; gate 2 routing
 converges at 1-lane, 4-lane × 4-cutter (both floors 0 unmatched legs), and
 8-lane × 4-cutter (~12s, L1=0 unmatched, L0=6 lift-exit gaps — known).
 16-lane × 4-cutter fails (21 overused cells after 60 iterations, ~1868s) —
-congestion at 48 nets on Foundation_2x4, not placement.**
+root-caused 2026-06-15 as a placement topology problem: the stage-band
+layout creates inter-stage belt channels wider than `MAX_HOP_RANGE`,
+making lateral crossing physically impossible. See `docs/research.md` for
+full analysis and candidate solutions (columnar placement, relay corridor
+routing, template-based placement).**
 Gate 1: `test_synth_diagonal_full_belt_2x4` (8-pair diagonal on Foundation_2x4,
 32/32 edges, validates + interprets with hops). Gate 2:
 `test_half_splitter_2x4_placement_feasible` (16 lanes × 4 cutters/lane,
@@ -2308,15 +2312,36 @@ genuinely open — that is what task 1 measures.
      stages. 8-lane (24 nets) converges in ~12s via joint routing (below
      the >24 group routing threshold). L1=0 unmatched legs; L0=6 (lift-exit
      gaps, documented). Test: `test_eight_lane_four_cutters_2x4_routes`.
-  **Next steps:**
-  9. **16-lane routing convergence.** 48 nets on Foundation_2x4 with group
-     routing (4 groups × 12 nets) + joint fallback fails: 21 overused cells
-     after 60 iterations (~1868s). Diagnostic needed: visualize which cells
-     are overused and which nets share them. Likely levers: (a) more
-     iterations (stall window=48 may trigger early exit before convergence);
-     (b) gentler pressure scaling (PRES_FAC_MULT=1.8 may overshoot for 48
-     nets); (c) better placement spread; (d) per-group iteration budget
-     tuning.
+  **Next steps (updated 2026-06-15, see `docs/research.md` for full
+  analysis):**
+  9. **16-lane routing convergence — diagnosed as a placement topology
+     problem, not a router tuning problem.** The stage-band layout creates
+     inter-stage belt channels wider than `MAX_HOP_RANGE` (e.g., 64 belts in
+     the splitter→cutter channel), making lateral crossing physically
+     impossible with single-point hops. Tuning `PRES_FAC_MULT`, `max_iters`,
+     or stall windows cannot fix what the placer made uncrossable. See
+     `docs/research.md` for the full root-cause analysis and candidate
+     solutions.
+
+     **How dense human builds solve this:** hop relay chains (3 belts per row
+     per floor via interleaved sender/receiver pairs at 2-cell pitch). The
+     Full Belt Stacker uses 423 hop pairs (20% of entities); the Launchers
+     template demonstrates the multiplexing pattern. The human Half Splitter
+     uses a columnar layout that avoids wide bands entirely.
+
+     **Candidate approaches (ranked in `docs/research.md`):**
+     - **(A) Relay corridor routing:** teach the router to build relay chains;
+       matches what all dense builds do but requires significant router
+       changes.
+     - **(B) Columnar placement:** mirror the human Half Splitter's vertical
+       lane columns; directly solves the near-term 16-lane blocker.
+     - **(C) Template-based placement:** use extracted tiles from human builds.
+     - **(D) Crossing-feasibility constraint:** add relay-chain bandwidth
+       (9 × corridor_rows) to the placer's density model.
+     - Others: see `docs/research.md` §Candidate approaches.
+
+     **Recommended sequencing:** columnar placement (B) first to unblock
+     16-lane; relay corridor routing (A) for the Full Belt Stacker class.
   WP-L's region-internal flow ordering remains open and non-blocking.
 
 ### 7.4 Test infrastructure to build first

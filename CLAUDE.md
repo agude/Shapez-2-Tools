@@ -23,6 +23,7 @@ shapez2-tools/
 │   └── ICONS.md
 ├── docs/
 │   ├── generator-spec.md  # THE PLAN + live status (read §0 first)
+│   ├── research.md        # routing research: band-width problem + candidate solutions
 │   ├── machines.md        # building footprints/ports + absolute-direction rules
 │   └── QUESTIONS.md       # open questions for the user
 ├── pyproject.toml

@@ -80,11 +80,40 @@ violates this — resolves the "is 5 the hard max" question below (yes, modulo
 reconciling the gap-vs-span off-by-one against the "1–5 cells" empirical
 figure above).
 
+**Relay chain pattern discovered (2026-06-15, from `TEMPLATES/Launchers.spz2bp`
+and `Stackers/Full Belt Stacker.spz2bp`):** interleaved sender/receiver pairs
+carry 3 belts per row per floor. The repeating pattern is
+`S . S . S R . R . R` (3 chains at 2-cell pitch, each hop at distance 5).
+Receivers couple directly to the adjacent sender (no belt cell between). The
+Full Belt Stacker uses 423 hop pairs (20% of 5058 entities). See
+`docs/research.md` for the full analysis.
+
+**Pairing rule update (2026-06-15, user):** the game may pair receivers with
+the **furthest** sender in range, not the nearest. The current `_resolve_hops`
+in `lift.py` uses nearest-first (scan from sender, take first matching
+receiver). This produces the same pairing for all-distance-5 chains (the
+Launchers template) but may mis-pair when mixed distances are used. The
+`TEMPLATES/Launchers.spz2bp` includes both single-hop and relay-chain
+examples at varying distances — use it as a calibration fixture. See Q10.
+
 **Still open (in-game checks, no fixture needed for the rest):**
 - Is flying over a machine cell actually illegal, or merely unused here?
 - Is 3 the flight-lane cap, or just the observed max?
 - Must the catcher's rotation equal the sender's (all 145 match here), or is
   that a builder habit?
+
+## 10. Hop pairing order — nearest-first or furthest-first?  *(affects relay chains)*
+The current `lift._resolve_hops` pairs senders with the **nearest** matching
+receiver along the facing ray. The user reports the game may use
+**furthest-first** pairing. At uniform distance (all hops distance 5, as in
+the Launchers template relay chains), the two rules produce the same result.
+They diverge when senders and receivers at different distances share a ray.
+
+**To verify:** lift `TEMPLATES/Launchers.spz2bp` and check whether all
+hop pairs resolve correctly under the current nearest-first rule. If any
+fail, switch to furthest-first. The template contains both single-hop
+(rows 3–6, distances 2–5) and relay-chain (rows 8, 14–15) examples.
+The Full Belt Stacker (423 pairs, mixed distances) is a stronger test.
 
 ## 9. Density constraint scaling for 16-lane Half Splitter — RESOLVED
 **Resolved 2026-06-13** via per-group density accounting (plan option (a)).
