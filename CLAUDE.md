@@ -29,28 +29,27 @@ shapez2-tools/
 └── justfile
 ```
 
-## Synthesis effort (active work) — read the docs first
+## Synthesis effort (active work) --- read the docs first
 
 **`docs/generator-spec.md` §0 is the source of truth for current status.** It
 tracks what's built (codec, generator, lift, shapes, interpret, CLI), the rung
 ladder (lift → simulate → re-route → synthesize), and the active blocker. The
 north star is intra-platform place-and-route for dense platforms; the easy
 single-op platforms are the test harness. `docs/QUESTIONS.md` holds anything
-waiting on the user.
+waiting on the user. Update both of these as you go.
 
 ## Design Conventions
 
 - **Flow runs south → north, always.** Synthesized blueprints take inputs
   (sources) on the south face and emit outputs (sinks) on the north face.
-  Use west/east faces only when one face's port count is insufficient — e.g.
+  Use west/east faces only when one face's port count is insufficient --- e.g.
   the full-lane stacker takes its 8 full-belt inputs on south+west+east and
   outputs 4 on north. Encoded as `place.SOURCE_FACE` (1) / `place.SINK_FACE`
   (3); never hardcode face numbers elsewhere.
 
 ## Blueprints Location
 
-- Blueprints symlink: `~/Projects/shapez_2_blueprints/`
-- Actual path: `/mnt/win/c/Users/agude/AppData/LocalLow/tobspr Games/shapez 2/blueprints`
+- Blueprints: `~/Projects/shapez_2_blueprints/`
 
 Keep the blueprints folder clean - any subfolder appears as an in-game category.
 Naming and icon conventions are documented in the blueprints repo's `CLAUDE.md`.
@@ -92,5 +91,5 @@ Name is filename-only (no description field in format).
 ## Status
 
 Done: organize blueprints, edit icons, naming convention (`Quarter` vs
-`Full Belt`), icon convention. In progress: the synthesis effort above — see
+`Full Belt`), icon convention. In progress: the synthesis effort above --- see
 `docs/generator-spec.md §0`.
