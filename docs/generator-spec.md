@@ -7,8 +7,9 @@ converges at 1-lane, 4-lane × 4-cutter (both floors 0 unmatched legs), and
 root-caused 2026-06-15 as a placement topology problem: the stage-band
 layout creates inter-stage belt channels wider than `MAX_HOP_RANGE`,
 making lateral crossing physically impossible. See `docs/research.md` for
-full analysis and candidate solutions (columnar placement, relay corridor
-routing, template-based placement).**
+full analysis. **Next: WP-O (columnar placement) to unblock 16-lane;
+WP-P (relay corridor routing) for the Full Belt Stacker class.** Forced
+spacing ruled out — dense human builds fill every cell.**
 Gate 1: `test_synth_diagonal_full_belt_2x4` (8-pair diagonal on Foundation_2x4,
 32/32 edges, validates + interprets with hops). Gate 2:
 `test_half_splitter_2x4_placement_feasible` (16 lanes × 4 cutters/lane,
@@ -1042,6 +1043,31 @@ list; `place.py` stays structural. **Not yet wired into `synth.py`** — no
 spec constructs `"pin": "region"` nodes yet, and WP-L's "Region sinks choose
 both group and slot" output-port assignment (the monotone-within-region
 ordering) remains open.
+
+### Relay chain capacity model (added 2026-06-15)
+
+Dense human builds cross belt bands wider than `MAX_HOP_RANGE` using **hop
+relay chains**: sender → 4 blank tiles → receiver → sender → ..., with
+multiple chains interleaved at 2-cell pitch within a corridor row. The
+repeating unit is 6 cells (`S . S . S R . R . R`): 3 chains per row per
+floor. See `docs/research.md` for the full derivation from the Launchers
+template and Full Belt Stacker corpus data.
+
+**Per-cross-section capacity depends on floor availability:**
+
+    capacity(row, cross_section) = 3 × free_floors(cross_section)
+    capacity(corridor) = 3 × free_floors(cross_section) × corridor_rows
+
+A 4-row corridor with all 3 floors free carries `3 × 3 × 4 = 36` belts. But
+at a cross-section where machines occupy floors 0–1, only floor 2 is
+available: capacity drops to `3 × 1 × 4 = 12`. The placer's density model
+must use the local floor count, not a global `× 3`.
+
+The current density constraint (`place.py`) counts nets per x-bucket
+globally, without accounting for either the hop-range ceiling or the relay
+chain opportunity. Updating it to use the relay chain capacity model is
+scoped to **WP-P**; the near-term path (**WP-O**, columnar placement) avoids
+wide bands entirely and does not need relay chains.
 
 ---
 
@@ -2223,6 +2249,117 @@ genuinely open — that is what task 1 measures.
   make the gate pass; if a task appears to conflict with an invariant,
   stop and record it in QUESTIONS.md instead.
 
+#### WP-O — columnar placement for fan topologies *(critical path; unblocks 16-lane)*
+
+**Why this exists (2026-06-15).** The 16-lane × 4-cutter failure (21 overused
+cells, 1868s) is a placement topology problem, not a router tuning problem.
+The stage-band model creates inter-stage belt channels wider than
+`MAX_HOP_RANGE`, making lateral crossing physically impossible. The human
+Half Splitter avoids this with a columnar layout: each lane is a vertical
+column (source → splitter tree → 4 stacked cutters → merger trees → output),
+so the widest intra-lane parallel belt run is 4 (the 1→4 split) — exactly
+at the hop limit. Cross-lane routing only appears at output gathering (the
+145 hops), crossing individual lane columns of width ≤ 4.
+
+See `docs/research.md` §"How dense human builds actually work" for the
+evidence and §"Candidate approaches" option B for the trade-off analysis.
+
+**Tasks (in order):**
+
+1. **Topology detection.** Identify fan-stage topologies in the abstract
+   netlist: stages where a source fans out to N machines (the splitter tree)
+   and machines fan in to M sinks (the merger trees). These get columnar
+   placement; serial stages (1→1 chains) keep the existing band model.
+   `CutterSpec` is the only current fan topology — detection can start as a
+   flag on `CutterSpec` and generalize later.
+
+2. **Column assignment in CP-SAT.** Each lane gets an x-column. Within a
+   column, machines stack vertically (the human layout: 16 columns × 4
+   cutters tall). Constraints:
+   - Machines in the same lane share an x-band (column) of width ≤ 2
+     (anchor + second cell of a multi-cell machine).
+   - Columns are ordered by source group (leftmost source → leftmost column).
+   - Vertical stacking within a column respects the output clearance
+     constraint (y-spacing ≥ 3, from WP-N task 4).
+   - The existing wire-length objective steers columns toward their source
+     and sink ports.
+
+3. **Cross-lane routing scope.** With columnar placement, intra-lane routing
+   (source → splitters → cutters → mergers) stays within the column — at
+   most 4 parallel belts, hoppable. Cross-lane routing (merged outputs →
+   correct-side output ports) is the only phase that crosses columns. This
+   is where the 145 hops live in the human build. The existing router
+   handles this — individual lane columns are width ≤ 4, within hop range.
+
+4. **Gate: 16-lane × 4-cutter routes.** Upgrade
+   `test_eight_lane_four_cutters_2x4_routes` to 16 lanes (currently fails
+   at 21 overused cells). Assert: routing converges, `unmatched_legs == 0`
+   on both floors, all 32 sinks in their Region with the correct half.
+
+**Hints / expected failure modes:**
+- If the column model over-constrains x (too many 2-cell columns on a
+  76-wide interior), allow band-height > 1 within a column (the human uses
+  4 rows per column at 16 lanes — 16 × 2-cell columns + routing channels
+  ≈ 76 wide). The column width is the machine footprint, not the routing.
+- The splitter and merger trees route *within* the column. They are small
+  (3 splitters + 6 mergers per lane) and local — PathFinder handles them
+  without congestion. Do not try to place junction cells explicitly; let
+  the router derive them as Steiner branching.
+- Do not attempt relay chains (WP-P) to solve the output-gathering step —
+  the 145 human hops are all point-to-point, crossing columns of width
+  1–4. Relay chains are for the stacker class, not this topology.
+
+#### WP-P — relay corridor routing *(medium-term; Full Belt Stacker class)*
+
+**Why this exists (2026-06-15).** The Full Belt Stacker's topology is not
+columnar — it's fully interleaved, with 423 hop pairs (20% of entities) and
+134 lifts across 3 floors. Reaching this class of design requires the router
+to understand **relay chains**: sender → flight (4 blank) → receiver → sender
+→ ..., where multiple chains share a corridor via interleaving at 2-cell
+pitch and floor stacking. See `docs/research.md` §"The relay chain capacity
+model" for the physics and §"Candidate approaches" option A for the
+trade-off analysis.
+
+**Capacity model.** A relay corridor's capacity per row depends on how many
+floors are free at that cross-section — floors occupied by machines or
+committed to other routing cannot carry chains:
+
+    capacity(row, cross_section) = 3 × free_floors(cross_section)
+    capacity(corridor) = 3 × free_floors × corridor_rows
+
+This is *not* a blanket `9 × corridor_rows`. In a dense stage where machines
+span floors 0–1, only floor 2 is available for relay chains at that
+cross-section (`capacity = 3 × 1 × corridor_rows`). The placer's density
+model (WP-M) must account for per-cross-section floor availability — a
+global floor count overpromises.
+
+**Ruled out: forced spacing (research.md option E).** The Full Belt Stacker
+(62% cell utilization, 5058 entities) and the Half Splitter (1562 entities,
+single floor) prove dense human builds do not use spacing gaps. They fill
+every cell and cross via hops/lifts.
+
+**Scope (not yet tasked — depends on WP-O landing first):**
+- **Router extension:** relay chain planning (where corridors go, how many
+  chains each carries), interleaved sender/receiver placement within
+  corridors (the `S.S.S R.R.R` pattern from `docs/research.md`), modified
+  routing graph (a relay corridor row has capacity = `3 × free_floors`, not
+  1), modified cost model (relay chains amortize hop overhead across corridor
+  length).
+- **Placer integration:** crossing-feasibility constraint (research.md
+  option D) using the floor-aware capacity model above. The placer must
+  reserve corridor rows (they can't contain machines) and verify that
+  `d_max(cross_section) ≤ 3 × free_floors × corridor_rows` for every
+  inter-stage channel.
+- **Supporting infrastructure:** coarse global routing (option F) as a fast
+  feasibility check, RUDY congestion proxy (option G) as a soft placement
+  penalty — both optional, worth adding if columnar placement + relay chains
+  still leave placement-routing feedback too slow. CP-SAT local repair
+  (option H) for residual hotspots after PathFinder converges elsewhere.
+- **Acceptance:** Full Belt Stacker topology (192 stackers on Foundation_2x4)
+  places and routes. Harder than the Half Splitter — more entities (5058 vs.
+  1562), more hops (423 vs. 145), all 3 floors active, non-columnar
+  interleaved topology.
+
 ### 7.3 Sequencing & dependencies
 - **Critical path:** A → B → C → D → E, each gated by the prior's invariant.
 - A and B are cheap and unblock everything — done.
@@ -2233,10 +2370,11 @@ genuinely open — that is what task 1 measures.
 - F / G / H run in parallel whenever a stacker / painter / confidence need
   arises; none block the diagonal-extractor north star.
 - New deps (§6): A/H add `networkx`; D adds `OR-Tools`. Nothing else.
-- **Scaling arc (updated 2026-06-13): ~~I~~ ✓ → {~~J~~ ✓, ~~K~~ ✓, ~~L~~ ✓} →
-  ~~M~~ ✓ → ~~N~~ ✓ (tasks 1–7 done; gate 2 at 4-lane end-to-end, group
-  routing landed) → north star** (the Half Splitter + the 48→96 full-belt
-  diagonal extractor).
+- **Scaling arc (updated 2026-06-15): ~~I~~ ✓ → {~~J~~ ✓, ~~K~~ ✓, ~~L~~ ✓} →
+  ~~M~~ ✓ → ~~N~~ ✓ (tasks 1–8 done; gate 2 at 8-lane end-to-end, group
+  routing landed) → **O** (columnar placement, unblocks 16-lane) → **P**
+  (relay corridor routing, Full Belt Stacker class) → north star** (the Half
+  Splitter + the 48→96 full-belt diagonal extractor).
   Gate 1 passes; gate 2 routing converges at 1-lane, 4-lane × 1-cutter
   (0 unmatched, correct halves), and 4-lane × 4-cutter (routing converges,
   16 machines placed). **Done (2026-06-13):**
@@ -2320,28 +2458,16 @@ genuinely open — that is what task 1 measures.
      the splitter→cutter channel), making lateral crossing physically
      impossible with single-point hops. Tuning `PRES_FAC_MULT`, `max_iters`,
      or stall windows cannot fix what the placer made uncrossable. See
-     `docs/research.md` for the full root-cause analysis and candidate
-     solutions.
+     `docs/research.md` for the full root-cause analysis. **Forced spacing
+     (research.md option E) ruled out** — the Full Belt Stacker (62%
+     utilization, 5058 entities) and the Half Splitter (1562 entities, single
+     floor) prove dense builds fill every cell.
 
-     **How dense human builds solve this:** hop relay chains (3 belts per row
-     per floor via interleaved sender/receiver pairs at 2-cell pitch). The
-     Full Belt Stacker uses 423 hop pairs (20% of entities); the Launchers
-     template demonstrates the multiplexing pattern. The human Half Splitter
-     uses a columnar layout that avoids wide bands entirely.
-
-     **Candidate approaches (ranked in `docs/research.md`):**
-     - **(A) Relay corridor routing:** teach the router to build relay chains;
-       matches what all dense builds do but requires significant router
-       changes.
-     - **(B) Columnar placement:** mirror the human Half Splitter's vertical
-       lane columns; directly solves the near-term 16-lane blocker.
-     - **(C) Template-based placement:** use extracted tiles from human builds.
-     - **(D) Crossing-feasibility constraint:** add relay-chain bandwidth
-       (9 × corridor_rows) to the placer's density model.
-     - Others: see `docs/research.md` §Candidate approaches.
-
-     **Recommended sequencing:** columnar placement (B) first to unblock
-     16-lane; relay corridor routing (A) for the Full Belt Stacker class.
+     **Resolution: WP-O (columnar placement) → WP-P (relay corridor
+     routing).** Columnar placement (research.md option B) unblocks the
+     16-lane Half Splitter by mirroring the human build's vertical lane
+     columns; relay corridor routing (option A) enables the Full Belt Stacker
+     class. See §7.2 WP-O and WP-P for tasks.
   WP-L's region-internal flow ordering remains open and non-blocking.
 
 ### 7.4 Test infrastructure to build first
