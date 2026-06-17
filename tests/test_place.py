@@ -1,5 +1,7 @@
 """WP-D: placement tests (CP-SAT)."""
 
+import pytest
+
 from shapez2_tools import lift, shapes
 from shapez2_tools.blueprint import Blueprint
 from tests.conftest import REF
@@ -609,6 +611,7 @@ class TestColumnPlacement:
         stages = _compute_stages(abstract)
         assert _detect_fan_topology(abstract, stages) is None
 
+    @pytest.mark.slow
     def test_columns_ordered_by_source_x(self):
         """Placed machines' mean x is monotone with source port x."""
         from collections import defaultdict
@@ -657,6 +660,7 @@ class TestColumnPlacement:
         mean_xs = [mx for _, mx in src_xs]
         assert mean_xs == sorted(mean_xs), f"columns not monotone: {mean_xs}"
 
+    @pytest.mark.slow
     def test_sixteen_lane_placement_columnar(self):
         """16-lane placement produces 16 distinct x-columns of width ≤ 2."""
         from collections import defaultdict

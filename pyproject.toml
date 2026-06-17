@@ -39,3 +39,6 @@ select = ["E", "F", "I", "UP"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "slow: scale-checkpoint tests that run CP-SAT to its 10s time budget; excluded from the pre-commit hook, run via `just test`.",
+]

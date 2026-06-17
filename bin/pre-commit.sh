@@ -1,7 +1,9 @@
 #!/bin/bash
 #
-# Pre-commit hook: runs ruff and pytest on staged Python files.
-# Rejects the commit if lint or tests fail.
+# Pre-commit hook: runs ruff and the fast pytest suite (excludes tests marked
+# `slow`, see pyproject.toml) on staged Python files. Rejects the commit if
+# lint or tests fail. Run `just test` for the full suite, including slow
+# scale-checkpoint tests.
 
 STAGED_PY_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.py$' || true)
 
@@ -22,7 +24,7 @@ if [ $LINT_EXIT -ne 0 ]; then
   exit 1
 fi
 
-just test
+just test-fast
 TEST_EXIT=$?
 
 if [ $TEST_EXIT -ne 0 ]; then

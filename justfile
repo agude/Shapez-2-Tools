@@ -6,9 +6,13 @@ default:
 install:
     uv sync --all-extras
 
-# Run tests
+# Run all tests (including slow scale-checkpoint tests)
 test *args:
     uv run pytest {{ args }}
+
+# Run tests excluding slow scale-checkpoint tests (used by the pre-commit hook)
+test-fast *args:
+    uv run pytest -m "not slow" {{ args }}
 
 # Run linter
 lint:

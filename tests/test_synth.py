@@ -731,6 +731,7 @@ class TestCutterSynthesize:
             else:
                 pytest.fail(f"sink {pos} is on neither west nor east face")
 
+    @pytest.mark.slow
     def test_four_lane_four_cutters_2x4_routes(self):
         """4 lanes x 4 cutters/lane on Foundation_2x4 (64 cutter cells):
         synthesis → routing → validate (lift-enabled). Both floors at 0
@@ -783,6 +784,7 @@ class TestCutterSynthesize:
             else:
                 pytest.fail(f"sink {pos} is outside both Region pins")
 
+    @pytest.mark.slow
     def test_eight_lane_four_cutters_2x4_routes(self):
         """8 lanes x 4 cutters/lane on Foundation_2x4 (32 machines):
         synthesis → routing → validate (lift-enabled).  Placement is
@@ -797,6 +799,7 @@ class TestCutterSynthesize:
         machines = [n for n in nl.nodes.values() if n.kind == "machine"]
         assert len(machines) == spec.lanes * spec.cutters_per_lane
 
+    @pytest.mark.slow
     def test_half_splitter_2x4_routes(self):
         """Full Half Splitter (16 lanes x 4 cutters/lane on Foundation_2x4,
         64 machines): columnar placement (WP-O) → routing → validate.

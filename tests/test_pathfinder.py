@@ -782,12 +782,17 @@ class TestLaneGroupRouting:
                     )
 
     def test_group_assignment_propagates(self):
-        """_assign_net_groups propagates group membership through netlist edges."""
+        """_assign_net_groups propagates group membership through netlist edges.
+
+        2 lanes (not the 4+ used by the scale-checkpoint tests) is enough to
+        exercise multi-group propagation while staying off CP-SAT's 10s time
+        budget (~3s here vs. ~10s at 4+ lanes).
+        """
         from shapez2_tools.pathfinder import _assign_net_groups, build_nets
         from shapez2_tools.place import place
         from shapez2_tools.synth import CutterSpec, _monotone_sort, netlist_from_cutter_spec
 
-        spec = CutterSpec(lanes=4, platform="Foundation_2x4", cutters_per_lane=4)
+        spec = CutterSpec(lanes=2, platform="Foundation_2x4", cutters_per_lane=4)
         abstract = _monotone_sort(netlist_from_cutter_spec(spec), spec.platform)
         nl = place(abstract, spec.platform)
         nets, _, _ = build_nets(nl, layer=0)
@@ -796,7 +801,7 @@ class TestLaneGroupRouting:
         assert all(n.group is not None for n in nets)
         from collections import Counter
         groups = Counter(n.group for n in nets)
-        assert len(groups) == 4
+        assert len(groups) == 2
         for g, count in groups.items():
             assert count == 3, f"group {g} has {count} nets, expected 3"
 
