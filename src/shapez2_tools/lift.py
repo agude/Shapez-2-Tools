@@ -209,10 +209,12 @@ def _resolve_hops(
 ) -> list[tuple[tuple[int, int], tuple[int, int]]]:
     """Pair interior hop senders with receivers and return directed edges.
 
-    Pairing rule (mined from the Half Splitter, 145/145 pairs): scan along
-    the sender's facing direction; the first receiver with the same rotation
-    is its partner.  Returns ``(sender_pos, receiver_pos)`` pairs — each acts
-    as a long straight belt in the netlist.
+    Pairing rule (in-game: a launcher connects to the *furthest* catcher in
+    range — see https://shapez2.wiki.gg/wiki/Conveyor_Belt): scan along the
+    sender's facing direction from ``MAX_HOP_RANGE`` down to 1; the first
+    (furthest) receiver with the same rotation is its partner.  Returns
+    ``(sender_pos, receiver_pos)`` pairs — each acts as a long straight belt
+    in the netlist.
     """
     senders = []
     receivers_by_pos: dict[tuple[int, int], tuple[int, int]] = {}
@@ -241,7 +243,7 @@ def _resolve_hops(
     used_receivers: set[tuple[int, int]] = set()
     for s in senders:
         dx, dy = _DIR_VEC[s.rotation]
-        for dist in range(1, MAX_HOP_RANGE + 1):
+        for dist in range(MAX_HOP_RANGE, 0, -1):
             rx, ry = s.x + dx * dist, s.y + dy * dist
             rpos = (rx, ry)
             if rpos in receivers_by_pos and rpos not in used_receivers:
@@ -409,6 +411,38 @@ def unmatched_legs(bp: Blueprint, layer: int) -> int:
             if not (n and _neg(d) in n.outs):
                 bad += 1
     return bad
+
+
+def trace_upstream(
+    bp: Blueprint, layer: int, start: tuple[int, int]
+) -> tuple[tuple[int, int], _Cell]:
+    """Walk upstream from a belt/port cell, across hops, to the originating machine.
+
+    ``BeltPortReceiver`` and ``BeltPortSender`` both have ``is_belt = False``
+    but neither is a terminal: a receiver's upstream is its paired sender
+    (looked up via ``_resolve_hops``), and a sender's upstream is whatever
+    feeds its own input leg, same as a belt. The walk stops at the first
+    machine cell.
+    """
+    occ = _occupancy(bp, layer)
+    port_positions = _platform_port_positions(bp)
+    sender_by_receiver = {r: s for s, r in _resolve_hops(bp, layer, port_positions)}
+    entity_type = {(e.x, e.y): e.type for e in all_entities(bp) if e.layer == layer}
+
+    cur = start
+    visited = {cur}
+    while True:
+        cell = occ[cur]
+        if kind(entity_type[cell.anchor]) == "machine":
+            return cur, cell
+        if kind(entity_type[cell.anchor]) == "platform_in":
+            cur = sender_by_receiver[cur]
+        else:
+            d = next(iter(cell.ins))
+            cur = (cur[0] + d[0], cur[1] + d[1])
+        if cur in visited:
+            raise ValueError(f"cycle detected tracing upstream from {start}")
+        visited.add(cur)
 
 
 def trace_layer(bp: Blueprint, layer: int, *, contract_hops: bool = False) -> Netlist:

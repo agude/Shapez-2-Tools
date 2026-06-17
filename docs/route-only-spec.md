@@ -1,6 +1,22 @@
 # Route-Only Mode — Spec
 
-**Status:** Draft, 2026-06-17.
+**Status:** Draft, 2026-06-17. **Chunk 0a done** (2026-06-17): `_resolve_hops`
+now scans `MAX_HOP_RANGE` down to 1 (furthest-first), matching the in-game
+rule; identical 68/68 pairs on the Half Splitter, as predicted. **Chunk 0c
+done** (2026-06-17): `lift.trace_upstream(bp, layer, start)` walks upstream
+across hop boundaries (receiver -> paired sender via `_resolve_hops`) to the
+originating machine cell. **Chunk 1 fixed** (2026-06-17): `route_only.py`'s
+`find_and_classify_dangles` (already present, pre-dating this pass) was
+crashing on hop-crossing dangles with a `KeyError`; it now calls
+`lift.trace_upstream` instead of its own non-hop-aware walk. All 24 layer-0
+dangles on the Half Splitter classify correctly. Chunk 0b (pathfinder hop
+validity) deferred until Chunk 5 needs it. **Stale fixture counts fixed**:
+`test_hop_pairing_half_splitter`, `test_hop_contraction_half_splitter`,
+`test_strip_removes_interior_hops_half_splitter` hardcoded counts (145 pairs
+/ 290 endpoints / 32 platform_out) mined from an earlier single-floor version
+of the real blueprint; it's since been hand-edited into 3 symmetric layers,
+so updated all three to the current per-layer counts (68 / 136 / 8 / 24
+ports).
 
 **Motivation:** The user has a hand-placed Half Splitter blueprint
 (`UNFINISHED Half Splitter.spz2bp`) with 192 cutters across 3 symmetric

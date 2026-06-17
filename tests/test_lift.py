@@ -206,22 +206,26 @@ class TestHopPairing:
 
     @pytest.mark.skipif(not HALF_SPLITTER.exists(), reason="Half Splitter not found")
     def test_hop_pairing_half_splitter(self):
-        """All 145 interior hop pairs in the Half Splitter resolve."""
+        """All 68 interior hop pairs on one layer of the Half Splitter resolve.
+
+        The on-disk fixture is now 3 symmetric layers (this count is
+        per-layer); an earlier single-floor version of the build had 145.
+        """
         bp = Blueprint.from_file(HALF_SPLITTER)
         port_positions = lift._platform_port_positions(bp)
         pairs = lift._resolve_hops(bp, 0, port_positions)
-        assert len(pairs) == 145
+        assert len(pairs) == 68
 
     @pytest.mark.skipif(not HALF_SPLITTER.exists(), reason="Half Splitter not found")
     def test_hop_contraction_half_splitter(self):
-        """Hop-contracted Half Splitter: 16 sources, 64 cutters, 32 sinks."""
+        """Hop-contracted Half Splitter layer: 16 sources, 64 cutters, 8 sinks."""
         bp = Blueprint.from_file(HALF_SPLITTER)
         nl = lift.trace_layer(bp, 0, contract_hops=True)
 
         by_kind = Counter(n.kind for n in nl.nodes.values())
         assert by_kind["platform_in"] == 16
         assert by_kind["machine"] == 64
-        assert by_kind["platform_out"] == 32
+        assert by_kind["platform_out"] == 8
 
     def test_hop_contraction_swap_diagonal(self):
         """Hop-contracted swap_diagonal: 8 sources, 80 machines, 8 sinks."""
@@ -249,3 +253,80 @@ class TestHopPairing:
         port_positions = lift._platform_port_positions(bp)
         pairs = lift._resolve_hops(bp, 0, port_positions)
         assert len(pairs) == 18
+
+    def test_resolve_hops_furthest_wins(self):
+        """A sender pairs with the furthest in-range receiver, not the nearest.
+
+        In-game rule (shapez2.wiki.gg/wiki/Conveyor_Belt): "A launcher will
+        try to connect to the furthest catcher in range." One sender at
+        (3, 5) facing east has two receivers in range, at (5, 5) and (7, 5).
+        Nearest-first would pair (3, 5)->(5, 5); furthest-first pairs
+        (3, 5)->(7, 5).
+        """
+        from shapez2_tools import route
+        from shapez2_tools.generator import Entity
+
+        sender = Entity(
+            type="BeltPortSenderInternalVariant", x=3, y=5, rotation=0, layer=0
+        )
+        near_receiver = Entity(
+            type="BeltPortReceiverInternalVariant", x=5, y=5, rotation=0, layer=0
+        )
+        far_receiver = Entity(
+            type="BeltPortReceiverInternalVariant", x=7, y=5, rotation=0, layer=0
+        )
+        bp = route.entities_to_blueprint(
+            [sender, near_receiver, far_receiver], platform="Foundation_1x1"
+        )
+
+        port_positions = lift._platform_port_positions(bp)
+        pairs = lift._resolve_hops(bp, 0, port_positions)
+
+        assert pairs == [((3, 5), (7, 5))]
+
+
+class TestTraceUpstream:
+    """Hop-aware upstream walk (route-only-spec.md Chunk 0c)."""
+
+    def test_crosses_one_hop_to_cutter(self):
+        """Belt -> sender -> (hop) -> receiver -> belt -> cutter: reaches the cutter."""
+        from shapez2_tools import route
+        from shapez2_tools.generator import Entity
+
+        cutter = Entity(type="CutterDefaultInternalVariant", x=0, y=0, rotation=0, layer=0)
+        belt_out = Entity(
+            type="BeltDefaultForwardInternalVariant", x=1, y=0, rotation=0, layer=0
+        )
+        sender = Entity(
+            type="BeltPortSenderInternalVariant", x=2, y=0, rotation=0, layer=0
+        )
+        receiver = Entity(
+            type="BeltPortReceiverInternalVariant", x=5, y=0, rotation=0, layer=0
+        )
+        belt_in = Entity(
+            type="BeltDefaultForwardInternalVariant", x=6, y=0, rotation=0, layer=0
+        )
+        bp = route.entities_to_blueprint(
+            [cutter, belt_out, sender, receiver, belt_in], platform="Foundation_1x1"
+        )
+
+        # belt_in at (6, 0) is the dangling cell: its output at (7, 0) is empty.
+        pos, cell = lift.trace_upstream(bp, 0, (6, 0))
+
+        assert pos == (0, 0)
+        assert cell.anchor == (0, 0)
+
+    @pytest.mark.skipif(not HALF_SPLITTER.exists(), reason="Half Splitter not found")
+    def test_half_splitter_dangles_reach_cutters(self):
+        """All 24 layer-0 dangles trace to a cutter, never stopping at a hop catcher."""
+        from shapez2_tools import route_only
+        from shapez2_tools.generator import all_entities
+
+        bp = Blueprint.from_file(HALF_SPLITTER)
+        dangles = route_only.find_dangles(bp, 0)
+        assert len(dangles) == 24
+
+        entity_type = {(e.x, e.y): e.type for e in all_entities(bp) if e.layer == 0}
+        for pos in dangles:
+            _, cell = lift.trace_upstream(bp, 0, pos)
+            assert "Cutter" in entity_type[cell.anchor]

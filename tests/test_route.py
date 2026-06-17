@@ -527,8 +527,13 @@ class TestStripInteriorHops:
 
     @pytest.mark.skipif(not HALF_SPLITTER.exists(), reason="Half Splitter not found")
     def test_strip_removes_interior_hops_half_splitter(self):
-        """No interior hop entity survives strip_belts (290 endpoints), and
-        the 48 platform IO ports remain."""
+        """No interior hop entity survives strip_belts (136 endpoints on this
+        layer), and the 24 platform IO ports on this layer remain.
+
+        The on-disk fixture is now 3 symmetric layers (these counts are
+        per-layer); an earlier single-floor version of the build had 290
+        endpoints and 48 ports.
+        """
         from shapez2_tools import route
 
         bp = Blueprint.from_file(HALF_SPLITTER)
@@ -537,7 +542,7 @@ class TestStripInteriorHops:
         port_positions = lift._platform_port_positions(bp)
         hop_pairs = lift._resolve_hops(bp, 0, port_positions)
         hop_cells = {pos for pair in hop_pairs for pos in pair}
-        assert len(hop_cells) == 290
+        assert len(hop_cells) == 136
 
         stripped = route.strip_belts(bp, layer=0, netlist=nl)
 
@@ -550,7 +555,7 @@ class TestStripInteriorHops:
         port_nodes = {
             pos for pos, n in nl.nodes.items() if n.kind in ("platform_in", "platform_out")
         }
-        assert len(port_nodes) == 48
+        assert len(port_nodes) == 24
         assert port_nodes <= kept_positions
 
     def test_strip_without_netlist_keeps_all_ports(self):
