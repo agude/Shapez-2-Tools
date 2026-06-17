@@ -15,7 +15,7 @@ class Blueprint:
 
     PATTERN = re.compile(r"^SHAPEZ2-(\d+)-(.+)\$$")
 
-    def __init__(self, data: dict, format_version: int = 1):
+    def __init__(self, data: dict, format_version: int = 4):
         self.data = data
         self.format_version = format_version
 

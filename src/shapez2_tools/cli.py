@@ -287,7 +287,7 @@ def main() -> None:
     encode = subparsers.add_parser("encode", help="Encode JSON to blueprint")
     encode.add_argument("file", type=Path, help="JSON file")
     encode.add_argument("-o", "--output", type=Path, help="Output blueprint file")
-    encode.add_argument("-v", "--version", type=int, default=1, help="Format version")
+    encode.add_argument("-v", "--version", type=int, default=4, help="Format version")
     encode.set_defaults(func=cmd_encode)
 
     # info command
