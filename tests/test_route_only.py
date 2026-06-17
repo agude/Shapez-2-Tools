@@ -1,12 +1,13 @@
 """Tests for route_only: Chunk 1 (find + classify dangling belt ends), Chunk 2
-(find + partition unconnected ports), Chunk 3 (match dangles to ports)."""
+(find + partition unconnected ports), Chunk 3 (match dangles to ports), Chunk 4
+(build passable set from existing occupancy)."""
 
 from collections import Counter
 from pathlib import Path
 
 import pytest
 
-from shapez2_tools import lift, route, route_only
+from shapez2_tools import lift, pathfinder, route, route_only
 from shapez2_tools.blueprint import Blueprint
 from shapez2_tools.generator import Entity
 
@@ -133,3 +134,72 @@ class TestMatchDanglesToPorts:
         for d, p in west_pairs + east_pairs:
             dist = abs(d[0] - p[0]) + abs(d[1] - p[1])
             assert dist < 60
+
+
+class TestBuildPassableFromOccupancy:
+    @pytest.mark.skipif(not HALF_SPLITTER.exists(), reason="Half Splitter not found")
+    def test_half_splitter_layer0_excludes_occupied_cells(self):
+        bp = Blueprint.from_file(HALF_SPLITTER)
+        occ = lift._occupancy(bp, 0)
+        passable = route_only.build_passable_from_occupancy(bp, 0, "Foundation_2x4")
+
+        passable_xy = {(x, y) for x, y, _layer in passable}
+        assert passable_xy.isdisjoint(occ.keys())
+        assert all(layer == 0 for _x, _y, layer in passable)
+
+    @pytest.mark.skipif(not HALF_SPLITTER.exists(), reason="Half Splitter not found")
+    def test_half_splitter_layer0_known_free_and_occupied_cells(self):
+        bp = Blueprint.from_file(HALF_SPLITTER)
+        occ = lift._occupancy(bp, 0)
+        passable = route_only.build_passable_from_occupancy(bp, 0, "Foundation_2x4")
+
+        # A known belt cell from the occupancy map is not passable.
+        occupied_pos = next(iter(occ))
+        assert (occupied_pos[0], occupied_pos[1], 0) not in passable
+
+        # A known free cell (interior, unoccupied, off the platform ring) is.
+        min_x, max_x, min_y, max_y = pathfinder._platform_bounds("Foundation_2x4")
+        free = next(
+            (x, y)
+            for x in range(min_x + 1, max_x)
+            for y in range(min_y + 1, max_y)
+            if (x, y) not in occ
+        )
+        assert (free[0], free[1], 0) in passable
+
+    def test_endpoints_remain_passable_even_when_occupied(self):
+        min_x, _max_x, min_y, _max_y = pathfinder._platform_bounds("Foundation_1x1")
+        ax, ay = min_x + 1, min_y + 1
+        src = Entity(
+            type="BeltPortReceiverInternalVariant", x=ax - 1, y=ay, rotation=0, layer=0
+        )
+        cutter = Entity(
+            type="CutterDefaultInternalVariant", x=ax, y=ay, rotation=0, layer=0
+        )
+        bp = route.entities_to_blueprint([src, cutter], platform="Foundation_1x1")
+
+        occ = lift._occupancy(bp, 0)
+        assert (ax, ay) in occ  # the cutter anchor is occupied
+
+        passable_without = route_only.build_passable_from_occupancy(bp, 0, "Foundation_1x1")
+        assert (ax, ay, 0) not in passable_without
+
+        passable_with = route_only.build_passable_from_occupancy(
+            bp, 0, "Foundation_1x1", endpoints={(ax, ay)}
+        )
+        assert (ax, ay, 0) in passable_with
+
+    def test_excludes_platform_edge_ring(self):
+        src = Entity(type="BeltPortReceiverInternalVariant", x=-1, y=0, rotation=0, layer=0)
+        cutter = Entity(type="CutterDefaultInternalVariant", x=0, y=0, rotation=0, layer=0)
+        bp = route.entities_to_blueprint([src, cutter], platform="Foundation_1x1")
+
+        min_x, max_x, min_y, max_y = pathfinder._platform_bounds("Foundation_1x1")
+        passable = route_only.build_passable_from_occupancy(bp, 0, "Foundation_1x1")
+        ring = {
+            (x, y, 0)
+            for x in range(min_x, max_x + 1)
+            for y in range(min_y, max_y + 1)
+            if x in (min_x, max_x) or y in (min_y, max_y)
+        }
+        assert passable.isdisjoint(ring)

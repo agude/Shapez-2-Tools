@@ -107,6 +107,46 @@ def partition_ports(
     return west, east
 
 
+def build_passable_from_occupancy(
+    bp: Blueprint,
+    layer: int,
+    platform: str,
+    endpoints: set[tuple[int, int]] | None = None,
+) -> set[pathfinder.Cell]:
+    """Passable cells for routing into an already-placed layer.
+
+    Unlike ``pathfinder._build_passable`` (which only excludes machine
+    cells, since the existing belts are about to be stripped), every
+    occupied tile here is a fixed obstacle — belts, machines, ports,
+    mergers, splitters all stay put. ``endpoints`` are net endpoints
+    (dangles and unconnected ports): they already have an entity in
+    ``bp`` but the router must still treat them as passable, since it
+    needs to terminate a path there.
+
+    The platform-edge ring (ports-only in-game, see ``_build_passable``)
+    is excluded from ``passable`` for the same reason, with the same
+    endpoint exception.
+    """
+    occ = lift._occupancy(bp, layer)
+    min_x, max_x, min_y, max_y = pathfinder._platform_bounds(platform)
+    endpoints = endpoints or set()
+
+    passable: set[pathfinder.Cell] = set()
+    for x in range(min_x, max_x + 1):
+        for y in range(min_y, max_y + 1):
+            pos = (x, y)
+            if pos in endpoints:
+                passable.add((x, y, layer))
+                continue
+            if pos in occ:
+                continue
+            on_ring = x in (min_x, max_x) or y in (min_y, max_y)
+            if on_ring:
+                continue
+            passable.add((x, y, layer))
+    return passable
+
+
 def match_dangles_to_ports(
     dangles: list[tuple[int, int]], ports: list[tuple[int, int]]
 ) -> list[tuple[tuple[int, int], tuple[int, int]]]:
@@ -134,3 +174,4 @@ def match_dangles_to_ports(
         matched_ports.add(p)
         pairs.append((d, p))
     return pairs
+

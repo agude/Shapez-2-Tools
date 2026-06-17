@@ -23,9 +23,38 @@ x (matches the §6 test-plan expectation). **Chunk 3 done** (2026-06-17):
 `route_only.match_dangles_to_ports` added (greedy nearest-neighbor by
 Manhattan distance within a partition). On layer 0, all 12 west dangles and
 all 12 east dangles match to a port; match distances range 1–54 cells (the
-fixture's hand-built layout has some far-flung leftover ports). **Next:**
-Chunk 4 (build passable set from existing occupancy) — depends only on
-`lift._occupancy` and `pathfinder._platform_bounds`, no new dependencies.
+fixture's hand-built layout has some far-flung leftover ports). **Chunk 4
+done** (2026-06-17): `route_only.build_passable_from_occupancy` added —
+unlike `pathfinder._build_passable` (which only excludes machines, since
+the full-synthesis path strips belts first), this excludes *every* occupied
+cell except the supplied net endpoints, since route-only mode treats
+existing belts as fixed obstacles too. **Chunk 0b done** (2026-06-17):
+`pathfinder.RoutingGraph` gained `existing_senders`/`existing_receivers`
+fields (`Cell -> launch direction`); `_grow_tree`'s hop-candidate evaluation
+now rejects a candidate hop if a further pre-existing receiver (same
+line/rotation) would steal the sender, or a further pre-existing sender
+would steal the receiver, under the in-game furthest-first rule. A launch at
+the full `hop_range` is always safe by construction (nothing can be
+"further" within range). Empty dicts by default — zero behavior change on
+the full-synthesis path, which has no pre-existing hops. 5 new unit tests in
+`TestExistingHopValidity`.
+
+**Chunk 5 UNBLOCKED** (2026-06-17): the blocker was a misunderstanding.
+Chunks 2/3/5 used `trace_layer(bp, layer)` without `contract_hops=True`,
+which treats interior hop endpoints as separate `platform_in`/`platform_out`
+nodes — so all 46 interior hop receivers appeared "unconnected." With
+`contract_hops=True`, the real netlist emerges: **0 unconnected
+`platform_in`**, 16 real south-face input ports (all connected via 1→4
+fan-out to 64 cutters), 8 real output ports on the west face at y=28–31
+(already routed by the user), and **32 machine outputs with no outgoing
+edge** (the cutter halves that haven't reached output ports yet). The 24
+dangles are the downstream ends of those 32 unrouted outputs (some merge
+before dangling). The routing targets are the **24 free platform-edge
+output ports**: 4 on the west face (x=-18, y=8–11), 4 on the east face
+(x=57, y=8–11), and 16 on the south face (y=2, 4 groups of 4). West-half
+dangles route to western port groups, east-half to eastern. **Chunks 2/3
+need rework** to target free platform-edge output ports instead of
+interior hop receivers. **Chunks 0a/0c/1/4/0b are solid and tested.**
 
 **Motivation:** The user has a hand-placed Half Splitter blueprint
 (`UNFINISHED Half Splitter.spz2bp`) with 192 cutters across 3 symmetric
@@ -69,8 +98,9 @@ Per layer (0, 1, 2), independently, `lift_enabled=False`:
 3. **Classify dangles** — trace each dangle upstream through the belt
    graph to the cutter output that produced it. Label it west-half or
    east-half based on which cutter port it traces back to.
-4. **Find unconnected ports** — identify `platform_in` nodes with no
-   outgoing edge in the netlist.
+4. **Find free output ports** — identify platform-edge port positions
+   not already used by the netlist (requires `contract_hops=True` to
+   avoid counting interior hop receivers as unconnected ports).
 5. **Partition ports** — determine which port groups are west-targets
    and which are east-targets. The user's existing routed connections
    (the SE/SW port groups) establish the convention; the remaining
@@ -310,18 +340,28 @@ route-only-specific. The hop pair table can be cached per
 
 ---
 
-### Chunk 2: Find unconnected ports and partition west/east
+### Chunk 2: Find free platform-edge output ports and partition west/east
 
-**Input:** Blueprint, layer index, netlist from lift.
+**Critical:** use `trace_layer(bp, layer, contract_hops=True)` to get
+the real netlist. Without `contract_hops`, interior hop receivers
+appear as 46 unconnected `platform_in` nodes — a mirage. With it, the
+real picture: 16 south-face inputs (all connected), 8 output ports
+(user-routed), and 32 machine outputs with no path to output ports.
+
+**Input:** Blueprint, layer index, platform name.
 
 **Output:** Two lists: `west_ports` and `east_ports`, each a list of
-`(x, y)` positions of unconnected `platform_in` nodes.
+`(x, y)` positions of free platform-edge output ports.
 
 **Algorithm:**
 
-1. From the netlist, find all `platform_in` nodes with no outgoing
-   edge (not in `{e[0] for e in netlist.edges}`).
-2. Partition into west-target and east-target groups. The heuristic:
+1. Load platform port positions from `platforms.json`.
+2. Lift with `contract_hops=True` to get the real netlist.
+3. Find occupied port positions: any platform-edge port that already
+   has a `platform_in` or `platform_out` node in the netlist with
+   edges.
+4. Free ports = all platform-edge positions minus occupied.
+5. Partition free ports into west-target and east-target:
    - The platform has a center x-coordinate.
    - Port groups west of center are west-targets (receive west-half
      shapes).
@@ -330,24 +370,26 @@ route-only-specific. The hop pair table can be cached per
    - This matches the user's convention: east halves go to eastward
      ports, west halves to westward ports.
 
+On the UNFINISHED Half Splitter: 24 free ports (4 west face y=8–11,
+4 east face y=8–11, 16 south face y=2 in 4 groups of 4). Exactly
+matching the 24 dangles.
+
 **Edge cases:**
-- Ports on the platform's west and east faces (not just south).
-  These still partition by east/west of center.
-- Some unconnected ports may be intentionally unused (the 46
-  unconnected ports vs. 24 dangles means 22 are unused). After
-  matching (chunk 3), unmatched ports remain unused.
+- Ports on multiple faces (south, west, east). All partition by
+  east/west of center.
 
 **Existing code to reuse:**
-- `lift.trace_layer` for the netlist.
+- `lift.trace_layer` (with `contract_hops=True`) for the netlist.
 - `pathfinder._platform_bounds` for platform center.
+- `lift._platform_port_positions` for all port positions.
 
 **New code:**
-- `route_only.find_unconnected_ports(netlist) → list[tuple[int, int]]`
+- `route_only.find_free_output_ports(bp, layer, platform) → list[tuple[int, int]]`
 - `route_only.partition_ports(ports, platform) → (west, east)`
 
 **Tests:**
-- Unit test on UNFINISHED Half Splitter: 46 unconnected ports found,
-  partitioned into west/east groups.
+- Unit test on UNFINISHED Half Splitter: 24 free ports found (not 46),
+  partitioned 12 west / 12 east.
 
 ---
 
@@ -418,45 +460,46 @@ only entities in passable are the net endpoints themselves.
 
 ### Chunk 5: Build nets and route
 
-**Input:** Matched pairs from chunk 3, passable set from chunk 4,
-platform geometry.
+**Input:** Matched pairs from chunk 3 (each pair is
+`(dangle_pos, free_port_pos)`), passable set from chunk 4, platform
+geometry.
 
 **Output:** Routed `Net` objects with `tree_cells` and `tree_edges`.
+
+**Corrected model (2026-06-17):** The routing targets are free
+platform-edge output ports, NOT interior hop receivers. The dangles
+are cutter-output belt ends pointing south; they need belt paths
+running south/west/east to reach platform-edge ports where items
+leave the platform. No new hops to interior receivers — those are
+already connected (visible only with `contract_hops=True`).
 
 **Algorithm:**
 
 1. For each `(dangle, port)` pair, create a `pathfinder.Net`:
-   - `kind="fanout"` (port feeds into dangle's upstream direction).
-   - `root` = port cell `(x, y, layer)`.
-   - `terminals` = `[dangle cell (x, y, layer)]`.
-   - Actually — the port is the *source* (platform_in = items enter
-     here) and the dangle is the *destination* (items need to arrive
-     at the bottom of the existing belt network). So the net root is
-     the port, terminal is the dangle.
+   - The dangle outputs south into empty space. Items flow from the
+     cutter through the existing belt network to the dangle, then
+     need to continue south/laterally to the platform-edge port.
+   - `kind="fanout"`, `root` = dangle endpoint, `terminal` = port.
+   - The root is the first free cell south of the dangle:
+     `(dangle_x, dangle_y - 1, layer)`. The dangle's existing belt
+     outputs south into this cell, so the router starts there. The
+     dangle cell itself already has an entity and must not be
+     overwritten.
+   - The terminal is the platform-edge port position. Platform-edge
+     ports are on the ring (y=2 for south, x=-18 for west, x=57 for
+     east). The port cell must be in the passable set.
 2. Set approach/exit directions:
-   - The port's output direction comes from its rotation (a
-     `BeltPortReceiverInternalVariant` at R=0 outputs east, R=1
-     outputs north, etc.). Use `lift.routing_inout` to get this.
-   - The dangle's input direction is south (opposite of its dangling
-     output direction `(0, -1)` → the net needs to arrive from the
-     north, so the terminal approach is `(0, 1)`). Actually: the
-     dangle is a belt outputting south into nothing. We want the
-     router to connect *to* the cell south of the dangle, arriving
-     from the north. So the terminal is the empty cell at
-     `(dangle_x, dangle_y - 1)` and the router grows toward it.
-     Alternatively, the terminal is the dangle cell itself with an
-     approach direction of `(0, 1)` (arriving from the south side).
-     **This needs careful treatment** — the dangle cell already has
-     an entity. The router must NOT place a new entity there; it
-     should connect to the cell just south of the dangle.
-
-   Revised: the net terminal should be `(dangle_x, dangle_y - 1,
-   layer)` — the first free cell south of the dangle. The dangle's
-   existing belt already outputs south into this cell. The router
-   must reach this cell and output north into the dangle.
-
+   - Root approach: `(0, -1)` (south — continuing the dangle's output
+     direction).
+   - Terminal exit: depends on port face. South-face ports (y=2) need
+     items arriving from the north `(0, 1)`. West-face ports (x=-18)
+     need items arriving from the east `(1, 0)`. East-face ports
+     (x=57) need items from the west `(-1, 0)`. Derive from port
+     rotation in `platforms.json`.
 3. Build `pathfinder.RoutingGraph` with the passable set,
    `hop_range=MAX_HOP_RANGE` (or from platform), `lift_enabled=False`.
+   Pass existing sender/receiver positions for hop validity (chunk
+   0b).
 4. Run `pathfinder.pathfinder_route` (or `_route_by_group` if >24
    nets).
 5. If routing fails, report which nets failed and their positions.

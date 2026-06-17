@@ -622,6 +622,81 @@ class TestHop:
         assert not net.hop_edges
 
 
+class TestExistingHopValidity:
+    """§0b: new hops must not collide with pre-existing senders/receivers
+    under the in-game furthest-first pairing rule."""
+
+    def test_baseline_hops_without_conflict(self):
+        """Sanity check: with no pre-existing hops, the only bridge across
+        the gap (a direct hop landing exactly on the far passable cell)
+        succeeds."""
+        passable = {(2, 0, 0), (5, 0, 0)}
+        net = Net(net_id=0, kind="fanout", root=(2, 0, 0), terminals=[(5, 0, 0)])
+        graph = RoutingGraph(passable=passable, hop_range=5)
+
+        assert pathfinder_route([net], graph)
+        assert net.hop_edges == {((2, 0, 0), (5, 0, 0))}
+
+    def test_further_existing_receiver_blocks_sender(self):
+        """A pre-existing receiver further along the same line/rotation
+        would steal our sender under furthest-first. The only candidate hop
+        is rejected, so the net is unroutable."""
+        passable = {(2, 0, 0), (5, 0, 0)}
+        net = Net(net_id=0, kind="fanout", root=(2, 0, 0), terminals=[(5, 0, 0)])
+        graph = RoutingGraph(
+            passable=passable,
+            hop_range=5,
+            existing_receivers={(6, 0, 0): (1, 0)},
+        )
+
+        with pytest.raises(RoutingError):
+            pathfinder_route([net], graph)
+
+    def test_further_existing_sender_blocks_receiver(self):
+        """A pre-existing sender further from the receiver than our
+        candidate sender would steal the receiver under furthest-first."""
+        passable = {(2, 0, 0), (5, 0, 0)}
+        net = Net(net_id=0, kind="fanout", root=(2, 0, 0), terminals=[(5, 0, 0)])
+        graph = RoutingGraph(
+            passable=passable,
+            hop_range=5,
+            existing_senders={(0, 0, 0): (1, 0)},
+        )
+
+        with pytest.raises(RoutingError):
+            pathfinder_route([net], graph)
+
+    def test_maxed_out_hop_distance_is_always_safe(self):
+        """Launching at the full hop_range leaves no room for a further
+        receiver to exist within range, so it's never flagged as unsafe —
+        even with a pre-existing receiver positioned right at the landing
+        cell's neighborhood."""
+        passable = {(0, 0, 0), (5, 0, 0)}
+        net = Net(net_id=0, kind="fanout", root=(0, 0, 0), terminals=[(5, 0, 0)])
+        graph = RoutingGraph(
+            passable=passable,
+            hop_range=5,
+            existing_receivers={(6, 0, 0): (1, 0)},
+        )
+
+        assert pathfinder_route([net], graph)
+        assert net.hop_edges == {((0, 0, 0), (5, 0, 0))}
+
+    def test_no_conflict_when_existing_hop_has_different_rotation(self):
+        """A pre-existing receiver on the same line but a different
+        rotation/direction never pairs with our sender, so it's not a
+        conflict."""
+        passable = {(2, 0, 0), (5, 0, 0)}
+        net = Net(net_id=0, kind="fanout", root=(2, 0, 0), terminals=[(5, 0, 0)])
+        graph = RoutingGraph(
+            passable=passable,
+            hop_range=5,
+            existing_receivers={(6, 0, 0): (0, 1)},  # facing N, not E
+        )
+
+        assert pathfinder_route([net], graph)
+
+
 class TestLiftAwareStripAndReroute:
     """WP-N task 3e: ``strip_and_reroute(..., lift_enabled=True)`` opens
     floor ``layer + 1`` as a fully passable second layer."""

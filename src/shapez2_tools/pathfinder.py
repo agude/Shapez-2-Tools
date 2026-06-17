@@ -75,6 +75,12 @@ class RoutingGraph:
     base: dict[Cell, float] = field(default_factory=dict)
     hist: dict[Cell, float] = field(default_factory=dict)
     occ: dict[Cell, set[int]] = field(default_factory=lambda: defaultdict(set))
+    # Pre-existing (already-placed) hop sender/receiver positions -> launch
+    # direction, for route-only mode where new hops coexist with old ones
+    # (§0b). Empty for the full-synthesis path (belts are stripped first,
+    # so there are no pre-existing hops to conflict with).
+    existing_senders: dict[Cell, tuple[int, int]] = field(default_factory=dict)
+    existing_receivers: dict[Cell, tuple[int, int]] = field(default_factory=dict)
 
     def __post_init__(self):
         if self.hop_range > lift.MAX_HOP_RANGE:
@@ -277,6 +283,23 @@ def _grow_tree(
                                     continue
                                 te = net.terminal_exit.get(nb)
                                 if te is not None and (dx, dy) != te:
+                                    continue
+                                # §0b: a further pre-existing receiver on the
+                                # same line/rotation would steal this sender
+                                # under furthest-first; a farther pre-existing
+                                # sender would steal this receiver. Either
+                                # makes the candidate hop unsafe.
+                                _hop_conflict = False
+                                for d2 in range(hdist + 1, graph.hop_range + 1):
+                                    rpos = (cx + dx * d2, cy + dy * d2, cl)
+                                    if graph.existing_receivers.get(rpos) == (dx, dy):
+                                        _hop_conflict = True
+                                        break
+                                    spos = (nb[0] - dx * d2, nb[1] - dy * d2, cl)
+                                    if graph.existing_senders.get(spos) == (dx, dy):
+                                        _hop_conflict = True
+                                        break
+                                if _hop_conflict:
                                     continue
                                 # No adjacent receivers (fanout): the hop
                                 # destination becomes a receiver; skip if
