@@ -568,3 +568,115 @@ class TestPinnedPorts:
         sink_positions = {p for p, n in result.nodes.items() if n.kind == "platform_out"}
         assert src_positions == all_src_ports
         assert sink_positions == all_sink_ports
+
+
+# ---------------------------------------------------------------------------
+# WP-O: columnar placement for fan topologies
+# ---------------------------------------------------------------------------
+
+
+class TestColumnPlacement:
+    """WP-O: columnar placement for fan topologies."""
+
+    def test_fan_topology_detected(self):
+        from shapez2_tools.place import _compute_stages, _detect_fan_topology
+        from shapez2_tools.synth import CutterSpec, netlist_from_cutter_spec
+
+        spec = CutterSpec(lanes=16, platform="Foundation_2x4", cutters_per_lane=4)
+        abstract = netlist_from_cutter_spec(spec)
+        stages = _compute_stages(abstract)
+        fan_lanes = _detect_fan_topology(abstract, stages)
+        assert fan_lanes is not None
+        assert len(fan_lanes) == 16
+        assert all(len(ms) == 4 for ms in fan_lanes.values())
+
+    def test_serial_topology_not_detected(self):
+        from shapez2_tools.place import _compute_stages, _detect_fan_topology
+        from shapez2_tools.synth import Spec, netlist_from_spec
+
+        spec = Spec(op=("rotate_cw", "rotate_cw"), platform="Foundation_1x1")
+        abstract = netlist_from_spec(spec)
+        stages = _compute_stages(abstract)
+        assert _detect_fan_topology(abstract, stages) is None
+
+    def test_small_fan_not_detected(self):
+        """Fan topologies with ≤ 32 machines stay on the band model."""
+        from shapez2_tools.place import _compute_stages, _detect_fan_topology
+        from shapez2_tools.synth import CutterSpec, netlist_from_cutter_spec
+
+        spec = CutterSpec(lanes=4, platform="Foundation_2x4", cutters_per_lane=4)
+        abstract = netlist_from_cutter_spec(spec)
+        stages = _compute_stages(abstract)
+        assert _detect_fan_topology(abstract, stages) is None
+
+    def test_columns_ordered_by_source_x(self):
+        """Placed machines' mean x is monotone with source port x."""
+        from collections import defaultdict
+
+        from shapez2_tools.place import place
+        from shapez2_tools.synth import (
+            CutterSpec,
+            _monotone_sort,
+            netlist_from_cutter_spec,
+        )
+
+        spec = CutterSpec(lanes=16, platform="Foundation_2x4", cutters_per_lane=4)
+        abstract = _monotone_sort(netlist_from_cutter_spec(spec), spec.platform)
+        nl = place(abstract, spec.platform)
+
+        node_by_id = {n["id"]: n for n in abstract["nodes"]}
+        edge_out: dict[str, list[str]] = defaultdict(list)
+        for sid, did in abstract["edges"]:
+            edge_out[sid].append(did)
+
+        src_xs: list[tuple[int, float]] = []
+        for n in abstract["nodes"]:
+            if n["kind"] != "platform_in":
+                continue
+            src_pos = next(
+                p for p, nd in nl.nodes.items()
+                if nd.kind == "platform_in"
+                and nd.x == p[0] and nd.y == p[1]
+            )
+            machine_ids = [
+                d for d in edge_out.get(n["id"], [])
+                if node_by_id[d]["kind"] == "machine"
+            ]
+            if not machine_ids:
+                continue
+            machine_xs = []
+            for mid in machine_ids:
+                for p, nd in nl.nodes.items():
+                    if nd.kind == "machine" and nd.type == node_by_id[mid]["type"]:
+                        machine_xs.append(p[0])
+                        break
+            if machine_xs:
+                src_xs.append((src_pos[0], sum(machine_xs) / len(machine_xs)))
+
+        src_xs.sort(key=lambda t: t[0])
+        mean_xs = [mx for _, mx in src_xs]
+        assert mean_xs == sorted(mean_xs), f"columns not monotone: {mean_xs}"
+
+    def test_sixteen_lane_placement_columnar(self):
+        """16-lane placement produces 16 distinct x-columns of width ≤ 2."""
+        from collections import defaultdict
+
+        from shapez2_tools.place import place
+        from shapez2_tools.synth import (
+            CutterSpec,
+            _monotone_sort,
+            netlist_from_cutter_spec,
+        )
+
+        spec = CutterSpec(lanes=16, platform="Foundation_2x4", cutters_per_lane=4)
+        abstract = _monotone_sort(netlist_from_cutter_spec(spec), spec.platform)
+        nl = place(abstract, spec.platform)
+
+        by_col: dict[int, list[int]] = defaultdict(list)
+        for pos, node in nl.nodes.items():
+            if node.kind == "machine":
+                by_col[pos[0]].append(pos[1])
+
+        assert len(by_col) == 16
+        for x, ys in by_col.items():
+            assert len(ys) == 4, f"column x={x} has {len(ys)} machines, expected 4"

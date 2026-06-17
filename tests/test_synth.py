@@ -797,16 +797,14 @@ class TestCutterSynthesize:
         machines = [n for n in nl.nodes.values() if n.kind == "machine"]
         assert len(machines) == spec.lanes * spec.cutters_per_lane
 
-    def test_half_splitter_2x4_placement_feasible(self):
+    def test_half_splitter_2x4_routes(self):
         """Full Half Splitter (16 lanes x 4 cutters/lane on Foundation_2x4,
-        64 machines): placement feasible, routing not yet convergent —
-        48 nets exceed PathFinder's convergence capacity (21 overused
-        cells after 60 iterations)."""
-        from shapez2_tools.place import place
-
+        64 machines): columnar placement (WP-O) → routing → validate.
+        Routing converges and all 64 machines are placed."""
         spec = CutterSpec(lanes=16, platform="Foundation_2x4", cutters_per_lane=4)
-        abstract = _monotone_sort(netlist_from_cutter_spec(spec), spec.platform)
-        nl = place(abstract, spec.platform)
+        result = synthesize_cutter(spec, hop_range=5, lift_enabled=True)
+
+        nl = lift.trace_layer(result, 0, contract_hops=True)
         machines = [n for n in nl.nodes.values() if n.kind == "machine"]
         assert len(machines) == spec.lanes * spec.cutters_per_lane
 

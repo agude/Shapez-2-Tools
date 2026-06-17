@@ -1,19 +1,23 @@
 # Blueprint Synthesis — Plan
 
-**Status:** Draft, updated 2026-06-15. **Gate 1 passes; gate 2 routing
-converges at 1-lane, 4-lane × 4-cutter (both floors 0 unmatched legs), and
-8-lane × 4-cutter (~12s, L1=0 unmatched, L0=6 lift-exit gaps — known).
-16-lane × 4-cutter fails (21 overused cells after 60 iterations, ~1868s) —
-root-caused 2026-06-15 as a placement topology problem: the stage-band
-layout creates inter-stage belt channels wider than `MAX_HOP_RANGE`,
-making lateral crossing physically impossible. See `docs/research.md` for
-full analysis. **Next: WP-O (columnar placement) to unblock 16-lane;
-WP-P (relay corridor routing) for the Full Belt Stacker class.** Forced
-spacing ruled out — dense human builds fill every cell.**
+**Status:** Draft, updated 2026-06-16. **Gate 1 passes; gate 2 routing
+converges at 1-lane, 4-lane × 4-cutter (both floors 0 unmatched legs),
+8-lane × 4-cutter (~12s, L1=0 unmatched), and **16-lane × 4-cutter
+(~157s, 64 machines, columnar placement via WP-O)**. WP-O landed
+2026-06-16: `_detect_fan_topology` identifies pure fan-out topologies
+(all stage 0, unique source ownership, multi-cell machines, >32 machines);
+CP-SAT assigns per-lane x-columns (width ≤ 2, gap ≥ 1 between columns,
+ordered by source port x) with fixed R=1 rotation — no bands, no density
+constraints, no rotation element constraints. The column model produces 16
+vertical columns of 4 stacked cutters with 1-cell routing gaps, keeping the
+widest intra-lane belt run at 4 (exactly at hop limit). Routing converges
+with lift-enabled routing (~157s). **Next: WP-P (relay corridor routing)
+for the Full Belt Stacker class.**
 Gate 1: `test_synth_diagonal_full_belt_2x4` (8-pair diagonal on Foundation_2x4,
 32/32 edges, validates + interprets with hops). Gate 2:
-`test_half_splitter_2x4_placement_feasible` (16 lanes × 4 cutters/lane,
-placement-only); `test_single_lane_four_cutters_halves_land_on_correct_sides`
+`test_half_splitter_2x4_routes` (16 lanes × 4 cutters/lane,
+full synthesis → routing → lift trace, 64 machines);
+`test_single_lane_four_cutters_halves_land_on_correct_sides`
 (1 lane × 4 cutters/lane, full end-to-end: synthesis → routing → interpret,
 correct halves); `test_four_lane_four_cutters_2x4_routes` (4-lane × 4-cutter,
 full synthesis → routing → lift trace, 16 machines placed);
@@ -2249,7 +2253,7 @@ genuinely open — that is what task 1 measures.
   make the gate pass; if a task appears to conflict with an invariant,
   stop and record it in QUESTIONS.md instead.
 
-#### WP-O — columnar placement for fan topologies *(critical path; unblocks 16-lane)*
+#### WP-O — columnar placement for fan topologies *(DONE 2026-06-16)*
 
 **Why this exists (2026-06-15).** The 16-lane × 4-cutter failure (21 overused
 cells, 1868s) is a placement topology problem, not a router tuning problem.
@@ -2308,6 +2312,15 @@ evidence and §"Candidate approaches" option B for the trade-off analysis.
 - Do not attempt relay chains (WP-P) to solve the output-gathering step —
   the 145 human hops are all point-to-point, crossing columns of width
   1–4. Relay chains are for the stacker class, not this topology.
+
+**Result (2026-06-16):** All 4 tasks done. `_detect_fan_topology` identifies
+fan topologies (all stage 0, unique source ownership, multi-cell machines,
+>32 total machines); the column model in CP-SAT assigns per-lane x-columns
+(width ≤ 2, gap ≥ 1, ordered by source x) with fixed R=1 rotation. 16-lane
+× 4-cutter (64 machines) places in 16 columns of 4 stacked cutters and routes
+with `lift_enabled=True` in ~157s. `test_half_splitter_2x4_routes` is the
+gate test (full synthesis → routing → lift trace). 5 new placement unit tests
+(`TestColumnPlacement`). 297/297 pass, lint clean.
 
 #### WP-P — relay corridor routing *(medium-term; Full Belt Stacker class)*
 
@@ -2467,7 +2480,8 @@ every cell and cross via hops/lifts.
      routing).** Columnar placement (research.md option B) unblocks the
      16-lane Half Splitter by mirroring the human build's vertical lane
      columns; relay corridor routing (option A) enables the Full Belt Stacker
-     class. See §7.2 WP-O and WP-P for tasks.
+     class. See §7.2 WP-O and WP-P for tasks. **WP-O landed 2026-06-16:**
+     16-lane routes in ~157s with 64 machines in 16 columns. 297/297 pass.
   WP-L's region-internal flow ordering remains open and non-blocking.
 
 ### 7.4 Test infrastructure to build first
