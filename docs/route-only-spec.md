@@ -16,7 +16,16 @@ validity) deferred until Chunk 5 needs it. **Stale fixture counts fixed**:
 / 290 endpoints / 32 platform_out) mined from an earlier single-floor version
 of the real blueprint; it's since been hand-edited into 3 symmetric layers,
 so updated all three to the current per-layer counts (68 / 136 / 8 / 24
-ports).
+ports). **Chunk 2 done** (2026-06-17): `route_only.find_unconnected_ports`
+and `route_only.partition_ports` added. On the Half Splitter layer 0: 46
+unconnected `platform_in` ports, split 23 west / 23 east by platform-center
+x (matches the §6 test-plan expectation). **Chunk 3 done** (2026-06-17):
+`route_only.match_dangles_to_ports` added (greedy nearest-neighbor by
+Manhattan distance within a partition). On layer 0, all 12 west dangles and
+all 12 east dangles match to a port; match distances range 1–54 cells (the
+fixture's hand-built layout has some far-flung leftover ports). **Next:**
+Chunk 4 (build passable set from existing occupancy) — depends only on
+`lift._occupancy` and `pathfinder._platform_bounds`, no new dependencies.
 
 **Motivation:** The user has a hand-placed Half Splitter blueprint
 (`UNFINISHED Half Splitter.spz2bp`) with 192 cutters across 3 symmetric

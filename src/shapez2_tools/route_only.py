@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from shapez2_tools import lift
+from shapez2_tools import lift, pathfinder
 from shapez2_tools.blueprint import Blueprint
 from shapez2_tools.generator import Entity, all_entities
 
@@ -80,3 +80,57 @@ def find_and_classify_dangles(bp: Blueprint, layer: int) -> list[DanglingEnd]:
         DanglingEnd(x, y, _classify_dangle((x, y), bp, layer, machines))
         for x, y in _dangle_positions(occ)
     ]
+
+
+def find_unconnected_ports(netlist: lift.Netlist) -> list[tuple[int, int]]:
+    """Positions of ``platform_in`` nodes with no outgoing edge."""
+    connected = {src for src, _dst in netlist.edges}
+    return [
+        pos for pos, node in netlist.nodes.items()
+        if node.kind == "platform_in" and pos not in connected
+    ]
+
+
+def partition_ports(
+    ports: list[tuple[int, int]], platform: str
+) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    """Split ports into west/east groups by position relative to platform center.
+
+    Matches the hand-routed convention already present in the source
+    blueprint: west-half shapes go to ports west of the platform's
+    horizontal center, east-half shapes to ports east of it.
+    """
+    min_x, max_x, _min_y, _max_y = pathfinder._platform_bounds(platform)
+    center_x = (min_x + max_x) / 2
+    west = [p for p in ports if p[0] < center_x]
+    east = [p for p in ports if p[0] >= center_x]
+    return west, east
+
+
+def match_dangles_to_ports(
+    dangles: list[tuple[int, int]], ports: list[tuple[int, int]]
+) -> list[tuple[tuple[int, int], tuple[int, int]]]:
+    """Greedily pair each dangle with its nearest unmatched port (Manhattan distance).
+
+    Assumes both lists are already partitioned into the same west/east group
+    by the caller. If counts differ, the shorter side is exhausted first and
+    the rest of the longer side is left unmatched.
+    """
+    candidates = sorted(
+        (
+            (abs(dx - px) + abs(dy - py), (dx, dy), (px, py))
+            for dx, dy in dangles
+            for px, py in ports
+        ),
+        key=lambda t: t[0],
+    )
+    matched_dangles: set[tuple[int, int]] = set()
+    matched_ports: set[tuple[int, int]] = set()
+    pairs = []
+    for _dist, d, p in candidates:
+        if d in matched_dangles or p in matched_ports:
+            continue
+        matched_dangles.add(d)
+        matched_ports.add(p)
+        pairs.append((d, p))
+    return pairs
