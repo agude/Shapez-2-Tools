@@ -186,9 +186,7 @@ def _grid_bounds(bp: Blueprint) -> tuple[int, int, int, int] | None:
     return min(xs), max(xs), min(ys), max(ys)
 
 
-def _is_edge_port(
-    e: Entity, bounds: tuple[int, int, int, int]
-) -> bool:
+def _is_edge_port(e: Entity, bounds: tuple[int, int, int, int]) -> bool:
     """True if this port entity sits outside the interior grid."""
     min_x, max_x, min_y, max_y = bounds
     return e.x < min_x or e.x > max_x or e.y < min_y or e.y > max_y

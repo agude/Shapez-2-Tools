@@ -571,4 +571,3 @@ class TestStripInteriorHops:
         positions = {(e.x, e.y) for e in route._all_entities(stripped) if e.layer == 0}
         assert (0, 0) in positions
         assert (5, 0) in positions
-

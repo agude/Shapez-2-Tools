@@ -992,9 +992,7 @@ class TestRowPlacement:
 
         nl = lift.trace_layer(result, 0)
         inputs = {
-            p: Shape.parse("RuCuSuWu")
-            for p, n in nl.nodes.items()
-            if n.kind == "platform_in"
+            p: Shape.parse("RuCuSuWu") for p, n in nl.nodes.items() if n.kind == "platform_in"
         }
         outputs = interpret.interpret(nl, inputs)
         expected = Shape.parse("RuCu----")

@@ -82,9 +82,7 @@ class TestMultiFacePorts:
         result = place(abstract, "Foundation_1x1")
 
         west_ports = set(_edge_ports(_load_platform("Foundation_1x1"), 0))
-        sink_pos = next(
-            pos for pos, n in result.nodes.items() if n.kind == "platform_out"
-        )
+        sink_pos = next(pos for pos, n in result.nodes.items() if n.kind == "platform_out")
         sink_node = result.nodes[sink_pos]
 
         assert sink_pos in west_ports
@@ -120,9 +118,7 @@ class TestMultiFacePorts:
             for node in placed.nodes.values()
         ]
         stripped_bp = entities_to_blueprint(entities, platform="Foundation_1x1")
-        routed_bp = reroute_with_junctions(
-            stripped_bp, placed, layer=0, platform="Foundation_1x1"
-        )
+        routed_bp = reroute_with_junctions(stripped_bp, placed, layer=0, platform="Foundation_1x1")
         routed_nl = lift.trace_layer(routed_bp, 0)
 
         assert lift.isomorphic(placed, routed_nl)
@@ -165,9 +161,7 @@ class TestCutterDefault:
         north_ports = set(_edge_ports(plat, 3))
         west_ports = set(_edge_ports(plat, 0))
 
-        cutter_pos = next(
-            pos for pos, n in result.nodes.items() if n.kind == "machine"
-        )
+        cutter_pos = next(pos for pos, n in result.nodes.items() if n.kind == "machine")
         cutter_node = result.nodes[cutter_pos]
         fp = lift._machine_footprint(cutter_node.type, cutter_node.rotation)
         cells = {(cutter_pos[0] + dx, cutter_pos[1] + dy) for dx, dy, dl in fp if dl == 0}
@@ -203,9 +197,7 @@ class TestCutterDefault:
             for node in placed.nodes.values()
         ]
         stripped_bp = entities_to_blueprint(entities, platform="Foundation_1x1")
-        routed_bp = reroute_with_junctions(
-            stripped_bp, placed, layer=0, platform="Foundation_1x1"
-        )
+        routed_bp = reroute_with_junctions(stripped_bp, placed, layer=0, platform="Foundation_1x1")
         routed_nl = lift.trace_layer(routed_bp, 0)
 
         assert lift.isomorphic(placed, routed_nl)
@@ -318,18 +310,31 @@ class TestCrossingBudget:
             src = f"src{g}"
             sink = f"sink{g}"
             mid = f"m{g}"
-            nodes.append({
-                "id": src, "type": "BeltPortReceiverInternalVariant",
-                "kind": "platform_in", "pin": "group", "target": (1, g),
-            })
-            nodes.append({
-                "id": sink, "type": "BeltPortSenderInternalVariant",
-                "kind": "platform_out", "pin": "group", "target": (3, 3 - g),
-            })
-            nodes.append({
-                "id": mid, "type": "RotatorHalfInternalVariant",
-                "kind": "machine",
-            })
+            nodes.append(
+                {
+                    "id": src,
+                    "type": "BeltPortReceiverInternalVariant",
+                    "kind": "platform_in",
+                    "pin": "group",
+                    "target": (1, g),
+                }
+            )
+            nodes.append(
+                {
+                    "id": sink,
+                    "type": "BeltPortSenderInternalVariant",
+                    "kind": "platform_out",
+                    "pin": "group",
+                    "target": (3, 3 - g),
+                }
+            )
+            nodes.append(
+                {
+                    "id": mid,
+                    "type": "RotatorHalfInternalVariant",
+                    "kind": "machine",
+                }
+            )
             edges.append((src, mid))
             edges.append((mid, sink))
         _check_crossing_budget({"nodes": nodes, "edges": edges})
@@ -340,10 +345,8 @@ class TestCrossingBudget:
 
         abstract = {
             "nodes": [
-                {"id": "src0", "type": "BeltPortReceiverInternalVariant",
-                 "kind": "platform_in"},
-                {"id": "snk0", "type": "BeltPortSenderInternalVariant",
-                 "kind": "platform_out"},
+                {"id": "src0", "type": "BeltPortReceiverInternalVariant", "kind": "platform_in"},
+                {"id": "snk0", "type": "BeltPortSenderInternalVariant", "kind": "platform_out"},
             ],
             "edges": [("src0", "snk0")],
         }
@@ -357,18 +360,31 @@ class TestCrossingBudget:
         edges = []
         for g in range(4):
             src, sink, mid = f"src{g}", f"sink{g}", f"m{g}"
-            nodes.append({
-                "id": src, "type": "BeltPortReceiverInternalVariant",
-                "kind": "platform_in", "pin": "group", "target": (1, g),
-            })
-            nodes.append({
-                "id": sink, "type": "BeltPortSenderInternalVariant",
-                "kind": "platform_out", "pin": "group", "target": (3, g),
-            })
-            nodes.append({
-                "id": mid, "type": "RotatorHalfInternalVariant",
-                "kind": "machine",
-            })
+            nodes.append(
+                {
+                    "id": src,
+                    "type": "BeltPortReceiverInternalVariant",
+                    "kind": "platform_in",
+                    "pin": "group",
+                    "target": (1, g),
+                }
+            )
+            nodes.append(
+                {
+                    "id": sink,
+                    "type": "BeltPortSenderInternalVariant",
+                    "kind": "platform_out",
+                    "pin": "group",
+                    "target": (3, g),
+                }
+            )
+            nodes.append(
+                {
+                    "id": mid,
+                    "type": "RotatorHalfInternalVariant",
+                    "kind": "machine",
+                }
+            )
             edges.append((src, mid))
             edges.append((mid, sink))
         _check_crossing_budget({"nodes": nodes, "edges": edges})
@@ -419,20 +435,24 @@ class TestPinnedPorts:
         nodes = []
         for g in range(4):
             for slot in range(4):
-                nodes.append({
-                    "id": f"src{g}_{slot}",
-                    "type": "BeltPortReceiverInternalVariant",
-                    "kind": "platform_in",
-                    "pin": "group",
-                    "target": (3, g),
-                })
-                nodes.append({
-                    "id": f"sink{g}_{slot}",
-                    "type": "BeltPortSenderInternalVariant",
-                    "kind": "platform_out",
-                    "pin": "group",
-                    "target": (1, 3 - g),
-                })
+                nodes.append(
+                    {
+                        "id": f"src{g}_{slot}",
+                        "type": "BeltPortReceiverInternalVariant",
+                        "kind": "platform_in",
+                        "pin": "group",
+                        "target": (3, g),
+                    }
+                )
+                nodes.append(
+                    {
+                        "id": f"sink{g}_{slot}",
+                        "type": "BeltPortSenderInternalVariant",
+                        "kind": "platform_out",
+                        "pin": "group",
+                        "target": (1, 3 - g),
+                    }
+                )
         # One pair per group (not per slot): the group-level permutation.
         pairs = [(g, 3 - g) for g in range(4)]
 
@@ -471,9 +491,7 @@ class TestPinnedPorts:
 
         port_pos, port_rot = _assign_pinned_ports(plat, nodes)
 
-        expected_slots = [
-            pos for face, gidx in region for pos in _port_groups(plat, face)[gidx]
-        ]
+        expected_slots = [pos for face, gidx in region for pos in _port_groups(plat, face)[gidx]]
         assert [port_pos[f"sink{i}"] for i in range(8)] == expected_slots
         assert len(set(port_pos.values())) == 8
         # West face (0): a sink continues outward, rotation (0+2)%4 = 2.
@@ -497,29 +515,29 @@ class TestPinnedPorts:
 
         nodes = []
         for i in range(16):
-            nodes.append({
-                "id": f"west{i}",
-                "type": "BeltPortSenderInternalVariant",
-                "kind": "platform_out",
-                "pin": "region",
-                "target": western,
-            })
-            nodes.append({
-                "id": f"east{i}",
-                "type": "BeltPortSenderInternalVariant",
-                "kind": "platform_out",
-                "pin": "region",
-                "target": eastern,
-            })
+            nodes.append(
+                {
+                    "id": f"west{i}",
+                    "type": "BeltPortSenderInternalVariant",
+                    "kind": "platform_out",
+                    "pin": "region",
+                    "target": western,
+                }
+            )
+            nodes.append(
+                {
+                    "id": f"east{i}",
+                    "type": "BeltPortSenderInternalVariant",
+                    "kind": "platform_out",
+                    "pin": "region",
+                    "target": eastern,
+                }
+            )
 
         port_pos, port_rot = _assign_pinned_ports(plat, nodes)
 
-        west_slots = {
-            pos for face, gidx in western for pos in _port_groups(plat, face)[gidx]
-        }
-        east_slots = {
-            pos for face, gidx in eastern for pos in _port_groups(plat, face)[gidx]
-        }
+        west_slots = {pos for face, gidx in western for pos in _port_groups(plat, face)[gidx]}
+        east_slots = {pos for face, gidx in eastern for pos in _port_groups(plat, face)[gidx]}
 
         assert {port_pos[f"west{i}"] for i in range(16)} == west_slots
         assert {port_pos[f"east{i}"] for i in range(16)} == east_slots
@@ -545,20 +563,24 @@ class TestPinnedPorts:
             for slot in range(4):
                 src_id = f"src{g}_{slot}"
                 sink_id = f"sink{g}_{slot}"
-                nodes.append({
-                    "id": src_id,
-                    "type": "BeltPortReceiverInternalVariant",
-                    "kind": "platform_in",
-                    "pin": "group",
-                    "target": (3, g),
-                })
-                nodes.append({
-                    "id": sink_id,
-                    "type": "BeltPortSenderInternalVariant",
-                    "kind": "platform_out",
-                    "pin": "group",
-                    "target": (1, 3 - g),
-                })
+                nodes.append(
+                    {
+                        "id": src_id,
+                        "type": "BeltPortReceiverInternalVariant",
+                        "kind": "platform_in",
+                        "pin": "group",
+                        "target": (3, g),
+                    }
+                )
+                nodes.append(
+                    {
+                        "id": sink_id,
+                        "type": "BeltPortSenderInternalVariant",
+                        "kind": "platform_out",
+                        "pin": "group",
+                        "target": (1, 3 - g),
+                    }
+                )
                 edges.append((src_id, sink_id))
 
         result = place({"nodes": nodes, "edges": edges}, "Foundation_2x4")
@@ -637,13 +659,12 @@ class TestColumnPlacement:
             if n["kind"] != "platform_in":
                 continue
             src_pos = next(
-                p for p, nd in nl.nodes.items()
-                if nd.kind == "platform_in"
-                and nd.x == p[0] and nd.y == p[1]
+                p
+                for p, nd in nl.nodes.items()
+                if nd.kind == "platform_in" and nd.x == p[0] and nd.y == p[1]
             )
             machine_ids = [
-                d for d in edge_out.get(n["id"], [])
-                if node_by_id[d]["kind"] == "machine"
+                d for d in edge_out.get(n["id"], []) if node_by_id[d]["kind"] == "machine"
             ]
             if not machine_ids:
                 continue

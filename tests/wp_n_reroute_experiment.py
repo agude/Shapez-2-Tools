@@ -44,9 +44,7 @@ from shapez2_tools.pathfinder import (
 )
 from shapez2_tools.route import _all_entities, strip_belts
 
-HALF_SPLITTER = (
-    Path.home() / "Projects" / "shapez_2_blueprints" / "UNFINISHED Half Splitter.spz2bp"
-)
+HALF_SPLITTER = Path.home() / "Projects" / "shapez_2_blueprints" / "UNFINISHED Half Splitter.spz2bp"
 
 # The 8 partially-routed lanes (one source per `src`, 4 cutters each) each
 # have one dangling output per cutter. The 8 currently-unfed sinks (face 1,
@@ -70,7 +68,8 @@ NEW_SINK_FOR_SRC: dict[tuple[int, int], tuple[int, int]] = {
 
 
 def _machine_out_cells(
-    nl: lift.Netlist, anchor: tuple[int, int],
+    nl: lift.Netlist,
+    anchor: tuple[int, int],
 ) -> dict[tuple[int, int], frozenset]:
     """Per-cell output directions (dl=0) for a machine node."""
     node = nl.nodes[anchor]
@@ -107,7 +106,9 @@ def complete_netlist(nl: lift.Netlist) -> lift.Netlist:
 
 
 def _build_passable_2floor(
-    bp: Blueprint, layer: int, platform: str,
+    bp: Blueprint,
+    layer: int,
+    platform: str,
 ) -> set[Cell]:
     """Floor ``layer``: platform interior minus machine cells. Floor
     ``layer + 1``: fully open (the human placement uses only floor 0)."""
@@ -196,9 +197,7 @@ def _translate_nets(
         if not net.terminals:
             continue
         if net.root not in passable:
-            raise RoutingError(
-                f"root could not leave port cell ({net.root[0]}, {net.root[1]})"
-            )
+            raise RoutingError(f"root could not leave port cell ({net.root[0]}, {net.root[1]})")
         routable.append(net)
     return routable
 
@@ -256,7 +255,11 @@ def main() -> None:
     t0 = time.monotonic()
     try:
         routed = strip_and_reroute(
-            bp, nl, layer=0, hop_range=lift.MAX_HOP_RANGE, platform="Foundation_2x4",
+            bp,
+            nl,
+            layer=0,
+            hop_range=lift.MAX_HOP_RANGE,
+            platform="Foundation_2x4",
         )
     except RoutingError as e:
         dt = time.monotonic() - t0

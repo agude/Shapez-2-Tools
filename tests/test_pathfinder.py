@@ -215,7 +215,6 @@ def _assert_legs_legal(net: Net):
         pattern = (in_count.get(c, 0), out_count.get(c, 0))
         assert pattern in LEGAL_LEG_PATTERNS, f"Cell {c} has illegal pattern {pattern}"
 
-
     def test_root_branches_as_splitter_when_offset(self):
         """1→2 fan: downstream walled, splitter must be at root cell.
 
@@ -282,12 +281,20 @@ class TestPortBandPassability:
         nl = lift.Netlist(
             nodes={
                 (2, 8): lift.Node(
-                    x=2, y=8, layer=0, type="BeltPortReceiverInternalVariant",
-                    kind="platform_in", rotation=0,
+                    x=2,
+                    y=8,
+                    layer=0,
+                    type="BeltPortReceiverInternalVariant",
+                    kind="platform_in",
+                    rotation=0,
                 ),
                 (17, 8): lift.Node(
-                    x=17, y=8, layer=0, type="BeltPortSenderInternalVariant",
-                    kind="platform_out", rotation=0,
+                    x=17,
+                    y=8,
+                    layer=0,
+                    type="BeltPortSenderInternalVariant",
+                    kind="platform_out",
+                    rotation=0,
                 ),
             },
             edges=[((2, 8), (17, 8))],
@@ -318,12 +325,20 @@ class TestPortBandPassability:
         nl = lift.Netlist(
             nodes={
                 (0, 0): lift.Node(
-                    x=0, y=0, layer=0, type="BeltPortReceiverInternalVariant",
-                    kind="platform_in", rotation=0,
+                    x=0,
+                    y=0,
+                    layer=0,
+                    type="BeltPortReceiverInternalVariant",
+                    kind="platform_in",
+                    rotation=0,
                 ),
                 (4, 0): lift.Node(
-                    x=4, y=0, layer=0, type="BeltPortSenderInternalVariant",
-                    kind="platform_out", rotation=0,
+                    x=4,
+                    y=0,
+                    layer=0,
+                    type="BeltPortSenderInternalVariant",
+                    kind="platform_out",
+                    rotation=0,
                 ),
             },
             edges=[((0, 0), (4, 0))],
@@ -348,9 +363,7 @@ class TestPortBandPassability:
         bp = _make_bp([src, sink], platform="Foundation_1x1")
         nl = lift.Netlist(
             nodes={
-                (2, 8): lift.Node(
-                    x=2, y=8, layer=0, type=src.type, kind="platform_in", rotation=0
-                ),
+                (2, 8): lift.Node(x=2, y=8, layer=0, type=src.type, kind="platform_in", rotation=0),
                 (17, 8): lift.Node(
                     x=17, y=8, layer=0, type=sink.type, kind="platform_out", rotation=0
                 ),
@@ -390,9 +403,7 @@ class TestRootOnPort:
         bp = _make_bp([src, sink, blocker])
         nl = lift.Netlist(
             nodes={
-                (0, 0): lift.Node(
-                    x=0, y=0, layer=0, type=src.type, kind="platform_in", rotation=0
-                ),
+                (0, 0): lift.Node(x=0, y=0, layer=0, type=src.type, kind="platform_in", rotation=0),
                 (5, 0): lift.Node(
                     x=5, y=0, layer=0, type=sink.type, kind="platform_out", rotation=0
                 ),
@@ -414,29 +425,51 @@ class TestBuildNets:
 
         nodes = {
             (0, 0): lift.Node(
-                x=0, y=0, layer=0, type="BeltPortReceiverInternalVariant",
-                kind="platform_in", rotation=0,
+                x=0,
+                y=0,
+                layer=0,
+                type="BeltPortReceiverInternalVariant",
+                kind="platform_in",
+                rotation=0,
             ),
             (0, 1): lift.Node(
-                x=0, y=1, layer=0, type="BeltPortReceiverInternalVariant",
-                kind="platform_in", rotation=0,
+                x=0,
+                y=1,
+                layer=0,
+                type="BeltPortReceiverInternalVariant",
+                kind="platform_in",
+                rotation=0,
             ),
             (2, 0): lift.Node(
-                x=2, y=0, layer=0, type="BeltPortReceiverInternalVariant",
-                kind="platform_in", rotation=0,
+                x=2,
+                y=0,
+                layer=0,
+                type="BeltPortReceiverInternalVariant",
+                kind="platform_in",
+                rotation=0,
             ),
             (4, 0): lift.Node(
-                x=4, y=0, layer=0, type="BeltPortSenderInternalVariant",
-                kind="platform_out", rotation=0,
+                x=4,
+                y=0,
+                layer=0,
+                type="BeltPortSenderInternalVariant",
+                kind="platform_out",
+                rotation=0,
             ),
             (4, 1): lift.Node(
-                x=4, y=1, layer=0, type="BeltPortSenderInternalVariant",
-                kind="platform_out", rotation=0,
+                x=4,
+                y=1,
+                layer=0,
+                type="BeltPortSenderInternalVariant",
+                kind="platform_out",
+                rotation=0,
             ),
         }
         port_edges = [
-            ((0, 0), (2, 0)), ((0, 1), (2, 0)),
-            ((2, 0), (4, 0)), ((2, 0), (4, 1)),
+            ((0, 0), (2, 0)),
+            ((0, 1), (2, 0)),
+            ((2, 0), (4, 0)),
+            ((2, 0), (4, 1)),
         ]
         nl = lift.Netlist(nodes=nodes, edges=port_edges, port_edges=port_edges)
 
@@ -523,8 +556,10 @@ class TestPerFloorEmit:
         assert pathfinder_route([net], graph)
 
         ent = _cell_to_entity(
-            (1, 0, 1), net.tree_edges,
-            hop_edges=net.hop_edges, lift_edges=net.lift_edges,
+            (1, 0, 1),
+            net.tree_edges,
+            hop_edges=net.hop_edges,
+            lift_edges=net.lift_edges,
         )
         assert ent is not None
         assert ent.layer == 1
@@ -568,37 +603,45 @@ class TestHop:
         """Route a crossing with hops, emit entities, re-lift → isomorphic."""
         from shapez2_tools.pathfinder import strip_and_reroute
 
-        src_a = Entity(
-            type="BeltPortReceiverInternalVariant", x=0, y=3, rotation=0, layer=0
-        )
-        sink_a = Entity(
-            type="BeltPortSenderInternalVariant", x=8, y=3, rotation=0, layer=0
-        )
-        src_b = Entity(
-            type="BeltPortReceiverInternalVariant", x=4, y=0, rotation=1, layer=0
-        )
-        sink_b = Entity(
-            type="BeltPortSenderInternalVariant", x=4, y=8, rotation=1, layer=0
-        )
+        src_a = Entity(type="BeltPortReceiverInternalVariant", x=0, y=3, rotation=0, layer=0)
+        sink_a = Entity(type="BeltPortSenderInternalVariant", x=8, y=3, rotation=0, layer=0)
+        src_b = Entity(type="BeltPortReceiverInternalVariant", x=4, y=0, rotation=1, layer=0)
+        sink_b = Entity(type="BeltPortSenderInternalVariant", x=4, y=8, rotation=1, layer=0)
 
         bp = _make_bp([src_a, sink_a, src_b, sink_b])
         nl = lift.Netlist(
             nodes={
                 (0, 3): lift.Node(
-                    x=0, y=3, layer=0, type=src_a.type,
-                    kind="platform_in", rotation=0,
+                    x=0,
+                    y=3,
+                    layer=0,
+                    type=src_a.type,
+                    kind="platform_in",
+                    rotation=0,
                 ),
                 (8, 3): lift.Node(
-                    x=8, y=3, layer=0, type=sink_a.type,
-                    kind="platform_out", rotation=0,
+                    x=8,
+                    y=3,
+                    layer=0,
+                    type=sink_a.type,
+                    kind="platform_out",
+                    rotation=0,
                 ),
                 (4, 0): lift.Node(
-                    x=4, y=0, layer=0, type=src_b.type,
-                    kind="platform_in", rotation=1,
+                    x=4,
+                    y=0,
+                    layer=0,
+                    type=src_b.type,
+                    kind="platform_in",
+                    rotation=1,
                 ),
                 (4, 8): lift.Node(
-                    x=4, y=8, layer=0, type=sink_b.type,
-                    kind="platform_out", rotation=1,
+                    x=4,
+                    y=8,
+                    layer=0,
+                    type=sink_b.type,
+                    kind="platform_out",
+                    rotation=1,
                 ),
             },
             edges=[((0, 3), (8, 3)), ((4, 0), (4, 8))],
@@ -711,12 +754,20 @@ class TestLiftAwareStripAndReroute:
         nl = lift.Netlist(
             nodes={
                 (2, 9): lift.Node(
-                    x=2, y=9, layer=0, type="BeltPortReceiverInternalVariant",
-                    kind="platform_in", rotation=0,
+                    x=2,
+                    y=9,
+                    layer=0,
+                    type="BeltPortReceiverInternalVariant",
+                    kind="platform_in",
+                    rotation=0,
                 ),
                 (17, 9): lift.Node(
-                    x=17, y=9, layer=0, type="BeltPortSenderInternalVariant",
-                    kind="platform_out", rotation=0,
+                    x=17,
+                    y=9,
+                    layer=0,
+                    type="BeltPortSenderInternalVariant",
+                    kind="platform_out",
+                    rotation=0,
                 ),
             },
             edges=[((2, 9), (17, 9))],
@@ -724,7 +775,10 @@ class TestLiftAwareStripAndReroute:
         )
 
         passable = _build_passable(
-            nl, machine_cells=set(), layer=0, platform="Foundation_1x1",
+            nl,
+            machine_cells=set(),
+            layer=0,
+            platform="Foundation_1x1",
             extra_layers=(1,),
         )
 
@@ -760,16 +814,36 @@ class TestLiftAwareStripAndReroute:
         nl = lift.Netlist(
             nodes={
                 (2, 9): lift.Node(
-                    x=2, y=9, layer=0, type=src_a.type, kind="platform_in", rotation=0,
+                    x=2,
+                    y=9,
+                    layer=0,
+                    type=src_a.type,
+                    kind="platform_in",
+                    rotation=0,
                 ),
                 (17, 9): lift.Node(
-                    x=17, y=9, layer=0, type=sink_a.type, kind="platform_out", rotation=0,
+                    x=17,
+                    y=9,
+                    layer=0,
+                    type=sink_a.type,
+                    kind="platform_out",
+                    rotation=0,
                 ),
                 (9, 2): lift.Node(
-                    x=9, y=2, layer=0, type=src_b.type, kind="platform_in", rotation=1,
+                    x=9,
+                    y=2,
+                    layer=0,
+                    type=src_b.type,
+                    kind="platform_in",
+                    rotation=1,
                 ),
                 (9, 17): lift.Node(
-                    x=9, y=17, layer=0, type=sink_b.type, kind="platform_out", rotation=1,
+                    x=9,
+                    y=17,
+                    layer=0,
+                    type=sink_b.type,
+                    kind="platform_out",
+                    rotation=1,
                 ),
             },
             edges=[((2, 9), (17, 9)), ((9, 2), (9, 17))],
@@ -777,7 +851,11 @@ class TestLiftAwareStripAndReroute:
         )
 
         result_bp = strip_and_reroute(
-            bp, nl, layer=0, platform="Foundation_1x1", lift_enabled=True,
+            bp,
+            nl,
+            layer=0,
+            platform="Foundation_1x1",
+            lift_enabled=True,
         )
 
         assert any(e.layer == 1 for e in _all_entities(result_bp))
@@ -799,16 +877,36 @@ class TestLiftAwareStripAndReroute:
         nl = lift.Netlist(
             nodes={
                 (2, 9): lift.Node(
-                    x=2, y=9, layer=0, type=src_a.type, kind="platform_in", rotation=0,
+                    x=2,
+                    y=9,
+                    layer=0,
+                    type=src_a.type,
+                    kind="platform_in",
+                    rotation=0,
                 ),
                 (17, 9): lift.Node(
-                    x=17, y=9, layer=0, type=sink_a.type, kind="platform_out", rotation=0,
+                    x=17,
+                    y=9,
+                    layer=0,
+                    type=sink_a.type,
+                    kind="platform_out",
+                    rotation=0,
                 ),
                 (9, 2): lift.Node(
-                    x=9, y=2, layer=0, type=src_b.type, kind="platform_in", rotation=1,
+                    x=9,
+                    y=2,
+                    layer=0,
+                    type=src_b.type,
+                    kind="platform_in",
+                    rotation=1,
                 ),
                 (9, 17): lift.Node(
-                    x=9, y=17, layer=0, type=sink_b.type, kind="platform_out", rotation=1,
+                    x=9,
+                    y=17,
+                    layer=0,
+                    type=sink_b.type,
+                    kind="platform_out",
+                    rotation=1,
                 ),
             },
             edges=[((2, 9), (17, 9)), ((9, 2), (9, 17))],
@@ -835,11 +933,14 @@ class TestLaneGroupRouting:
         nets = []
         for g in range(4):
             base_y = g * 2
-            n1 = Net(net_id=g * 2, kind="fanout",
-                     root=(0, base_y, 0), terminals=[(11, base_y, 0)])
+            n1 = Net(net_id=g * 2, kind="fanout", root=(0, base_y, 0), terminals=[(11, base_y, 0)])
             n1.group = g
-            n2 = Net(net_id=g * 2 + 1, kind="fanout",
-                     root=(0, base_y + 1, 0), terminals=[(11, base_y + 1, 0)])
+            n2 = Net(
+                net_id=g * 2 + 1,
+                kind="fanout",
+                root=(0, base_y + 1, 0),
+                terminals=[(11, base_y + 1, 0)],
+            )
             n2.group = g
             nets.extend([n1, n2])
 
@@ -848,7 +949,7 @@ class TestLaneGroupRouting:
         assert ok
 
         for i, a in enumerate(nets):
-            for b in nets[i + 1:]:
+            for b in nets[i + 1 :]:
                 if a.group != b.group:
                     shared = a.tree_cells & b.tree_cells
                     assert not shared, (
@@ -875,6 +976,7 @@ class TestLaneGroupRouting:
 
         assert all(n.group is not None for n in nets)
         from collections import Counter
+
         groups = Counter(n.group for n in nets)
         assert len(groups) == 2
         for g, count in groups.items():

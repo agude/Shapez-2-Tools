@@ -107,10 +107,7 @@ def _detect_fan_topology(
     machine_owner_count: dict[str, int] = defaultdict(int)
 
     for sid, did in abstract["edges"]:
-        if (
-            node_by_id[sid]["kind"] == "platform_in"
-            and node_by_id[did]["kind"] == "machine"
-        ):
+        if node_by_id[sid]["kind"] == "platform_in" and node_by_id[did]["kind"] == "machine":
             src_to_machines[sid].append(did)
             machine_owner_count[did] += 1
 
@@ -123,9 +120,7 @@ def _detect_fan_topology(
 
     node_by_id = {n["id"]: n for n in abstract["nodes"]}
     has_multi_cell = any(
-        _is_multi_cell(node_by_id[mid]["type"])
-        for mids in lanes.values()
-        for mid in mids
+        _is_multi_cell(node_by_id[mid]["type"]) for mids in lanes.values() for mid in mids
     )
     if not has_multi_cell:
         return None
@@ -314,8 +309,7 @@ def _check_crossing_budget(abstract: dict) -> None:
         edge_out[src_id].append(dst_id)
 
     group_pinned_sources = [
-        n for n in abstract["nodes"]
-        if n["kind"] == "platform_in" and n.get("pin") == "group"
+        n for n in abstract["nodes"] if n["kind"] == "platform_in" and n.get("pin") == "group"
     ]
     if not group_pinned_sources:
         return
@@ -362,7 +356,8 @@ def _check_crossing_budget(abstract: dict) -> None:
 
 
 def _assign_pinned_ports(
-    plat: dict, nodes: list[dict],
+    plat: dict,
+    nodes: list[dict],
 ) -> tuple[dict[str, tuple[int, int]], dict[str, int]]:
     """Assign port positions for ``Locked``/``Group``/``Region``-pinned nodes (§5).
 
@@ -393,9 +388,7 @@ def _assign_pinned_ports(
             port_rot[n["id"]] = _port_rotation_for(face, n["kind"])
         elif pin == "region":
             groups = tuple((face, gidx) for face, gidx in n["target"])
-            slots = [
-                pos for face, gidx in groups for pos in _port_groups(plat, face)[gidx]
-            ]
+            slots = [pos for face, gidx in groups for pos in _port_groups(plat, face)[gidx]]
             pos = slots[region_next[groups]]
             port_pos[n["id"]] = pos
             region_next[groups] += 1
@@ -559,8 +552,10 @@ def place(
     # and the balance objective).
     primary_sink_positions = set(_edge_ports(plat, SINK_FACE))
     off_face_sink_ys = [
-        port_pos[n["id"]][1] for n in abstract["nodes"]
-        if n["kind"] == "platform_out" and n["id"] in port_pos
+        port_pos[n["id"]][1]
+        for n in abstract["nodes"]
+        if n["kind"] == "platform_out"
+        and n["id"] in port_pos
         and port_pos[n["id"]] not in primary_sink_positions
     ]
 
@@ -627,12 +622,8 @@ def place(
     else:
         # --- BAND MODEL (serial topologies) ---
         # Stage bands: each stage gets a y-interval [band_lo, band_hi].
-        band_lo = [
-            model.new_int_var(y_min, y_max, f"band_lo_{s}") for s in range(n_stages)
-        ]
-        band_hi = [
-            model.new_int_var(y_min, y_max, f"band_hi_{s}") for s in range(n_stages)
-        ]
+        band_lo = [model.new_int_var(y_min, y_max, f"band_lo_{s}") for s in range(n_stages)]
+        band_hi = [model.new_int_var(y_min, y_max, f"band_hi_{s}") for s in range(n_stages)]
         stage_counts = [0] * n_stages
         for m in machines:
             stage_counts[stages[m["id"]]] += 1
@@ -724,8 +715,9 @@ def place(
         if node_by_id[dst_id]["kind"] == "machine":
             fanout_groups[src_id].append(dst_id)
     for _src, members in fanout_groups.items():
-        mc_members = [mid for mid in members
-                      if _is_multi_cell(node_by_id[mid]["type"]) and mid in m_x]
+        mc_members = [
+            mid for mid in members if _is_multi_cell(node_by_id[mid]["type"]) and mid in m_x
+        ]
         if len(mc_members) < 2:
             continue
         for i in range(len(mc_members)):
@@ -850,10 +842,7 @@ def place(
             dst_node = node_by_id[dst_id]
 
             if src_node["kind"] == "machine":
-                if (
-                    dst_node["kind"] == "platform_out"
-                    and port_pos[dst_id] not in primary_sink_pos
-                ):
+                if dst_node["kind"] == "platform_out" and port_pos[dst_id] not in primary_sink_pos:
                     model.add(m_r[src_id] == flow_r)
                 else:
                     sx = m_x[src_id]
@@ -875,10 +864,7 @@ def place(
                     )
 
             if dst_node["kind"] == "machine":
-                if (
-                    src_node["kind"] == "platform_in"
-                    and port_pos[src_id] not in primary_src_pos
-                ):
+                if src_node["kind"] == "platform_in" and port_pos[src_id] not in primary_src_pos:
                     model.add(m_r[dst_id] == flow_r)
                 else:
                     dx2 = m_x[dst_id]
@@ -916,8 +902,7 @@ def place(
         src_x_for_id: dict[str, int] = {}
         for sid in candidate_src_ids:
             fanout_by_src[sid] = [
-                m for m in fan_out_groups[sid]
-                if node_by_id[m]["kind"] == "machine"
+                m for m in fan_out_groups[sid] if node_by_id[m]["kind"] == "machine"
             ]
             src_x_for_id[sid] = port_pos[sid][0]
         machine_owner_count: dict[str, int] = defaultdict(int)
@@ -925,7 +910,8 @@ def place(
             for mid in fanout_by_src[sid]:
                 machine_owner_count[mid] += 1
         fanout_src_ids = [
-            sid for sid in candidate_src_ids
+            sid
+            for sid in candidate_src_ids
             if all(machine_owner_count[mid] == 1 for mid in fanout_by_src[sid])
         ]
         sorted_src_ids = sorted(fanout_src_ids, key=lambda s: src_x_for_id[s])
@@ -969,15 +955,9 @@ def place(
         dy = _node_y(dst_id, dst_node, port_pos, m_y, model)
 
         min_spacing = 2
-        if (
-            dst_node["kind"] == "platform_out"
-            and port_pos[dst_id] not in primary_sink_pos
-        ):
+        if dst_node["kind"] == "platform_out" and port_pos[dst_id] not in primary_sink_pos:
             min_spacing = 3
-        elif (
-            src_node["kind"] == "platform_in"
-            and port_pos[src_id] not in primary_src_pos
-        ):
+        elif src_node["kind"] == "platform_in" and port_pos[src_id] not in primary_src_pos:
             min_spacing = 3
 
         abs_dx = model.new_int_var(0, grid_w, f"spc_adx_{ei}")
@@ -1026,9 +1006,7 @@ def place(
         # Column span compactness: prefer tight packing of all columns.
         if len(sorted_col_sids) >= 2:
             span = model.new_int_var(0, x_max - x_min, "col_span")
-            model.add(
-                span == col_hi_x[sorted_col_sids[-1]] - col_lo_x[sorted_col_sids[0]]
-            )
+            model.add(span == col_hi_x[sorted_col_sids[-1]] - col_lo_x[sorted_col_sids[0]])
             total_wire.append(span)
     else:
         # Band balance: prefer bands near the vertical center.

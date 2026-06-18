@@ -205,11 +205,16 @@ def netlist_from_diagonal_spec(spec: DiagonalSpec) -> dict:
 
 
 def synthesize_diagonal(
-    spec: DiagonalSpec, layer: int = 0, *, hop_range: int = 0,
+    spec: DiagonalSpec,
+    layer: int = 0,
+    *,
+    hop_range: int = 0,
 ) -> Blueprint:
     """Synthesize a diagonal-trick blueprint from a spec."""
     return _lower(
-        netlist_from_diagonal_spec(spec), spec.platform, layer,
+        netlist_from_diagonal_spec(spec),
+        spec.platform,
+        layer,
         hop_range=hop_range,
     )
 
@@ -297,14 +302,24 @@ def netlist_from_cutter_spec(spec: CutterSpec) -> dict:
             src_node["pin"] = "group"
             src_node["target"] = (SOURCE_FACE, i % n_src_groups)
         nodes.append(src_node)
-        nodes.append({
-            "id": sink_w, "type": SINK_TYPE, "kind": "platform_out",
-            "pin": "region", "target": western,
-        })
-        nodes.append({
-            "id": sink_e, "type": SINK_TYPE, "kind": "platform_out",
-            "pin": "region", "target": eastern,
-        })
+        nodes.append(
+            {
+                "id": sink_w,
+                "type": SINK_TYPE,
+                "kind": "platform_out",
+                "pin": "region",
+                "target": western,
+            }
+        )
+        nodes.append(
+            {
+                "id": sink_e,
+                "type": SINK_TYPE,
+                "kind": "platform_out",
+                "pin": "region",
+                "target": eastern,
+            }
+        )
 
         for j in range(spec.cutters_per_lane):
             cut = f"cut{i}_{j}"
@@ -317,13 +332,19 @@ def netlist_from_cutter_spec(spec: CutterSpec) -> dict:
 
 
 def synthesize_cutter(
-    spec: CutterSpec, layer: int = 0, *, hop_range: int = 0,
+    spec: CutterSpec,
+    layer: int = 0,
+    *,
+    hop_range: int = 0,
     lift_enabled: bool = False,
 ) -> Blueprint:
     """Synthesize a cutter-fan blueprint from a spec (§2a, north-star gate 2)."""
     return _lower(
-        netlist_from_cutter_spec(spec), spec.platform, layer,
-        hop_range=hop_range, lift_enabled=lift_enabled,
+        netlist_from_cutter_spec(spec),
+        spec.platform,
+        layer,
+        hop_range=hop_range,
+        lift_enabled=lift_enabled,
     )
 
 
@@ -359,7 +380,11 @@ _MAX_RETRIES = 5
 
 
 def _lower(
-    abstract: dict, platform: str, layer: int = 0, *, hop_range: int = 0,
+    abstract: dict,
+    platform: str,
+    layer: int = 0,
+    *,
+    hop_range: int = 0,
     lift_enabled: bool = False,
 ) -> Blueprint:
     """Lower an abstract netlist to a blueprint: sort → place → route → blueprint.
@@ -387,8 +412,12 @@ def _lower(
         stripped = entities_to_blueprint(entities, platform=platform)
         try:
             return reroute_with_junctions(
-                stripped, placed, layer=layer, hop_range=hop_range,
-                platform=platform, lift_enabled=lift_enabled,
+                stripped,
+                placed,
+                layer=layer,
+                hop_range=hop_range,
+                platform=platform,
+                lift_enabled=lift_enabled,
             )
         except RoutingError as err:
             if attempt == _MAX_RETRIES:
@@ -397,11 +426,17 @@ def _lower(
                 forbidden.add((x, y))
 
 
-def synthesize(spec: Spec, layer: int = 0, *, hop_range: int = 0,
-               lift_enabled: bool = False) -> Blueprint:
+def synthesize(
+    spec: Spec, layer: int = 0, *, hop_range: int = 0, lift_enabled: bool = False
+) -> Blueprint:
     """Synthesize a blueprint from a spec."""
-    return _lower(netlist_from_spec(spec), spec.platform, layer,
-                  hop_range=hop_range, lift_enabled=lift_enabled)
+    return _lower(
+        netlist_from_spec(spec),
+        spec.platform,
+        layer,
+        hop_range=hop_range,
+        lift_enabled=lift_enabled,
+    )
 
 
 def synthesize_quotient(spec: Spec) -> Blueprint:

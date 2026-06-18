@@ -99,9 +99,7 @@ def routing_inout(type_: str, r: int):
     return None
 
 
-def lift_inout(
-    type_: str, r: int
-) -> tuple[frozenset, frozenset, int] | None:
+def lift_inout(type_: str, r: int) -> tuple[frozenset, frozenset, int] | None:
     """``(input sides, output sides, layer delta)`` for a lift, or ``None``.
 
     Calibrated empirically from 20+ blueprints across all 16 lift variants.
@@ -360,8 +358,7 @@ def _occupancy(
             if e.layer == layer:
                 occ[anchor] = _Cell(ins, frozenset(), anchor, True)
             elif e.layer + delta == layer:
-                occ[anchor] = _Cell(frozenset(), outs, anchor, True,
-                                    is_lift_exit=True)
+                occ[anchor] = _Cell(frozenset(), outs, anchor, True, is_lift_exit=True)
             else:
                 for dl in range(sign, delta, sign):
                     if e.layer + dl == layer:
@@ -548,16 +545,12 @@ def _occupancy_3d(bp: Blueprint) -> dict[Cell3D, _Cell]:
             info = lift_inout(e.type, e.rotation)
             if info is not None:
                 ins, outs, delta = info
-                occ[anchor] = _Cell(
-                    ins, outs, anchor, True, out_layer_delta=delta
-                )
+                occ[anchor] = _Cell(ins, outs, anchor, True, out_layer_delta=delta)
                 sign = 1 if delta > 0 else -1
                 for dl in range(sign, delta + sign, sign):
                     blocker: Cell3D = (e.x, e.y, e.layer + dl)
                     if blocker not in occ:
-                        occ[blocker] = _Cell(
-                            frozenset(), frozenset(), anchor, True
-                        )
+                        occ[blocker] = _Cell(frozenset(), frozenset(), anchor, True)
         elif k == "machine":
             for (dx, dy, dl), (ins, outs) in _machine_footprint(e.type, e.rotation).items():
                 occ[(e.x + dx, e.y + dy, e.layer + dl)] = _Cell(ins, outs, anchor, False)

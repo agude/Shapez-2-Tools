@@ -817,7 +817,11 @@ def reroute_with_junctions(
     from shapez2_tools.pathfinder import strip_and_reroute
 
     return strip_and_reroute(
-        stripped, netlist, layer=layer, hop_range=hop_range, platform=platform,
+        stripped,
+        netlist,
+        layer=layer,
+        hop_range=hop_range,
+        platform=platform,
         lift_enabled=lift_enabled,
     )
 

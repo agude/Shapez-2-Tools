@@ -266,15 +266,11 @@ class TestHopPairing:
         from shapez2_tools import route
         from shapez2_tools.generator import Entity
 
-        sender = Entity(
-            type="BeltPortSenderInternalVariant", x=3, y=5, rotation=0, layer=0
-        )
+        sender = Entity(type="BeltPortSenderInternalVariant", x=3, y=5, rotation=0, layer=0)
         near_receiver = Entity(
             type="BeltPortReceiverInternalVariant", x=5, y=5, rotation=0, layer=0
         )
-        far_receiver = Entity(
-            type="BeltPortReceiverInternalVariant", x=7, y=5, rotation=0, layer=0
-        )
+        far_receiver = Entity(type="BeltPortReceiverInternalVariant", x=7, y=5, rotation=0, layer=0)
         bp = route.entities_to_blueprint(
             [sender, near_receiver, far_receiver], platform="Foundation_1x1"
         )
@@ -294,18 +290,10 @@ class TestTraceUpstream:
         from shapez2_tools.generator import Entity
 
         cutter = Entity(type="CutterDefaultInternalVariant", x=0, y=0, rotation=0, layer=0)
-        belt_out = Entity(
-            type="BeltDefaultForwardInternalVariant", x=1, y=0, rotation=0, layer=0
-        )
-        sender = Entity(
-            type="BeltPortSenderInternalVariant", x=2, y=0, rotation=0, layer=0
-        )
-        receiver = Entity(
-            type="BeltPortReceiverInternalVariant", x=5, y=0, rotation=0, layer=0
-        )
-        belt_in = Entity(
-            type="BeltDefaultForwardInternalVariant", x=6, y=0, rotation=0, layer=0
-        )
+        belt_out = Entity(type="BeltDefaultForwardInternalVariant", x=1, y=0, rotation=0, layer=0)
+        sender = Entity(type="BeltPortSenderInternalVariant", x=2, y=0, rotation=0, layer=0)
+        receiver = Entity(type="BeltPortReceiverInternalVariant", x=5, y=0, rotation=0, layer=0)
+        belt_in = Entity(type="BeltDefaultForwardInternalVariant", x=6, y=0, rotation=0, layer=0)
         bp = route.entities_to_blueprint(
             [cutter, belt_out, sender, receiver, belt_in], platform="Foundation_1x1"
         )

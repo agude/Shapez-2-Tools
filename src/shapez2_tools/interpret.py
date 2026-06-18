@@ -196,7 +196,4 @@ def classify_sources(nl: Netlist) -> dict[Cell, str]:
                     bfs.append(nb)
 
     all_sources = {p for p, n in nl.nodes.items() if n.kind == "platform_in"}
-    return {
-        p: ("A" if color[p] == 0 else "B") if p in color else "pass"
-        for p in all_sources
-    }
+    return {p: ("A" if color[p] == 0 else "B") if p in color else "pass" for p in all_sources}

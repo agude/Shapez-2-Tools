@@ -65,9 +65,7 @@ class Shape:
         return cls(parsed[0], upper=tuple(parsed[1:]))
 
     def __str__(self) -> str:
-        return ":".join(
-            "".join(q if q else "--" for q in layer) for layer in self.layers
-        )
+        return ":".join("".join(q if q else "--" for q in layer) for layer in self.layers)
 
     def _replace(self, **at: Quad) -> Shape:
         q = list(self.quads)
@@ -77,6 +75,7 @@ class Shape:
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+
 
 def _from_layers(layers: list[Layer]) -> Shape:
     """Construct a Shape, stripping empty top layers."""
@@ -90,6 +89,7 @@ def _map_layers(s: Shape, fn) -> Shape:
 
 
 # ── single-layer ops (applied per layer for multi-layer shapes) ──────────────
+
 
 def rotate_cw(s: Shape) -> Shape:
     """Rotate 90° clockwise (each part moves one quadrant clockwise)."""
@@ -106,9 +106,7 @@ def rotate_180(s: Shape) -> Shape:
 
 
 def _keep(s: Shape, indices: tuple[int, ...]) -> Shape:
-    return _map_layers(
-        s, lambda ly: tuple(q if i in indices else None for i, q in enumerate(ly))
-    )
+    return _map_layers(s, lambda ly: tuple(q if i in indices else None for i, q in enumerate(ly)))
 
 
 def cut(s: Shape) -> tuple[Shape, Shape]:
@@ -135,6 +133,7 @@ def swap_west(a: Shape, b: Shape) -> tuple[Shape, Shape]:
 
 
 # ── gravity & stacking ──────────────────────────────────────────────────────
+
 
 def _find_groups(layer: Layer) -> list[frozenset[int]]:
     """Connected components of filled quadrants (orthogonal adjacency)."""
@@ -169,9 +168,7 @@ def _apply_gravity(grid: list[list[Quad]]) -> list[Layer]:
             if any(grid[li - 1][q] is not None for q in group):
                 continue
             target = li
-            while target > 0 and not any(
-                grid[target - 1][q] is not None for q in group
-            ):
+            while target > 0 and not any(grid[target - 1][q] is not None for q in group):
                 target -= 1
             if target != li:
                 for q in group:
