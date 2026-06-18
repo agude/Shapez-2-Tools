@@ -350,7 +350,21 @@ def route_layer_nets(
         existing_receivers=receivers,
         hop_penalty=0.5,
     )
-    pathfinder.pathfinder_route(nets, graph)
+
+    min_x, max_x, _min_y, _max_y = pathfinder._platform_bounds(platform)
+    center_x = (min_x + max_x) / 2
+    local_nets = [
+        n for n in nets if (n.root[0] < center_x) == (n.terminals[0][0] < center_x)
+    ]
+    crossing_nets = [
+        n for n in nets if (n.root[0] < center_x) != (n.terminals[0][0] < center_x)
+    ]
+
+    if local_nets:
+        pathfinder.pathfinder_route(local_nets, graph)
+    if crossing_nets:
+        pathfinder.pathfinder_route(crossing_nets, graph)
+
     _attach_boundary_edges(nets)
     return nets
 

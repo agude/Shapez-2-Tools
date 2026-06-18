@@ -67,7 +67,7 @@ low penalty + hops resolves a cross-corridor crossing; no hops fails it.
 
 ---
 
-### Chunk 3: Two-phase routing (local first, crossing second)
+### Chunk 3: Two-phase routing (local first, crossing second) — DONE
 
 **What:** Split nets into "local" (dangle and port on same side) and
 "crossing" (opposite sides) groups. Route local nets first, then crossing
@@ -79,18 +79,11 @@ the ports and leave the wide central corridor for crossing traffic. Without
 this, the pathfinder tries to negotiate all 24 nets simultaneously, and the
 short nets steal corridor cells from the long ones.
 
-**Implementation:**
-- In `route_layer_nets`, after building nets, partition them: a net is
-  "crossing" if its root and terminal are on opposite sides of the platform
-  center-x.
-- Route local nets first via `pathfinder_route(local_nets, graph)`.
-- Freeze their cells in the occupancy map.
-- Route crossing nets via `pathfinder_route(crossing_nets, graph)`.
-
-**Test:**
-- Unit test: build a 4-net scenario (2 local, 2 crossing) on Foundation_1x1,
-  verify all route.
-- Integration: UNFINISHED Half Splitter layer 0 routes to 0 overused cells.
+**Result:** `route_layer_nets` now partitions nets by center-x side comparison
+and routes local nets first, then crossing nets. On the Half Splitter:
+8 local + 16 crossing nets. Still fails with 63 overused cells — the 16
+crossing nets (distances 41–66) overwhelm the corridor even with local nets
+out of the way. Chunk 4 (hop lanes) is needed.
 
 **Commit scope:** `route_only.py`, `tests/test_route_only.py`.
 

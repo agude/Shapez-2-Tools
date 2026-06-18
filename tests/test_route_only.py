@@ -341,6 +341,31 @@ class TestHopPenalty:
         )
 
 
+class TestTwoPhaseRouting:
+    def test_local_nets_route_before_crossing(self):
+        """Two-phase routing: local nets claim cells first, crossing nets route around."""
+        passable: set[pathfinder.Cell] = set()
+        for x in range(3, 18):
+            for y in range(3, 18):
+                passable.add((x, y, 0))
+
+        # Local: same-side roots and terminals
+        local = pathfinder.Net(
+            net_id=0, kind="fanout", root=(4, 10, 0), terminals=[(9, 10, 0)]
+        )
+        # Crossing: opposite-side root and terminal (cross center_x=10)
+        crossing = pathfinder.Net(
+            net_id=1, kind="fanout", root=(4, 8, 0), terminals=[(16, 8, 0)]
+        )
+        graph = pathfinder.RoutingGraph(passable=passable, hop_range=5, hop_penalty=0.5)
+        pathfinder.pathfinder_route([local], graph)
+        pathfinder.pathfinder_route([crossing], graph)
+
+        assert local.tree_cells
+        assert crossing.tree_cells
+        assert not (local.tree_cells & crossing.tree_cells)
+
+
 class TestRouteLayerNets:
     def test_single_pair_routes_and_emits_valid_belts(self):
         cutter = Entity(type="CutterDefaultInternalVariant", x=10, y=10, rotation=0, layer=0)
