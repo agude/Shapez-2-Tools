@@ -46,21 +46,20 @@ def _classify_dangle(
 ) -> str:
     """Trace a dangle upstream, across hops, to its source cutter half.
 
-    The cutter's anchor cell and second cell (see ``lift._machine_footprint``)
-    always produce opposite halves, and which absolute half each one produces
-    is rotation-invariant (mirrored swaps it). Mergers (cells with multiple
-    ``ins``) collapse several cutters into one stream; the spec assumes they
-    always combine outputs of the same half, so any upstream branch may be
-    followed — true for all but a rare pre-existing wiring quirk in
-    hand-placed blueprints, which this function does not attempt to detect.
+    The cutter's anchor cell always produces the east (main) half and the
+    output-only second cell always produces the west (secondary) half —
+    regardless of rotation or mirroring.  ``Mirrored`` only changes which
+    physical side the second cell sits on, not the half assignment
+    (confirmed by ``test_place::test_cutter_interpret`` and
+    ``docs/machines.md``).
+
+    Mergers (cells with multiple ``ins``) collapse several cutters into one
+    stream; the spec assumes they always combine outputs of the same half,
+    so any upstream branch may be followed.
     """
     cur, cell = lift.trace_upstream(bp, layer, pos)
-    entity = machines[cell.anchor]
-    mirrored = "Mirrored" in entity.type
     is_anchor_cell = cur == cell.anchor
-    if is_anchor_cell:
-        return "west" if mirrored else "east"
-    return "east" if mirrored else "west"
+    return "east" if is_anchor_cell else "west"
 
 
 def find_dangles(bp: Blueprint, layer: int) -> list[tuple[int, int]]:
