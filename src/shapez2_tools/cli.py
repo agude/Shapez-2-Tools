@@ -269,6 +269,58 @@ def cmd_place(args: argparse.Namespace) -> None:
         )
 
 
+def cmd_route(args: argparse.Namespace) -> None:
+    """Route missing connections into a half-completed blueprint, in place."""
+    from collections import Counter
+
+    from shapez2_tools import lift, pathfinder, route_only, viz
+
+    bp = Blueprint.from_file(args.file)
+    layers = [args.layer] if args.layer is not None else [0, 1, 2]
+    hop_range = args.hop_range or lift.MAX_HOP_RANGE
+    platform = args.platform or bp.entries[0].get("T", "Foundation_1x1")
+
+    for layer in layers:
+        dangles = route_only.find_and_classify_dangles(bp, layer)
+        if not dangles:
+            print(f"layer {layer}: no dangling ends, skipping")
+            continue
+        counts = Counter(d.half for d in dangles)
+        print(
+            f"layer {layer}: {len(dangles)} dangles "
+            f"({counts['west']} west, {counts['east']} east)"
+        )
+
+        ports = route_only.find_free_port_positions(bp, layer)
+        west_ports, east_ports = route_only.partition_ports(ports, platform)
+        west_dangles = [(d.x, d.y) for d in dangles if d.half == "west"]
+        east_dangles = [(d.x, d.y) for d in dangles if d.half == "east"]
+        n_matched = len(
+            route_only.match_dangles_to_ports(west_dangles, west_ports)
+        ) + len(route_only.match_dangles_to_ports(east_dangles, east_ports))
+        print(f"layer {layer}: {n_matched}/{len(dangles)} dangles matched to ports")
+
+        try:
+            bp = route_only.route_and_merge(bp, layer, hop_range=hop_range, platform=platform)
+        except pathfinder.RoutingError as exc:
+            print(f"layer {layer}: routing failed ({exc}), leaving layer unchanged")
+            continue
+
+        remaining = lift.unmatched_legs(bp, layer)
+        print(f"layer {layer}: routed, {remaining} unmatched legs remaining")
+
+    bp.to_file(args.output)
+    print(f"Wrote {args.output}")
+
+    if args.viz:
+        title = args.file.stem.replace("_", " ").title()
+        for layer in layers:
+            html = viz.render_html(bp, layer=layer, title=f"{title} (layer {layer})")
+            viz_out = args.output.with_name(f"{args.output.stem}_layer{layer}.html")
+            viz_out.write_text(html)
+            print(f"Wrote viz: {viz_out}")
+
+
 def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -364,6 +416,18 @@ def main() -> None:
     place_cmd.add_argument("--layer", type=int, default=0, help="Floor 0/1/2")
     place_cmd.add_argument("--no-open", action="store_true", help="Don't open in browser")
     place_cmd.set_defaults(func=cmd_place)
+
+    # route command
+    route_cmd = subparsers.add_parser(
+        "route", help="Route missing connections into a half-completed blueprint"
+    )
+    route_cmd.add_argument("file", type=Path, help="Half-completed blueprint file")
+    route_cmd.add_argument("-o", "--output", type=Path, required=True, help="Output blueprint file")
+    route_cmd.add_argument("--platform", type=str, help="Platform type (auto-detected)")
+    route_cmd.add_argument("--layer", type=int, help="Floor 0/1/2 (default: all)")
+    route_cmd.add_argument("--hop-range", type=int, help="Override hop range")
+    route_cmd.add_argument("--viz", action="store_true", help="Generate HTML visualization")
+    route_cmd.set_defaults(func=cmd_route)
 
     args = parser.parse_args()
     args.func(args)

@@ -3,12 +3,13 @@
 (build passable set from existing occupancy), Chunk 5 (build nets + route),
 Chunk 6 (emit + merge)."""
 
+import argparse
 from collections import Counter
 from pathlib import Path
 
 import pytest
 
-from shapez2_tools import lift, pathfinder, route, route_only
+from shapez2_tools import cli, lift, pathfinder, route, route_only
 from shapez2_tools.blueprint import Blueprint
 from shapez2_tools.generator import Entity, all_entities
 
@@ -344,3 +345,58 @@ class TestRouteAndMerge:
             e for e in netlist.edges if netlist.nodes[e[1]].kind == "platform_out"
         ]
         assert len(sink_edges) >= 24
+
+
+class TestCmdRoute:
+    @pytest.mark.skipif(not HALF_SPLITTER.exists(), reason="Half Splitter not found")
+    def test_layer0_clears_unmatched_legs(self, tmp_path):
+        out = tmp_path / "routed.spz2bp"
+        args = argparse.Namespace(
+            file=HALF_SPLITTER,
+            output=out,
+            platform=None,
+            layer=0,
+            hop_range=None,
+            viz=False,
+        )
+        cli.cmd_route(args)
+
+        result = Blueprint.from_file(out)
+        assert lift.unmatched_legs(result, 0) == 0
+
+    @pytest.mark.skipif(not HALF_SPLITTER.exists(), reason="Half Splitter not found")
+    def test_routing_failure_on_one_layer_does_not_abort_others(self, tmp_path):
+        # Layer 1 of this fixture is congested enough that the pathfinder
+        # fails (see docs/route-only-spec.md Chunk 7 notes) — cmd_route must
+        # report and skip it rather than crash, leaving layers 0/2 routed.
+        out = tmp_path / "routed.spz2bp"
+        args = argparse.Namespace(
+            file=HALF_SPLITTER,
+            output=out,
+            platform=None,
+            layer=None,
+            hop_range=None,
+            viz=False,
+        )
+        cli.cmd_route(args)
+
+        result = Blueprint.from_file(out)
+        assert lift.unmatched_legs(result, 0) == 0
+        assert lift.unmatched_legs(result, 1) == 24
+        assert lift.unmatched_legs(result, 2) == 0
+
+    def test_empty_layer_is_a_noop(self, tmp_path):
+        # Layer 1 has no entities at all, so there are no dangling ends.
+        cutter = Entity(type="CutterDefaultInternalVariant", x=10, y=10, rotation=0, layer=0)
+        bp = route.entities_to_blueprint([cutter], platform="Foundation_1x1")
+        src = tmp_path / "in.spz2bp"
+        bp.to_file(src)
+        out = tmp_path / "out.spz2bp"
+
+        args = argparse.Namespace(
+            file=src, output=out, platform=None, layer=1, hop_range=None, viz=False
+        )
+        cli.cmd_route(args)
+
+        result = Blueprint.from_file(out)
+        assert {(e.x, e.y, e.layer) for e in all_entities(result)} == {(10, 10, 0)}

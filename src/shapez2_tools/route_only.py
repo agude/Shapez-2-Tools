@@ -295,16 +295,19 @@ def _existing_hop_endpoints(
 
 
 def route_layer_nets(
-    bp: Blueprint, layer: int, hop_range: int = lift.MAX_HOP_RANGE
+    bp: Blueprint,
+    layer: int,
+    hop_range: int = lift.MAX_HOP_RANGE,
+    platform: str | None = None,
 ) -> list[pathfinder.Net]:
     """Run Chunks 1-5 for one layer: find, classify, match, build, and route.
 
     Returns routed ``Net`` objects (boundary edges attached) ready for
     ``pathfinder.emit_entities`` — merging the resulting belts plus a new
     ``BeltPortSenderInternalVariant`` at each matched port back into the
-    blueprint is Chunk 6.
+    blueprint is Chunk 6. ``platform`` overrides the type read from *bp*.
     """
-    platform = bp.entries[0]["T"]
+    platform = platform or bp.entries[0]["T"]
     dangles = find_and_classify_dangles(bp, layer)
     ports = find_free_port_positions(bp, layer)
     west_ports, east_ports = partition_ports(ports, platform)
@@ -372,16 +375,20 @@ def merge_entities(bp: Blueprint, new_entities: list[Entity]) -> Blueprint:
 
 
 def route_and_merge(
-    bp: Blueprint, layer: int, hop_range: int = lift.MAX_HOP_RANGE
+    bp: Blueprint,
+    layer: int,
+    hop_range: int = lift.MAX_HOP_RANGE,
+    platform: str | None = None,
 ) -> Blueprint:
     """Route the missing connections on *layer* and merge them into *bp*.
 
     Chains Chunks 1-6: find/classify dangles, find/partition free ports,
     match, build nets, route, emit routing belts plus the new port sender
     entities, and merge into the original blueprint's entity list.
+    ``platform`` overrides the type read from *bp*.
     """
-    platform = bp.entries[0]["T"]
-    nets = route_layer_nets(bp, layer, hop_range=hop_range)
+    platform = platform or bp.entries[0]["T"]
+    nets = route_layer_nets(bp, layer, hop_range=hop_range, platform=platform)
     new_entities = pathfinder.emit_entities(nets) + _port_sender_entities(
         nets, platform, layer
     )

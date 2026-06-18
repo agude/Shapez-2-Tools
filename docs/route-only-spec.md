@@ -85,8 +85,29 @@ outcome). `route_only.route_and_merge(bp, layer, hop_range=...)` chains
 Chunks 1-6 end-to-end. On the real fixture (UNFINISHED Half Splitter,
 layer 0): `lift.unmatched_legs` drops from 24 to 0, no entity-position
 collisions, and `lift.trace_layer(..., contract_hops=True)` shows new
-`platform_out` edges at all 24 previously-free ports. Chunk 7 (CLI
-integration: `shapez2 route`) is next.
+`platform_out` edges at all 24 previously-free ports. **Chunk 7 done**
+(2026-06-17): `cli.cmd_route` wraps `route_only` end-to-end — per layer
+(default all of 0/1/2, or `--layer N`) it reports dangle/port/match
+counts, calls `route_only.route_and_merge` (now takes an optional
+`platform` override, threaded through `route_layer_nets` too), and
+reports remaining unmatched legs; writes the merged blueprint to
+`-o`/`--output` and, with `--viz`, one HTML file per routed layer.
+A layer with zero dangles is a no-op (reported and skipped) rather than
+an error — running `route` twice in a row on the same file is safe.
+**Finding:** on the real fixture, layer 0 and layer 2 route cleanly
+(0 unmatched legs each), but **layer 1 fails** —
+`pathfinder.pathfinder_route` raises `RoutingError` ("1 overused
+cells") after 60 iterations. `cmd_route` catches `RoutingError` per
+layer, prints the failure, and leaves that layer unchanged rather than
+aborting the whole command — layers 0/2 still get routed and the
+output is still written. This is a real pathfinder congestion
+limitation on layer 1's geometry (not a Chunk 7 bug); §4 already flags
+the "chained launcher trick" as the upgrade path for congestion
+failures like this. **Next:** investigate why layer 1 specifically
+overuses a cell — likely needs either the chained-launcher pattern or
+smarter net ordering/matching to reduce contention — then re-run
+`shapez2 route` on the real fixture to confirm all 3 layers clear to 0
+unmatched legs.
 
 **Motivation:** The user has a hand-placed Half Splitter blueprint
 (`UNFINISHED Half Splitter.spz2bp`) with 192 cutters across 3 symmetric
