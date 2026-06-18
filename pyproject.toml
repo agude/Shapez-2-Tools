@@ -11,10 +11,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+routing = [
+    "scipy>=1.10",
+]
 dev = [
     "pillow>=12.2.0",
     "pytest>=8.0",
     "ruff>=0.4",
+    "scipy>=1.10",
 ]
 
 [project.scripts]

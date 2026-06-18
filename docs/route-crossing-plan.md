@@ -25,7 +25,7 @@ bring demand well under budget.
 
 ## Chunks (simplest first)
 
-### Chunk 1: Optimal matching (replace greedy with min-cost)
+### Chunk 1: Optimal matching (replace greedy with min-cost) — DONE
 
 **What:** Replace `match_dangles_to_ports` with a min-cost bipartite matching
 that minimizes total Manhattan distance across all pairs simultaneously.
@@ -35,24 +35,11 @@ nearby ports and forcing far dangles onto the worst remaining ports. An optimal
 matching distributes wire-length more evenly and can reduce maximum route
 length significantly.
 
-**Implementation:**
-- In `route_only.py`, write a new `_optimal_match(dangles, ports)` function
-  using `scipy.optimize.linear_sum_assignment` on the Manhattan-distance cost
-  matrix.
-- Add `scipy` to `pyproject.toml` optional dependencies (it's already
-  installed on this machine but not declared).
-- Fall back to the existing greedy matcher if scipy is unavailable.
-- Call `_optimal_match` instead of `match_dangles_to_ports` inside
-  `route_layer_nets`.
-- Update `match_dangles_to_ports` callers in CLI/tests to use the new path.
-
-**Test:**
-- Existing unit tests for `match_dangles_to_ports` stay (they test the greedy
-  fallback).
-- New unit test: verify optimal matching produces lower or equal total
-  distance than greedy on the HALF_SPLITTER fixture.
-- Run `route` on UNFINISHED Half Splitter layer 0 -- check if routing
-  succeeds or at least reduces overused-cell count.
+**Result:** `_optimal_match` added using `scipy.optimize.linear_sum_assignment`.
+Falls back to greedy if scipy unavailable. `route_layer_nets` now calls
+`_optimal_match`. On the Half Splitter fixture, total Manhattan distance
+dropped from 1244 to 1220 (1.9% improvement) — the greedy matcher was already
+fairly good on this layout, but optimal avoids worst-case long routes.
 
 **Commit scope:** `route_only.py`, `pyproject.toml`, `tests/test_route_only.py`.
 

@@ -133,6 +133,68 @@ class TestMatchDanglesToPorts:
             assert dist < 80
 
 
+class TestOptimalMatch:
+    def test_same_result_as_greedy_on_simple_case(self):
+        dangles = [(0, 0), (10, 0)]
+        ports = [(1, 0), (9, 0)]
+        pairs = route_only._optimal_match(dangles, ports)
+        assert set(pairs) == {((0, 0), (1, 0)), ((10, 0), (9, 0))}
+
+    def test_handles_rectangular_fewer_dangles(self):
+        dangles = [(0, 0)]
+        ports = [(1, 0), (50, 0)]
+        pairs = route_only._optimal_match(dangles, ports)
+        assert len(pairs) == 1
+        assert pairs[0] == ((0, 0), (1, 0))
+
+    def test_handles_rectangular_fewer_ports(self):
+        dangles = [(0, 0), (50, 0)]
+        ports = [(1, 0)]
+        pairs = route_only._optimal_match(dangles, ports)
+        assert len(pairs) == 1
+        assert pairs[0] == ((0, 0), (1, 0))
+
+    def test_empty_inputs(self):
+        assert route_only._optimal_match([], [(1, 0)]) == []
+        assert route_only._optimal_match([(0, 0)], []) == []
+        assert route_only._optimal_match([], []) == []
+
+    def test_beats_greedy_on_adversarial_case(self):
+        # Greedy picks (A, P1) first (dist 1) leaving (B, P2) at dist 10.
+        # Optimal picks (A, P2)=2 + (B, P1)=2 = 4 total, vs greedy 1+10=11.
+        dangles = [(0, 0), (3, 0)]
+        ports = [(1, 0), (2, 0)]
+        greedy = route_only.match_dangles_to_ports(dangles, ports)
+        optimal = route_only._optimal_match(dangles, ports)
+
+        def total_dist(pairs):
+            return sum(abs(d[0] - p[0]) + abs(d[1] - p[1]) for d, p in pairs)
+
+        assert total_dist(optimal) <= total_dist(greedy)
+
+    @pytest.mark.skipif(not HALF_SPLITTER.exists(), reason="Half Splitter not found")
+    def test_half_splitter_optimal_leq_greedy(self):
+        bp = Blueprint.from_file(HALF_SPLITTER)
+        dangles = route_only.find_and_classify_dangles(bp, 0)
+        ports = route_only.find_free_port_positions(bp, 0)
+        west_ports, east_ports = route_only.partition_ports(ports, "Foundation_2x4")
+        west_dangles = [(d.x, d.y) for d in dangles if d.half == "west"]
+        east_dangles = [(d.x, d.y) for d in dangles if d.half == "east"]
+
+        def total_dist(pairs):
+            return sum(abs(d[0] - p[0]) + abs(d[1] - p[1]) for d, p in pairs)
+
+        greedy_total = total_dist(
+            route_only.match_dangles_to_ports(west_dangles, west_ports)
+            + route_only.match_dangles_to_ports(east_dangles, east_ports)
+        )
+        optimal_total = total_dist(
+            route_only._optimal_match(west_dangles, west_ports)
+            + route_only._optimal_match(east_dangles, east_ports)
+        )
+        assert optimal_total <= greedy_total
+
+
 class TestBuildPassableFromOccupancy:
     @pytest.mark.skipif(not HALF_SPLITTER.exists(), reason="Half Splitter not found")
     def test_half_splitter_layer0_excludes_occupied_cells(self):

@@ -144,6 +144,29 @@ def build_passable_from_occupancy(
     return passable
 
 
+def _optimal_match(
+    dangles: list[tuple[int, int]], ports: list[tuple[int, int]]
+) -> list[tuple[tuple[int, int], tuple[int, int]]]:
+    """Pair dangles to ports minimizing total Manhattan distance (min-cost bipartite matching).
+
+    Uses ``scipy.optimize.linear_sum_assignment`` on the full cost matrix.
+    Falls back to ``match_dangles_to_ports`` (greedy) if scipy is unavailable.
+    Handles rectangular matrices (|dangles| != |ports|).
+    """
+    if not dangles or not ports:
+        return []
+    try:
+        import numpy as np
+        from scipy.optimize import linear_sum_assignment
+    except ImportError:
+        return match_dangles_to_ports(dangles, ports)
+    cost = np.array(
+        [[abs(dx - px) + abs(dy - py) for px, py in ports] for dx, dy in dangles]
+    )
+    row_ind, col_ind = linear_sum_assignment(cost)
+    return [(dangles[int(r)], ports[int(c)]) for r, c in zip(row_ind, col_ind)]
+
+
 def match_dangles_to_ports(
     dangles: list[tuple[int, int]], ports: list[tuple[int, int]]
 ) -> list[tuple[tuple[int, int], tuple[int, int]]]:
@@ -312,7 +335,7 @@ def route_layer_nets(
     west_ports, east_ports = partition_ports(ports, platform)
     west_dangles = [(d.x, d.y) for d in dangles if d.half == "west"]
     east_dangles = [(d.x, d.y) for d in dangles if d.half == "east"]
-    pairs = match_dangles_to_ports(west_dangles, west_ports) + match_dangles_to_ports(
+    pairs = _optimal_match(west_dangles, west_ports) + _optimal_match(
         east_dangles, east_ports
     )
 
