@@ -177,6 +177,7 @@ def _grow_tree(
         def _search(allow_hops: bool) -> tuple[bool, dict[Cell, float], dict[Cell, Cell]]:
             dist: dict[Cell, float] = {}
             prev: dict[Cell, Cell] = {}
+            expanded: set[Cell] = set()
             pq: list[tuple[float, int, int, int, float, Cell]] = []
 
             for seed in tree_cells:
@@ -207,6 +208,8 @@ def _grow_tree(
                     found = True
                     break
 
+                expanded.add(cell)
+
                 for nb in _neighbors(cell):
                     if nb not in graph.passable:
                         continue
@@ -226,6 +229,8 @@ def _grow_tree(
                             if (nb[0] - cell[0], nb[1] - cell[1]) != (ux, uy):
                                 continue
 
+                    if nb in expanded:
+                        continue
                     occ_set = graph.occ.get(nb, set())
                     overuse = max(0, len(occ_set - {net.net_id}) + 1 - 1)
                     bias = (hash(nb) ^ net.net_id ^ graph.sym_seed) % 997 * SYMMETRY_BREAK
@@ -322,6 +327,8 @@ def _grow_tree(
                                             break
                                     if _adj_recv:
                                         continue
+                                if nb in expanded:
+                                    continue
                                 occ_set = graph.occ.get(nb, set())
                                 overuse = max(0, len(occ_set - {net.net_id}) + 1 - 1)
                                 hop_base = hdist * BASE + graph.hop_penalty
@@ -346,6 +353,8 @@ def _grow_tree(
                         if nb not in graph.passable:
                             continue
                         if nb in tree_cells and nb != terminal:
+                            continue
+                        if nb in expanded:
                             continue
                         occ_set = graph.occ.get(nb, set())
                         overuse = max(0, len(occ_set - {net.net_id}) + 1 - 1)

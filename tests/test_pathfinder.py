@@ -665,6 +665,70 @@ class TestHop:
         assert not net.hop_edges
 
 
+class TestHopIntegrity:
+    """No transit hops (cell is both hop sender AND receiver) or
+    hop-receiver turns (receiver exits in a direction other than the
+    hop direction).  Regression tests for the A* prev-update race."""
+
+    @staticmethod
+    def _check_no_transit_hops(nets: list[Net]) -> None:
+        for n in nets:
+            srcs = {s for s, _d in n.hop_edges}
+            dsts = {d for _s, d in n.hop_edges}
+            assert not (srcs & dsts), f"net {n.net_id} has transit hops at {srcs & dsts}"
+
+    @staticmethod
+    def _check_no_hop_receiver_turns(nets: list[Net]) -> None:
+        for n in nets:
+            for hs, hd in n.hop_edges:
+                dx = hd[0] - hs[0]
+                dy = hd[1] - hs[1]
+                hop_dir = (
+                    (1 if dx > 0 else -1) if dx else 0,
+                    (1 if dy > 0 else -1) if dy else 0,
+                )
+                for s, d in n.tree_edges:
+                    if s == hd:
+                        out = (d[0] - s[0], d[1] - s[1])
+                        if abs(out[0]) + abs(out[1]) == 1:
+                            assert out == hop_dir, (
+                                f"net {n.net_id}: hop receiver {hd} "
+                                f"exits {out}, expected {hop_dir}"
+                            )
+
+    def test_crossing_nets_no_transit_hops(self):
+        """Two crossing nets routed with hops produce no transit hops."""
+        passable = {(x, y, 0) for x in range(7) for y in range(7)}
+        net_a = Net(net_id=0, kind="fanout", root=(0, 3, 0), terminals=[(6, 3, 0)])
+        net_b = Net(net_id=1, kind="fanout", root=(3, 0, 0), terminals=[(3, 6, 0)])
+        graph = RoutingGraph(passable=passable, hop_range=5)
+        assert pathfinder_route([net_a, net_b], graph)
+        self._check_no_transit_hops([net_a, net_b])
+
+    def test_crossing_nets_no_hop_receiver_turns(self):
+        """Hop receivers exit only in the hop direction."""
+        passable = {(x, y, 0) for x in range(7) for y in range(7)}
+        net_a = Net(net_id=0, kind="fanout", root=(0, 3, 0), terminals=[(6, 3, 0)])
+        net_b = Net(net_id=1, kind="fanout", root=(3, 0, 0), terminals=[(3, 6, 0)])
+        graph = RoutingGraph(passable=passable, hop_range=5)
+        assert pathfinder_route([net_a, net_b], graph)
+        self._check_no_hop_receiver_turns([net_a, net_b])
+
+    def test_dense_crossing_no_invalid_hops(self):
+        """Four nets crossing in a tight grid: no transit or turn violations."""
+        passable = {(x, y, 0) for x in range(10) for y in range(10)}
+        nets = [
+            Net(net_id=0, kind="fanout", root=(0, 4, 0), terminals=[(9, 4, 0)]),
+            Net(net_id=1, kind="fanout", root=(0, 6, 0), terminals=[(9, 6, 0)]),
+            Net(net_id=2, kind="fanout", root=(4, 0, 0), terminals=[(4, 9, 0)]),
+            Net(net_id=3, kind="fanout", root=(6, 0, 0), terminals=[(6, 9, 0)]),
+        ]
+        graph = RoutingGraph(passable=passable, hop_range=5)
+        assert pathfinder_route(nets, graph)
+        self._check_no_transit_hops(nets)
+        self._check_no_hop_receiver_turns(nets)
+
+
 class TestExistingHopValidity:
     """§0b: new hops must not collide with pre-existing senders/receivers
     under the in-game furthest-first pairing rule."""
