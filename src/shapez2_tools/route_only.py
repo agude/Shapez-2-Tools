@@ -348,6 +348,7 @@ def route_layer_nets(
         hop_range=hop_range,
         existing_senders=senders,
         existing_receivers=receivers,
+        hop_penalty=0.5,
     )
     pathfinder.pathfinder_route(nets, graph)
     _attach_boundary_edges(nets)

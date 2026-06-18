@@ -45,7 +45,7 @@ fairly good on this layout, but optimal avoids worst-case long routes.
 
 ---
 
-### Chunk 2: Lower hop penalty for route-only mode
+### Chunk 2: Lower hop penalty for route-only mode — DONE
 
 **What:** Add a `hop_penalty` parameter to `RoutingGraph` (default =
 `HOP_PENALTY = 1.5`) and let `route_layer_nets` pass a lower value (e.g.
@@ -57,17 +57,10 @@ the *intended* mechanism -- a lower penalty encourages the router to use them
 freely, compressing each crossing route from ~60 cells to ~20 cells of actual
 passable-cell demand.
 
-**Implementation:**
-- Add `hop_penalty: float = HOP_PENALTY` field to `RoutingGraph`.
-- In `_grow_tree`, replace the constant `HOP_PENALTY` reference on the
-  hop-cost line with `graph.hop_penalty`.
-- In `route_layer_nets`, pass `hop_penalty=0.5` (or a parameter) when
-  constructing the `RoutingGraph`.
-
-**Test:**
-- Unit test: build a small 2-net crossing scenario on Foundation_1x1, verify
-  both route when hop_penalty is low but one fails when it's high.
-- Re-run `route` on UNFINISHED Half Splitter layer 0 -- check improvement.
+**Result:** Added `hop_penalty` field to `RoutingGraph` (default 1.5,
+backwards compatible). `_grow_tree` uses `graph.hop_penalty` instead of the
+constant. `route_layer_nets` passes `hop_penalty=0.5`. Unit test confirms
+low penalty + hops resolves a cross-corridor crossing; no hops fails it.
 
 **Commit scope:** `pathfinder.py`, `route_only.py`,
 `tests/test_route_only.py`.

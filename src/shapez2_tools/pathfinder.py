@@ -81,6 +81,7 @@ class RoutingGraph:
     # so there are no pre-existing hops to conflict with).
     existing_senders: dict[Cell, tuple[int, int]] = field(default_factory=dict)
     existing_receivers: dict[Cell, tuple[int, int]] = field(default_factory=dict)
+    hop_penalty: float = HOP_PENALTY
 
     def __post_init__(self):
         if self.hop_range > lift.MAX_HOP_RANGE:
@@ -314,7 +315,7 @@ def _grow_tree(
                                         continue
                                 occ_set = graph.occ.get(nb, set())
                                 overuse = max(0, len(occ_set - {net.net_id}) + 1 - 1)
-                                hop_base = hdist * BASE + HOP_PENALTY
+                                hop_base = hdist * BASE + graph.hop_penalty
                                 bias = (hash(nb) ^ net.net_id) % 997 * SYMMETRY_BREAK
                                 enter = (hop_base + graph.hist.get(nb, 0.0) + bias) * (
                                     1 + pres_fac * overuse

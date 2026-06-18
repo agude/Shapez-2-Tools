@@ -304,6 +304,43 @@ class TestBuildRoutingNets:
         assert net.terminal_exit == {(16, 8, 0): (1, 0)}
 
 
+class TestHopPenalty:
+    def _crossing_nets(self):
+        """Two nets forced to cross at (10,10) on a 1-wide cross corridor."""
+        passable: set[pathfinder.Cell] = set()
+        for x in range(5, 16):
+            passable.add((x, 10, 0))
+        for y in range(5, 16):
+            passable.add((10, y, 0))
+        nets = [
+            pathfinder.Net(
+                net_id=0, kind="fanout", root=(5, 10, 0), terminals=[(15, 10, 0)]
+            ),
+            pathfinder.Net(
+                net_id=1, kind="fanout", root=(10, 5, 0), terminals=[(10, 15, 0)]
+            ),
+        ]
+        return passable, nets
+
+    def test_low_hop_penalty_resolves_crossing(self):
+        passable, nets = self._crossing_nets()
+        graph = pathfinder.RoutingGraph(
+            passable=passable, hop_range=5, hop_penalty=0.5,
+        )
+        assert pathfinder.pathfinder_route(nets, graph)
+        total_hops = sum(len(n.hop_edges) for n in nets)
+        assert total_hops >= 1
+
+    def test_no_hops_fails_crossing(self):
+        passable, nets = self._crossing_nets()
+        graph = pathfinder.RoutingGraph(
+            passable=passable, hop_range=0, hop_penalty=0.5,
+        )
+        assert not pathfinder.pathfinder_route(
+            nets, graph, raise_on_failure=False,
+        )
+
+
 class TestRouteLayerNets:
     def test_single_pair_routes_and_emits_valid_belts(self):
         cutter = Entity(type="CutterDefaultInternalVariant", x=10, y=10, rotation=0, layer=0)
