@@ -16,14 +16,14 @@ validity) deferred until Chunk 5 needs it. **Stale fixture counts fixed**:
 / 290 endpoints / 32 platform_out) mined from an earlier single-floor version
 of the real blueprint; it's since been hand-edited into 3 symmetric layers,
 so updated all three to the current per-layer counts (68 / 136 / 8 / 24
-ports). **Chunk 2 done** (2026-06-17): `route_only.find_unconnected_ports`
-and `route_only.partition_ports` added. On the Half Splitter layer 0: 46
-unconnected `platform_in` ports, split 23 west / 23 east by platform-center
-x (matches the §6 test-plan expectation). **Chunk 3 done** (2026-06-17):
+ports). **Chunk 2 done** (2026-06-17, reworked): `route_only.find_free_port_positions`
+finds platform-edge port positions with no entity on the given layer — the
+real routing targets (not the mirage of 46 "unconnected `platform_in`" from
+the un-contracted netlist). On the Half Splitter layer 0: 24 free ports,
+split 12 west / 12 east by platform-center x. **Chunk 3 done** (2026-06-17):
 `route_only.match_dangles_to_ports` added (greedy nearest-neighbor by
 Manhattan distance within a partition). On layer 0, all 12 west dangles and
-all 12 east dangles match to a port; match distances range 1–54 cells (the
-fixture's hand-built layout has some far-flung leftover ports). **Chunk 4
+all 12 east dangles match to a port. **Chunk 4
 done** (2026-06-17): `route_only.build_passable_from_occupancy` added —
 unlike `pathfinder._build_passable` (which only excludes machines, since
 the full-synthesis path strips belts first), this excludes *every* occupied
@@ -52,9 +52,9 @@ dangles are the downstream ends of those 32 unrouted outputs (some merge
 before dangling). The routing targets are the **24 free platform-edge
 output ports**: 4 on the west face (x=-18, y=8–11), 4 on the east face
 (x=57, y=8–11), and 16 on the south face (y=2, 4 groups of 4). West-half
-dangles route to western port groups, east-half to eastern. **Chunks 2/3
-need rework** to target free platform-edge output ports instead of
-interior hop receivers. **Chunks 0a/0c/1/4/0b are solid and tested.**
+dangles route to western port groups, east-half to eastern.
+**Chunks 0a/0b/0c/1/2/3/4 are solid and tested.** Chunk 5 (build nets
+and route) is next.
 
 **Motivation:** The user has a hand-placed Half Splitter blueprint
 (`UNFINISHED Half Splitter.spz2bp`) with 192 cutters across 3 symmetric
@@ -77,8 +77,9 @@ a complete blueprint.
   space (no matching input on the adjacent cell). Found by
   `lift.unmatched_legs`'s scan — each unmatched output-side leg is a
   dangling end.
-- **Unconnected port**: a `platform_in` node in the lifted netlist with
-  no outgoing edge.
+- **Free port position**: a platform-edge port slot with no entity on the
+  layer. These are the routing targets — each needs a
+  `BeltPortSenderInternalVariant` placed at it and a belt path feeding it.
 - **Occupied cell**: any (x, y) position on a given layer that already
   contains a belt, machine, port, or other entity. These are obstacles
   for the router.
@@ -358,8 +359,7 @@ real picture: 16 south-face inputs (all connected), 8 output ports
 1. Load platform port positions from `platforms.json`.
 2. Lift with `contract_hops=True` to get the real netlist.
 3. Find occupied port positions: any platform-edge port that already
-   has a `platform_in` or `platform_out` node in the netlist with
-   edges.
+   has an entity on this layer.
 4. Free ports = all platform-edge positions minus occupied.
 5. Partition free ports into west-target and east-target:
    - The platform has a center x-coordinate.
@@ -435,9 +435,9 @@ matching the 24 dangles.
 4. Exclude the platform-edge ring (same logic as
    `pathfinder._build_passable`) except for the specific port cells
    that are net endpoints.
-5. The dangling end cells and unconnected port cells must be in the
-   passable set (they are net endpoints, even though they already
-   have entities — the router needs to reach them).
+5. The dangling end cells and free port cells must be in the passable
+   set (they are net endpoints — the router needs to reach them).
+   Dangles already have entities; free ports do not (yet).
 
 **Key difference from existing `_build_passable`:** the existing
 function excludes only machines; this one excludes *everything* that's
@@ -557,7 +557,7 @@ passable set should have prevented it).
   reduced (ideally 0 on the routed layer, but may not be 0 if some
   ports were intentionally left unmatched).
 - After merge, `lift.trace_layer(result, layer)` should show new
-  edges connecting the previously-unconnected ports.
+  edges connecting the previously-free ports.
 - No entity at the same (x, y, layer) appears twice.
 
 ---
@@ -609,7 +609,7 @@ Functions (public API):
 
 ```python
 def find_and_classify_dangles(bp: Blueprint, layer: int) -> list[DanglingEnd]
-def find_unconnected_ports(netlist: Netlist) -> list[tuple[int, int]]
+def find_free_port_positions(bp: Blueprint, layer: int) -> list[tuple[int, int]]
 def partition_ports(ports, platform: str) -> tuple[list, list]
 def match_dangles_to_ports(dangles, ports) -> list[tuple]
 def build_passable_from_occupancy(bp, layer, platform, endpoints) -> set[Cell]
@@ -686,8 +686,8 @@ use. It's the primary integration fixture.
 ### Unit tests (per chunk)
 - Chunk 1: `test_find_dangles_half_splitter` — 24 dangles on L0,
   classified west/east.
-- Chunk 2: `test_unconnected_ports_half_splitter` — 46 unconnected
-  ports, partitioned correctly.
+- Chunk 2: `test_free_port_positions_half_splitter` — 24 free ports,
+  partitioned 12 west / 12 east.
 - Chunk 3: `test_match_dangles_to_ports` — matched pairs are
   geographically sensible.
 - Chunk 4: `test_passable_excludes_existing_belts` — no occupied cell
@@ -704,7 +704,7 @@ use. It's the primary integration fixture.
 - `test_no_entity_overlap` — after merge, no two entities share the
   same `(x, y, layer)`.
 - `test_lift_trace_new_edges` — the routed blueprint's netlist
-  contains new `platform_in → machine` edges that didn't exist
+  contains new `machine → platform_out` edges that didn't exist
   before.
 
 ### Acceptance

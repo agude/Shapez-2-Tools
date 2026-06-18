@@ -3,50 +3,6 @@
 Accumulated during autonomous work; each answer unblocks a specific next step.
 Most-blocking first.
 
-## 11. Can a platform-edge port be fed via an interior hop?  *(blocks route-only Chunk 5)*
-Route-only mode (`docs/route-only-spec.md`) needs to connect a dangling cutter
-output to one of the Half Splitter's 46 unconnected `platform_in` ports. The
-draft spec's Chunk 5 assumed this works like any other hop: place a new
-`BeltPortSenderInternalVariant` somewhere reachable from the dangle, in line
-with the port, same rotation, within `MAX_HOP_RANGE` — the in-game
-furthest-first launcher/catcher rule should pair them.
-
-**This is unverified and the tool's own model says no.** `lift._resolve_hops`
-only pairs senders/receivers where `_is_interior_hop` is true, which
-explicitly *excludes* any position in `_platform_port_positions(bp)` — i.e.
-a real platform-edge port is never eligible as an interior hop's receiver,
-by construction. I confirmed this empirically: placed a
-`BeltPortSenderInternalVariant` two cells from a real `Foundation_2x4` port
-position (same rotation, in range) and `lift._resolve_hops` returned no pair;
-`lift.unmatched_legs` stayed nonzero; `lift.trace_layer` showed no edge.
-
-Two possible explanations, and I can't tell which from the code alone:
-1. **The game itself doesn't allow it** — platform-edge ports are physically
-   special (fed only from the adjacent platform across the boundary, not from
-   an interior sender), and `_is_interior_hop`'s exclusion correctly models
-   real game behavior. If so, Chunk 5's design (dangle → unconnected
-   `platform_in` port via hop) is wrong, and the 24 dangles need a different
-   destination — most likely unconnected `platform_out` ports
-   (`BeltPortSenderInternalVariant`, kind `platform_out`), which actually
-   accept input from a normal adjacent belt (no hop needed). Chunks 2/3 would
-   need reworking: target `platform_out`, not `platform_in`.
-2. **The game allows it and `_is_interior_hop` is overly strict** — it was
-   written to keep the netlist model's notion of "platform boundary" clean,
-   not because the game enforces it. If so, `_resolve_hops`/`_is_interior_hop`
-   need a fix to recognize a sender-to-port hop as a real connection, and
-   Chunk 5 can proceed as drafted.
-
-**Resolution path:** load a small test blueprint in-game with a sender aimed
-at an unused platform port (same setup as my verification script above,
-which is reproducible — see git history before this entry for the exact
-positions) and see whether the catcher actually fires. Cheaper alternative if
-available: check whether any existing reference blueprint already has an
-interior sender successfully feeding a platform-edge port position (would
-need a hand-built example to mine, like Q7/Q10's launcher templates).
-
-Until this resolves, Chunk 5/6 of route-only mode are not implemented —
-see `docs/route-only-spec.md` §0 status.
-
 ## 1. Swapper ports — RESOLVED (no export needed; see Resolved)
 Solved by brute-forcing the footprint against the existing `Swap Diagonal`
 blueprint instead of a belted template: 2-in/2-out, second cell right of flow,

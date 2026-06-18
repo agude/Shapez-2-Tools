@@ -82,13 +82,11 @@ def find_and_classify_dangles(bp: Blueprint, layer: int) -> list[DanglingEnd]:
     ]
 
 
-def find_unconnected_ports(netlist: lift.Netlist) -> list[tuple[int, int]]:
-    """Positions of ``platform_in`` nodes with no outgoing edge."""
-    connected = {src for src, _dst in netlist.edges}
-    return [
-        pos for pos, node in netlist.nodes.items()
-        if node.kind == "platform_in" and pos not in connected
-    ]
+def find_free_port_positions(bp: Blueprint, layer: int) -> list[tuple[int, int]]:
+    """Platform-edge port positions with no entity on *layer* — targets for new routes."""
+    port_positions = lift._platform_port_positions(bp)
+    occupied = {(e.x, e.y) for e in all_entities(bp) if e.layer == layer}
+    return sorted(p for p in port_positions if p not in occupied)
 
 
 def partition_ports(

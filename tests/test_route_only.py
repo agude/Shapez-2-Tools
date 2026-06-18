@@ -65,33 +65,30 @@ class TestFindAndClassifyDangles:
         assert by_pos[(0, 1)] == "east"  # second cell, mirrored
 
 
-class TestFindUnconnectedPorts:
+class TestFindFreePortPositions:
     @pytest.mark.skipif(not HALF_SPLITTER.exists(), reason="Half Splitter not found")
     def test_half_splitter_layer0(self):
         bp = Blueprint.from_file(HALF_SPLITTER)
-        nl = lift.trace_layer(bp, 0)
-        ports = route_only.find_unconnected_ports(nl)
-        assert len(ports) == 46
-        assert all(nl.nodes[p].kind == "platform_in" for p in ports)
+        ports = route_only.find_free_port_positions(bp, 0)
+        assert len(ports) == 24
 
-    def test_small_fixture_no_unconnected_ports(self):
+    def test_small_fixture_all_ports_free(self):
         src = Entity(type="BeltPortReceiverInternalVariant", x=-1, y=0, rotation=0, layer=0)
         cutter = Entity(type="CutterDefaultInternalVariant", x=0, y=0, rotation=0, layer=0)
         bp = route.entities_to_blueprint([src, cutter], platform="Foundation_1x1")
-        nl = lift.trace_layer(bp, 0)
-        assert route_only.find_unconnected_ports(nl) == []
+        free = route_only.find_free_port_positions(bp, 0)
+        assert len(free) == 16
 
 
 class TestPartitionPorts:
     @pytest.mark.skipif(not HALF_SPLITTER.exists(), reason="Half Splitter not found")
     def test_half_splitter_layer0(self):
         bp = Blueprint.from_file(HALF_SPLITTER)
-        nl = lift.trace_layer(bp, 0)
-        ports = route_only.find_unconnected_ports(nl)
+        ports = route_only.find_free_port_positions(bp, 0)
         west, east = route_only.partition_ports(ports, "Foundation_2x4")
         assert len(west) + len(east) == len(ports)
-        assert len(west) == 23
-        assert len(east) == 23
+        assert len(west) == 12
+        assert len(east) == 12
 
     def test_splits_by_center(self):
         ports = [(-2, 0), (0, 0), (2, 0), (50, 0)]
@@ -117,9 +114,8 @@ class TestMatchDanglesToPorts:
     @pytest.mark.skipif(not HALF_SPLITTER.exists(), reason="Half Splitter not found")
     def test_half_splitter_layer0_geographically_sensible(self):
         bp = Blueprint.from_file(HALF_SPLITTER)
-        nl = lift.trace_layer(bp, 0)
         dangles = route_only.find_and_classify_dangles(bp, 0)
-        ports = route_only.find_unconnected_ports(nl)
+        ports = route_only.find_free_port_positions(bp, 0)
         west_ports, east_ports = route_only.partition_ports(ports, "Foundation_2x4")
         west_dangles = [(d.x, d.y) for d in dangles if d.half == "west"]
         east_dangles = [(d.x, d.y) for d in dangles if d.half == "east"]
@@ -129,11 +125,9 @@ class TestMatchDanglesToPorts:
 
         assert len(west_pairs) == len(west_dangles)
         assert len(east_pairs) == len(east_dangles)
-        # Every matched port is reasonably close to its dangle — sanity bound,
-        # not a precise distance claim.
         for d, p in west_pairs + east_pairs:
             dist = abs(d[0] - p[0]) + abs(d[1] - p[1])
-            assert dist < 60
+            assert dist < 80
 
 
 class TestBuildPassableFromOccupancy:
