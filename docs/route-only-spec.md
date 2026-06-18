@@ -53,8 +53,28 @@ before dangling). The routing targets are the **24 free platform-edge
 output ports**: 4 on the west face (x=-18, y=8–11), 4 on the east face
 (x=57, y=8–11), and 16 on the south face (y=2, 4 groups of 4). West-half
 dangles route to western port groups, east-half to eastern.
-**Chunks 0a/0b/0c/1/2/3/4 are solid and tested.** Chunk 5 (build nets
-and route) is next.
+**Chunks 0a/0b/0c/1/2/3/4 are solid and tested.** **Chunk 5 done**
+(2026-06-17): `route_only.build_routing_nets` builds a 1→1 fanout `Net`
+per matched (dangle, port) pair — root offset one cell off the dangle in
+its dangling-output direction, terminal offset one cell off the port in
+its interior-facing direction (`route_only._port_face`, calibrated
+against placed `BeltPortSenderInternalVariant` rotations in the reference
+corpus: east edge R0/fed-from-west, north R1/fed-from-south, west
+R2/fed-from-east, south R3/fed-from-north). `route_only.route_layer_nets`
+chains chunks 1-5: find/classify dangles, find/partition free ports,
+match, build nets, build the passable set (endpoints = all net
+roots/terminals), build pre-existing hop sender/receiver positions
+(`route_only._existing_hop_endpoints`, feeds `RoutingGraph.existing_*`
+from §0b) and run `pathfinder.pathfinder_route`. On the real fixture
+(UNFINISHED Half Splitter, layer 0): all 24 nets route successfully in
+~1.3s, `pathfinder.emit_entities` converts them to 720 valid belt
+entities with no errors. `route_only._attach_boundary_edges` inserts the
+dangle->root and terminal->port edges after routing so the emit table
+sees correct in/out directions at the tree's boundary cells — neither
+the dangle cell (already a real entity) nor the port cell (placed during
+merge) is added to `tree_cells` itself. Chunk 6 (emit the new port
+sender entities + merge into the original blueprint, not just emit the
+routing belts) is next.
 
 **Motivation:** The user has a hand-placed Half Splitter blueprint
 (`UNFINISHED Half Splitter.spz2bp`) with 192 cutters across 3 symmetric

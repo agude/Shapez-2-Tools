@@ -173,3 +173,158 @@ def match_dangles_to_ports(
         pairs.append((d, p))
     return pairs
 
+
+def _dangle_direction(
+    pos: tuple[int, int], occ: dict[tuple[int, int], lift._Cell]
+) -> tuple[int, int]:
+    """The output direction of *pos* that points into empty space."""
+    c = occ[pos]
+    for d in c.outs:
+        target = (pos[0] + d[0], pos[1] + d[1])
+        n = occ.get(target)
+        if not (n and lift._neg(d) in n.ins):
+            return d
+    raise ValueError(f"{pos} has no dangling output direction")
+
+
+def _port_face(pos: tuple[int, int], platform: str) -> tuple[tuple[int, int], int]:
+    """Interior-facing direction and sender rotation for a free port at *pos*.
+
+    Calibrated against placed ``BeltPortSenderInternalVariant`` entities in
+    the reference blueprint corpus: a port on the east edge faces outward
+    at R=0 (fed from the west, interior, side); rotating +90 deg CCW per
+    edge gives north=R1 (fed from south), west=R2 (fed from east), south=R3
+    (fed from north).
+    """
+    min_x, max_x, min_y, max_y = pathfinder._platform_bounds(platform)
+    x, y = pos
+    if x == max_x:
+        return lift.W, 0
+    if y == max_y:
+        return lift.S, 1
+    if x == min_x:
+        return lift.E, 2
+    if y == min_y:
+        return lift.N, 3
+    raise ValueError(f"{pos} is not on a platform edge of {platform!r}")
+
+
+def build_routing_nets(
+    matched_pairs: list[tuple[tuple[int, int], tuple[int, int]]],
+    bp: Blueprint,
+    layer: int,
+    platform: str,
+) -> list[pathfinder.Net]:
+    """Build one 1->1 fanout net per matched (dangle, port) pair.
+
+    The dangle and port cells already exist (dangle) or will be placed
+    during merge (port) — neither is a routing cell. Each net's root and
+    terminal are the first free cell stepping off the dangle (in its
+    dangling-output direction) and off the port (in its interior-facing
+    direction), matching the boundary-edge convention in
+    ``pathfinder.strip_and_reroute``.
+    """
+    occ = lift._occupancy(bp, layer)
+    nets = []
+    for net_id, (dangle, port) in enumerate(matched_pairs):
+        ddir = _dangle_direction(dangle, occ)
+        root: pathfinder.Cell = (dangle[0] + ddir[0], dangle[1] + ddir[1], layer)
+        pdir, _rotation = _port_face(port, platform)
+        term: pathfinder.Cell = (port[0] + pdir[0], port[1] + pdir[1], layer)
+        nets.append(
+            pathfinder.Net(
+                net_id=net_id,
+                kind="fanout",
+                root=root,
+                terminals=[term],
+                root_offset=True,
+                root_approach=ddir,
+                terminal_exit={term: (-pdir[0], -pdir[1])},
+            )
+        )
+    return nets
+
+
+def _attach_boundary_edges(nets: list[pathfinder.Net]) -> None:
+    """Insert dangle->root and terminal->port edges for correct emit at the
+    routing tree's boundary cells.
+
+    The dangle and port cells are not added to ``tree_cells`` — the dangle
+    already has a real entity in the blueprint, and the port's sender
+    entity is placed separately during merge (Chunk 6) — but
+    ``pathfinder._cell_to_entity`` needs these edges to compute the correct
+    in/out directions for the root and terminal routing cells.
+    """
+    for net in nets:
+        rx, ry, rl = net.root
+        ax, ay = net.root_approach
+        dangle: pathfinder.Cell = (rx - ax, ry - ay, rl)
+        net.tree_edges.insert(0, (dangle, net.root))
+
+        term = net.terminals[0]
+        pdx, pdy = net.terminal_exit[term]
+        port: pathfinder.Cell = (term[0] + pdx, term[1] + pdy, term[2])
+        net.tree_edges.append((term, port))
+
+
+def _existing_hop_endpoints(
+    bp: Blueprint, layer: int
+) -> tuple[dict[pathfinder.Cell, tuple[int, int]], dict[pathfinder.Cell, tuple[int, int]]]:
+    """Pre-existing interior-hop sender/receiver positions -> launch direction.
+
+    Feeds ``pathfinder.RoutingGraph.existing_senders/receivers`` (§0b) so
+    new hops placed by the router don't conflict with hops already in the
+    hand-placed blueprint under the furthest-first pairing rule.
+    """
+    port_positions = lift._platform_port_positions(bp)
+    senders: dict[pathfinder.Cell, tuple[int, int]] = {}
+    receivers: dict[pathfinder.Cell, tuple[int, int]] = {}
+    for e in all_entities(bp):
+        if e.layer != layer:
+            continue
+        pos = (e.x, e.y)
+        if not lift._is_interior_hop(e.type, pos, port_positions):
+            continue
+        cell: pathfinder.Cell = (e.x, e.y, layer)
+        d = lift._DIR_VEC[e.rotation]
+        if "Sender" in e.type:
+            senders[cell] = d
+        else:
+            receivers[cell] = d
+    return senders, receivers
+
+
+def route_layer_nets(
+    bp: Blueprint, layer: int, hop_range: int = lift.MAX_HOP_RANGE
+) -> list[pathfinder.Net]:
+    """Run Chunks 1-5 for one layer: find, classify, match, build, and route.
+
+    Returns routed ``Net`` objects (boundary edges attached) ready for
+    ``pathfinder.emit_entities`` — merging the resulting belts plus a new
+    ``BeltPortSenderInternalVariant`` at each matched port back into the
+    blueprint is Chunk 6.
+    """
+    platform = bp.entries[0]["T"]
+    dangles = find_and_classify_dangles(bp, layer)
+    ports = find_free_port_positions(bp, layer)
+    west_ports, east_ports = partition_ports(ports, platform)
+    west_dangles = [(d.x, d.y) for d in dangles if d.half == "west"]
+    east_dangles = [(d.x, d.y) for d in dangles if d.half == "east"]
+    pairs = match_dangles_to_ports(west_dangles, west_ports) + match_dangles_to_ports(
+        east_dangles, east_ports
+    )
+
+    nets = build_routing_nets(pairs, bp, layer, platform)
+    endpoints = {(c[0], c[1]) for n in nets for c in (n.root, n.terminals[0])}
+    passable = build_passable_from_occupancy(bp, layer, platform, endpoints=endpoints)
+    senders, receivers = _existing_hop_endpoints(bp, layer)
+    graph = pathfinder.RoutingGraph(
+        passable=passable,
+        hop_range=hop_range,
+        existing_senders=senders,
+        existing_receivers=receivers,
+    )
+    pathfinder.pathfinder_route(nets, graph)
+    _attach_boundary_edges(nets)
+    return nets
+

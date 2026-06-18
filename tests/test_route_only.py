@@ -1,6 +1,6 @@
 """Tests for route_only: Chunk 1 (find + classify dangling belt ends), Chunk 2
 (find + partition unconnected ports), Chunk 3 (match dangles to ports), Chunk 4
-(build passable set from existing occupancy)."""
+(build passable set from existing occupancy), Chunk 5 (build nets + route)."""
 
 from collections import Counter
 from pathlib import Path
@@ -197,3 +197,79 @@ class TestBuildPassableFromOccupancy:
             if x in (min_x, max_x) or y in (min_y, max_y)
         }
         assert passable.isdisjoint(ring)
+
+
+class TestPortFace:
+    @pytest.mark.parametrize(
+        "pos, expected_dir, expected_rotation",
+        [
+            ((17, 8), lift.W, 0),  # east edge (max_x): faces east, fed from west
+            ((8, 17), lift.S, 1),  # north edge (max_y): faces north, fed from south
+            ((2, 8), lift.E, 2),  # west edge (min_x): faces west, fed from east
+            ((8, 2), lift.N, 3),  # south edge (min_y): faces south, fed from north
+        ],
+    )
+    def test_matches_placed_port_rotations(self, pos, expected_dir, expected_rotation):
+        # Calibration check: these (pos, rotation) pairs are taken from real
+        # placed BeltPortSenderInternalVariant entities in the reference corpus.
+        interior_dir, rotation = route_only._port_face(pos, "Foundation_1x1")
+        assert interior_dir == expected_dir
+        assert rotation == expected_rotation
+
+    def test_interior_position_raises(self):
+        with pytest.raises(ValueError, match="not on a platform edge"):
+            route_only._port_face((9, 9), "Foundation_1x1")
+
+
+class TestBuildRoutingNets:
+    def test_single_pair_root_and_terminal_offset_into_passable_space(self):
+        cutter = Entity(type="CutterDefaultInternalVariant", x=10, y=10, rotation=0, layer=0)
+        bp = route.entities_to_blueprint([cutter], platform="Foundation_1x1")
+
+        nets = route_only.build_routing_nets(
+            [((10, 10), (17, 8))], bp, 0, "Foundation_1x1"
+        )
+
+        assert len(nets) == 1
+        net = nets[0]
+        assert net.kind == "fanout"
+        assert net.root == (11, 10, 0)  # one east of the dangle (its output dir)
+        assert net.root_approach == (1, 0)
+        assert net.terminals == [(16, 8, 0)]  # one west of the port (its interior dir)
+        assert net.terminal_exit == {(16, 8, 0): (1, 0)}
+
+
+class TestRouteLayerNets:
+    def test_single_pair_routes_and_emits_valid_belts(self):
+        cutter = Entity(type="CutterDefaultInternalVariant", x=10, y=10, rotation=0, layer=0)
+        bp = route.entities_to_blueprint([cutter], platform="Foundation_1x1")
+
+        nets = route_only.build_routing_nets(
+            [((10, 10), (17, 8))], bp, 0, "Foundation_1x1"
+        )
+        endpoints = {(c[0], c[1]) for n in nets for c in (n.root, n.terminals[0])}
+        passable = route_only.build_passable_from_occupancy(
+            bp, 0, "Foundation_1x1", endpoints=endpoints
+        )
+        graph = pathfinder.RoutingGraph(passable=passable, hop_range=5)
+
+        assert pathfinder.pathfinder_route(nets, graph)
+        route_only._attach_boundary_edges(nets)
+
+        net = nets[0]
+        assert net.tree_edges[0] == ((10, 10, 0), net.root)  # dangle -> root boundary edge
+        assert net.tree_edges[-1] == (net.terminals[0], (17, 8, 0))  # term -> port
+
+        entities = pathfinder.emit_entities(nets)
+        assert entities  # at least one routing cell got a belt
+        assert all((e.x, e.y) != (10, 10) for e in entities)  # dangle cell untouched
+        assert all((e.x, e.y) != (17, 8) for e in entities)  # port cell untouched
+
+    @pytest.mark.skipif(not HALF_SPLITTER.exists(), reason="Half Splitter not found")
+    def test_half_splitter_layer0_all_dangles_route(self):
+        bp = Blueprint.from_file(HALF_SPLITTER)
+        nets = route_only.route_layer_nets(bp, 0)
+
+        assert len(nets) == 24
+        entities = pathfinder.emit_entities(nets)
+        assert entities
