@@ -72,9 +72,21 @@ entities with no errors. `route_only._attach_boundary_edges` inserts the
 dangle->root and terminal->port edges after routing so the emit table
 sees correct in/out directions at the tree's boundary cells — neither
 the dangle cell (already a real entity) nor the port cell (placed during
-merge) is added to `tree_cells` itself. Chunk 6 (emit the new port
-sender entities + merge into the original blueprint, not just emit the
-routing belts) is next.
+merge) is added to `tree_cells` itself. **Chunk 6 done** (2026-06-17):
+`route_only._port_sender_entities` builds a `BeltPortSenderInternalVariant`
+for each net's matched port — position and rotation recovered from
+`net.terminals[0] + net.terminal_exit[term]` (the port cell) and
+`route_only._port_face` (the calibrated outward rotation), since the port
+cell itself is never a routing cell. `route_only.merge_entities` appends
+new entities (routing belts + port senders) to the blueprint's existing
+entity list via `route._rebuild_blueprint`, raising `ValueError` on any
+position collision (would indicate a passable-set bug, not an expected
+outcome). `route_only.route_and_merge(bp, layer, hop_range=...)` chains
+Chunks 1-6 end-to-end. On the real fixture (UNFINISHED Half Splitter,
+layer 0): `lift.unmatched_legs` drops from 24 to 0, no entity-position
+collisions, and `lift.trace_layer(..., contract_hops=True)` shows new
+`platform_out` edges at all 24 previously-free ports. Chunk 7 (CLI
+integration: `shapez2 route`) is next.
 
 **Motivation:** The user has a hand-placed Half Splitter blueprint
 (`UNFINISHED Half Splitter.spz2bp`) with 192 cutters across 3 symmetric

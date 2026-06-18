@@ -1,6 +1,7 @@
 """Tests for route_only: Chunk 1 (find + classify dangling belt ends), Chunk 2
 (find + partition unconnected ports), Chunk 3 (match dangles to ports), Chunk 4
-(build passable set from existing occupancy), Chunk 5 (build nets + route)."""
+(build passable set from existing occupancy), Chunk 5 (build nets + route),
+Chunk 6 (emit + merge)."""
 
 from collections import Counter
 from pathlib import Path
@@ -9,7 +10,7 @@ import pytest
 
 from shapez2_tools import lift, pathfinder, route, route_only
 from shapez2_tools.blueprint import Blueprint
-from shapez2_tools.generator import Entity
+from shapez2_tools.generator import Entity, all_entities
 
 BLUEPRINTS = Path.home() / "Projects" / "shapez_2_blueprints"
 HALF_SPLITTER = BLUEPRINTS / "UNFINISHED Half Splitter.spz2bp"
@@ -273,3 +274,73 @@ class TestRouteLayerNets:
         assert len(nets) == 24
         entities = pathfinder.emit_entities(nets)
         assert entities
+
+
+class TestPortSenderEntities:
+    def test_one_sender_per_net_facing_outward(self):
+        cutter = Entity(type="CutterDefaultInternalVariant", x=10, y=10, rotation=0, layer=0)
+        bp = route.entities_to_blueprint([cutter], platform="Foundation_1x1")
+
+        nets = route_only.build_routing_nets(
+            [((10, 10), (17, 8))], bp, 0, "Foundation_1x1"
+        )
+        senders = route_only._port_sender_entities(nets, "Foundation_1x1", 0)
+
+        assert len(senders) == 1
+        sender = senders[0]
+        assert sender.type == "BeltPortSenderInternalVariant"
+        assert (sender.x, sender.y, sender.layer) == (17, 8, 0)
+        assert sender.rotation == route_only._port_face((17, 8), "Foundation_1x1")[1]
+
+
+class TestMergeEntities:
+    def test_adds_new_entities_to_existing(self):
+        cutter = Entity(type="CutterDefaultInternalVariant", x=10, y=10, rotation=0, layer=0)
+        bp = route.entities_to_blueprint([cutter], platform="Foundation_1x1")
+        belt = Entity(type="BeltDefaultForwardInternalVariant", x=11, y=10, rotation=0, layer=0)
+
+        merged = route_only.merge_entities(bp, [belt])
+
+        positions = {(e.x, e.y, e.layer) for e in all_entities(merged)}
+        assert (10, 10, 0) in positions  # original entity untouched
+        assert (11, 10, 0) in positions  # new entity added
+
+    def test_collision_raises(self):
+        cutter = Entity(type="CutterDefaultInternalVariant", x=10, y=10, rotation=0, layer=0)
+        bp = route.entities_to_blueprint([cutter], platform="Foundation_1x1")
+        colliding = Entity(
+            type="BeltDefaultForwardInternalVariant", x=10, y=10, rotation=0, layer=0
+        )
+
+        with pytest.raises(ValueError):
+            route_only.merge_entities(bp, [colliding])
+
+
+class TestRouteAndMerge:
+    @pytest.mark.skipif(not HALF_SPLITTER.exists(), reason="Half Splitter not found")
+    def test_half_splitter_layer0_clears_unmatched_legs(self):
+        bp = Blueprint.from_file(HALF_SPLITTER)
+        assert lift.unmatched_legs(bp, 0) == 24
+
+        merged = route_only.route_and_merge(bp, 0)
+
+        assert lift.unmatched_legs(merged, 0) == 0
+
+    @pytest.mark.skipif(not HALF_SPLITTER.exists(), reason="Half Splitter not found")
+    def test_half_splitter_layer0_no_entity_overlap(self):
+        bp = Blueprint.from_file(HALF_SPLITTER)
+        merged = route_only.route_and_merge(bp, 0)
+
+        positions = [(e.x, e.y, e.layer) for e in all_entities(merged)]
+        assert len(positions) == len(set(positions))
+
+    @pytest.mark.skipif(not HALF_SPLITTER.exists(), reason="Half Splitter not found")
+    def test_half_splitter_layer0_new_edges_in_netlist(self):
+        bp = Blueprint.from_file(HALF_SPLITTER)
+        merged = route_only.route_and_merge(bp, 0)
+
+        netlist = lift.trace_layer(merged, 0, contract_hops=True)
+        sink_edges = [
+            e for e in netlist.edges if netlist.nodes[e[1]].kind == "platform_out"
+        ]
+        assert len(sink_edges) >= 24

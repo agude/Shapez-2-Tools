@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from shapez2_tools import lift, pathfinder
+from shapez2_tools import lift, pathfinder, route
 from shapez2_tools.blueprint import Blueprint
 from shapez2_tools.generator import Entity, all_entities
 
@@ -327,4 +327,63 @@ def route_layer_nets(
     pathfinder.pathfinder_route(nets, graph)
     _attach_boundary_edges(nets)
     return nets
+
+
+def _port_sender_entities(
+    nets: list[pathfinder.Net], platform: str, layer: int
+) -> list[Entity]:
+    """A ``BeltPortSenderInternalVariant`` for each net's matched port.
+
+    The port cell itself is never a routing cell (Chunk 5 routes up to the
+    one-cell-off-port ``terminal``), so it has no entity yet. Its rotation
+    must face outward off the platform edge, calibrated in ``_port_face``.
+    """
+    entities = []
+    for net in nets:
+        term = net.terminals[0]
+        ex, ey = net.terminal_exit[term]
+        port = (term[0] + ex, term[1] + ey)
+        _pdir, rotation = _port_face(port, platform)
+        entities.append(
+            Entity(
+                type="BeltPortSenderInternalVariant",
+                x=port[0], y=port[1], rotation=rotation, layer=layer,
+            )
+        )
+    return entities
+
+
+def merge_entities(bp: Blueprint, new_entities: list[Entity]) -> Blueprint:
+    """Add ``new_entities`` to *bp* without disturbing its existing entities.
+
+    Raises ``ValueError`` on a position collision — the passable set built
+    in Chunk 4 should make this unreachable; a collision means a routing bug,
+    not an expected outcome to recover from.
+    """
+    existing = all_entities(bp)
+    occupied = {(e.x, e.y, e.layer) for e in existing}
+    for e in new_entities:
+        if (e.x, e.y, e.layer) in occupied:
+            raise ValueError(
+                f"new entity {e.type!r} at ({e.x}, {e.y}, {e.layer}) "
+                "collides with an existing entity"
+            )
+    return route._rebuild_blueprint(bp, existing + new_entities)
+
+
+def route_and_merge(
+    bp: Blueprint, layer: int, hop_range: int = lift.MAX_HOP_RANGE
+) -> Blueprint:
+    """Route the missing connections on *layer* and merge them into *bp*.
+
+    Chains Chunks 1-6: find/classify dangles, find/partition free ports,
+    match, build nets, route, emit routing belts plus the new port sender
+    entities, and merge into the original blueprint's entity list.
+    """
+    platform = bp.entries[0]["T"]
+    nets = route_layer_nets(bp, layer, hop_range=hop_range)
+    new_entities = pathfinder.emit_entities(nets) + _port_sender_entities(
+        nets, platform, layer
+    )
+    return merge_entities(bp, new_entities)
 
