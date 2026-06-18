@@ -82,6 +82,8 @@ class RoutingGraph:
     existing_senders: dict[Cell, tuple[int, int]] = field(default_factory=dict)
     existing_receivers: dict[Cell, tuple[int, int]] = field(default_factory=dict)
     hop_penalty: float = HOP_PENALTY
+    reserved: dict[Cell, int] = field(default_factory=dict)
+    sym_seed: int = 0
 
     def __post_init__(self):
         if self.hop_range > lift.MAX_HOP_RANGE:
@@ -165,6 +167,7 @@ def _grow_tree(
         # A* from all tree cells (cost 0) to this terminal.
         # Tree cells are seeds but not intermediate expansion targets.
         tx, ty, tl = terminal
+
         def _h(c: Cell) -> float:
             h = (abs(c[0] - tx) + abs(c[1] - ty)) * BASE
             if c[2] != tl:
@@ -209,6 +212,9 @@ def _grow_tree(
                         continue
                     if nb in tree_cells and nb != terminal:
                         continue
+                    reserved_owner = graph.reserved.get(nb)
+                    if reserved_owner is not None and reserved_owner != net.net_id:
+                        continue
                     # Hop receiver exit constraint: a cell reached via a hop
                     # must exit in the hop direction (straight through).
                     if allow_hops and cell in prev:
@@ -222,7 +228,7 @@ def _grow_tree(
 
                     occ_set = graph.occ.get(nb, set())
                     overuse = max(0, len(occ_set - {net.net_id}) + 1 - 1)
-                    bias = (hash(nb) ^ net.net_id) % 997 * SYMMETRY_BREAK
+                    bias = (hash(nb) ^ net.net_id ^ graph.sym_seed) % 997 * SYMMETRY_BREAK
                     enter = (graph.base.get(nb, BASE) + graph.hist.get(nb, 0.0) + bias) * (
                         1 + pres_fac * overuse
                     )
@@ -282,6 +288,9 @@ def _grow_tree(
                                     continue
                                 if nb in tree_cells and nb != terminal:
                                     continue
+                                reserved_owner = graph.reserved.get(nb)
+                                if reserved_owner is not None and reserved_owner != net.net_id:
+                                    continue
                                 te = net.terminal_exit.get(nb)
                                 if te is not None and (dx, dy) != te:
                                     continue
@@ -316,7 +325,9 @@ def _grow_tree(
                                 occ_set = graph.occ.get(nb, set())
                                 overuse = max(0, len(occ_set - {net.net_id}) + 1 - 1)
                                 hop_base = hdist * BASE + graph.hop_penalty
-                                bias = (hash(nb) ^ net.net_id) % 997 * SYMMETRY_BREAK
+                                bias = (
+                                    (hash(nb) ^ net.net_id ^ graph.sym_seed) % 997 * SYMMETRY_BREAK
+                                )
                                 enter = (hop_base + graph.hist.get(nb, 0.0) + bias) * (
                                     1 + pres_fac * overuse
                                 )
@@ -338,7 +349,7 @@ def _grow_tree(
                             continue
                         occ_set = graph.occ.get(nb, set())
                         overuse = max(0, len(occ_set - {net.net_id}) + 1 - 1)
-                        bias = (hash(nb) ^ net.net_id) % 997 * SYMMETRY_BREAK
+                        bias = (hash(nb) ^ net.net_id ^ graph.sym_seed) % 997 * SYMMETRY_BREAK
                         enter = (LIFT_COST + graph.hist.get(nb, 0.0) + bias) * (
                             1 + pres_fac * overuse
                         )
@@ -413,13 +424,9 @@ def _grow_tree(
     net.tree_cells = tree_cells
     net.tree_edges = tree_edges
     net.hop_edges = {
-        (s, d)
-        for s, d in tree_edges
-        if s[2] == d[2] and abs(d[0] - s[0]) + abs(d[1] - s[1]) > 1
+        (s, d) for s, d in tree_edges if s[2] == d[2] and abs(d[0] - s[0]) + abs(d[1] - s[1]) > 1
     }
-    net.lift_edges = {
-        (s, d) for s, d in tree_edges if s[2] != d[2]
-    }
+    net.lift_edges = {(s, d) for s, d in tree_edges if s[2] != d[2]}
 
 
 def _net_hpwl(net: Net) -> int:
@@ -430,24 +437,65 @@ def _net_hpwl(net: Net) -> int:
     return (max(xs) - min(xs)) + (max(ys) - min(ys))
 
 
+_NetSnap = dict[
+    int,
+    tuple[set[Cell], list[tuple[Cell, Cell]], set[tuple[Cell, Cell]], set[tuple[Cell, Cell]]],
+]
+_BestState = tuple[_NetSnap, dict[Cell, float]]
+
+
+def _snapshot(nets: list[Net], graph: RoutingGraph) -> _BestState:
+    net_snap = {
+        n.net_id: (set(n.tree_cells), list(n.tree_edges), set(n.hop_edges), set(n.lift_edges))
+        for n in nets
+    }
+    return net_snap, dict(graph.hist)
+
+
+def _restore(nets: list[Net], graph: RoutingGraph, state: _BestState) -> None:
+    net_snap, hist_snap = state
+    for n in nets:
+        for c in n.tree_cells:
+            graph.occ[c].discard(n.net_id)
+        cells, edges, hops, lifts = net_snap[n.net_id]
+        n.tree_cells = cells
+        n.tree_edges = edges
+        n.hop_edges = hops
+        n.lift_edges = lifts
+        for c in n.tree_cells:
+            graph.occ[c].add(n.net_id)
+    graph.hist = {c: v for c, v in hist_snap.items()}
+
+
 def pathfinder_route(
     nets: list[Net],
     graph: RoutingGraph,
     *,
     raise_on_failure: bool = True,
     max_iters: int = MAX_ITERS,
+    pres_fac_init: float = PRES_FAC_INIT,
+    pres_fac_mult: float = PRES_FAC_MULT,
+    hist_gain: float = HIST_GAIN,
+    stall_window: int | None = None,
+    keep_best: bool = False,
 ) -> bool:
     """Run the PathFinder negotiated-congestion loop.
 
     Returns True if all nets routed without overlap. When *raise_on_failure*
     is True (the default for production callers), raises ``RoutingError``
     carrying the overused cells so WP-M can use them as placement feedback.
+
+    When *keep_best* is True, the best net routes found during negotiation
+    are restored before returning (instead of the final, possibly worse,
+    iteration).
     """
     own_ids = {n.net_id for n in nets}
     nets_sorted = sorted(nets, key=lambda n: (-_net_hpwl(n), n.net_id))
-    pres_fac = PRES_FAC_INIT
-    _STALL_WINDOW = max(15, len(nets))
+    pres_fac = pres_fac_init
+    _STALL_WINDOW = stall_window if stall_window is not None else max(15, len(nets))
     prev_overuse_counts: list[int] = []
+    best_overuse = float("inf")
+    best_snap: _BestState | None = None
 
     for _iteration in range(max_iters):
         for net in nets_sorted:
@@ -459,12 +507,13 @@ def pathfinder_route(
             for c in net.tree_cells:
                 graph.occ[c].add(net.net_id)
 
-        overused = [
-            c for c, s in graph.occ.items()
-            if len(s) > 1 and (s & own_ids)
-        ]
+        overused = [c for c, s in graph.occ.items() if len(s) > 1 and (s & own_ids)]
         if not overused:
             return True
+
+        if keep_best and len(overused) < best_overuse:
+            best_overuse = len(overused)
+            best_snap = _snapshot(nets, graph)
 
         prev_overuse_counts.append(len(overused))
         if len(prev_overuse_counts) > _STALL_WINDOW:
@@ -483,17 +532,16 @@ def pathfinder_route(
         )
 
         for c in overused:
-            graph.hist[c] = graph.hist.get(c, 0.0) + HIST_GAIN * (len(graph.occ[c]) - 1)
-        pres_fac *= PRES_FAC_MULT
+            graph.hist[c] = graph.hist.get(c, 0.0) + hist_gain * (len(graph.occ[c]) - 1)
+        pres_fac *= pres_fac_mult
 
-    overused = [
-        c for c, s in graph.occ.items()
-        if len(s) > 1 and (s & own_ids)
-    ]
+    if keep_best and best_snap is not None:
+        _restore(nets, graph, best_snap)
+
+    overused = [c for c, s in graph.occ.items() if len(s) > 1 and (s & own_ids)]
     if raise_on_failure:
         raise RoutingError(
-            f"PathFinder failed after {max_iters} iterations; "
-            f"{len(overused)} overused cells",
+            f"PathFinder failed after {max_iters} iterations; {len(overused)} overused cells",
             overused=overused,
         )
     return False
@@ -522,9 +570,7 @@ def _assign_net_groups(
     if len(src_groups) <= 1:
         return
 
-    group_centers = [
-        sum(p[0] for p in g) / len(g) for g in src_groups
-    ]
+    group_centers = [sum(p[0] for p in g) / len(g) for g in src_groups]
 
     node_group: dict[tuple, int] = {}
     for pos, node in netlist.nodes.items():
@@ -604,6 +650,7 @@ def _route_by_group(
 # Emit table — programmatic inverse of lift.routing_inout
 # ---------------------------------------------------------------------------
 
+
 def emit_table() -> dict[tuple[frozenset, frozenset], tuple[str, int]]:
     """Build (ins, outs) → (type, rotation) from lift.routing_inout.
 
@@ -648,9 +695,7 @@ def _get_emit_table() -> dict[tuple[frozenset, frozenset], tuple[str, int]]:
     return _EMIT_TABLE
 
 
-def _lift_emit_table() -> dict[
-    tuple[frozenset, frozenset, int], tuple[str, int]
-]:
+def _lift_emit_table() -> dict[tuple[frozenset, frozenset, int], tuple[str, int]]:
     """Build (ins, outs, delta) → (type, rotation) from lift.lift_inout."""
     bases = ["Forward", "Backward", "Left"]
     table: dict[tuple[frozenset, frozenset, int], tuple[str, int]] = {}
@@ -675,9 +720,7 @@ def _lift_emit_table() -> dict[
 _LIFT_EMIT: dict[tuple[frozenset, frozenset, int], tuple[str, int]] | None = None
 
 
-def _get_lift_emit_table() -> dict[
-    tuple[frozenset, frozenset, int], tuple[str, int]
-]:
+def _get_lift_emit_table() -> dict[tuple[frozenset, frozenset, int], tuple[str, int]]:
     global _LIFT_EMIT
     if _LIFT_EMIT is None:
         _LIFT_EMIT = _lift_emit_table()
@@ -732,8 +775,11 @@ def _cell_to_entity(
                     )
                 variant, r = entry
                 return Entity(
-                    x=cell[0], y=cell[1], type=variant,
-                    rotation=r, layer=cell[2],
+                    x=cell[0],
+                    y=cell[1],
+                    type=variant,
+                    rotation=r,
+                    layer=cell[2],
                 )
             if dst == cell:
                 return None
@@ -746,15 +792,19 @@ def _cell_to_entity(
             r = _DIR_TO_ROT[(ux, uy)]
             if src == cell:
                 return Entity(
-                    x=cell[0], y=cell[1],
+                    x=cell[0],
+                    y=cell[1],
                     type="BeltPortSenderInternalVariant",
-                    rotation=r, layer=cell[2],
+                    rotation=r,
+                    layer=cell[2],
                 )
             if dst == cell:
                 return Entity(
-                    x=cell[0], y=cell[1],
+                    x=cell[0],
+                    y=cell[1],
                     type="BeltPortReceiverInternalVariant",
-                    rotation=r, layer=cell[2],
+                    rotation=r,
+                    layer=cell[2],
                 )
 
     in_dirs: set[tuple[int, int]] = set()
@@ -776,8 +826,7 @@ def _cell_to_entity(
     entry = table.get(key)
     if entry is None:
         raise RoutingError(
-            f"No belt variant for leg pattern ins={in_dirs} outs={out_dirs} "
-            f"at cell {cell}"
+            f"No belt variant for leg pattern ins={in_dirs} outs={out_dirs} at cell {cell}"
         )
 
     variant, r = entry
@@ -790,7 +839,8 @@ def emit_entities(nets: list[Net]) -> list[Entity]:
     for net in nets:
         for cell in net.tree_cells:
             ent = _cell_to_entity(
-                cell, net.tree_edges,
+                cell,
+                net.tree_edges,
                 hop_edges=net.hop_edges,
                 lift_edges=net.lift_edges,
             )
@@ -958,7 +1008,8 @@ def _build_passable(
     if platform is not None:
         min_x, max_x, min_y, max_y = _platform_bounds(platform)
         port_cells = {
-            pos for pos, node in netlist.nodes.items()
+            pos
+            for pos, node in netlist.nodes.items()
             if node.kind in ("platform_in", "platform_out")
         }
     else:
@@ -1020,7 +1071,11 @@ def strip_and_reroute(
 
     # Build passable set from platform bounds (preferred) or node bounding box.
     passable = _build_passable(
-        netlist, machine_cells, layer, platform=platform, extra_layers=extra_layers,
+        netlist,
+        machine_cells,
+        layer,
+        platform=platform,
+        extra_layers=extra_layers,
     )
 
     # Build nets
@@ -1102,9 +1157,7 @@ def strip_and_reroute(
         if net.root not in passable:
             # A root stuck on its port cell with routable terminals would
             # emit a belt entity overlapping the port entity.
-            raise RoutingError(
-                f"root could not leave port cell ({net.root[0]}, {net.root[1]})"
-            )
+            raise RoutingError(f"root could not leave port cell ({net.root[0]}, {net.root[1]})")
         routable.append(net)
 
     graph = RoutingGraph(passable=passable, hop_range=hop_range, lift_enabled=lift_enabled)
@@ -1137,7 +1190,8 @@ def strip_and_reroute(
     for net in routable:
         for cell in sorted(net.tree_cells, key=lambda c: (c[1], c[0], c[2])):
             ent = _cell_to_entity(
-                cell, net.tree_edges,
+                cell,
+                net.tree_edges,
                 hop_edges=net.hop_edges,
                 lift_edges=net.lift_edges,
             )

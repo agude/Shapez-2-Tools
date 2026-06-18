@@ -56,9 +56,7 @@ class TestFindAndClassifyDangles:
     def test_small_fixture_mirrored_cutter_same_halves(self):
         """Mirrored variant does NOT swap east/west — anchor is always east."""
         src = Entity(type="BeltPortReceiverInternalVariant", x=-1, y=0, rotation=0, layer=0)
-        cutter = Entity(
-            type="CutterDefaultInternalVariantMirrored", x=0, y=0, rotation=0, layer=0
-        )
+        cutter = Entity(type="CutterDefaultInternalVariantMirrored", x=0, y=0, rotation=0, layer=0)
         bp = route.entities_to_blueprint([src, cutter], platform="Foundation_1x1")
 
         dangles = route_only.find_and_classify_dangles(bp, 0)
@@ -229,12 +227,8 @@ class TestBuildPassableFromOccupancy:
     def test_endpoints_remain_passable_even_when_occupied(self):
         min_x, _max_x, min_y, _max_y = pathfinder._platform_bounds("Foundation_1x1")
         ax, ay = min_x + 1, min_y + 1
-        src = Entity(
-            type="BeltPortReceiverInternalVariant", x=ax - 1, y=ay, rotation=0, layer=0
-        )
-        cutter = Entity(
-            type="CutterDefaultInternalVariant", x=ax, y=ay, rotation=0, layer=0
-        )
+        src = Entity(type="BeltPortReceiverInternalVariant", x=ax - 1, y=ay, rotation=0, layer=0)
+        cutter = Entity(type="CutterDefaultInternalVariant", x=ax, y=ay, rotation=0, layer=0)
         bp = route.entities_to_blueprint([src, cutter], platform="Foundation_1x1")
 
         occ = lift._occupancy(bp, 0)
@@ -291,9 +285,7 @@ class TestBuildRoutingNets:
         cutter = Entity(type="CutterDefaultInternalVariant", x=10, y=10, rotation=0, layer=0)
         bp = route.entities_to_blueprint([cutter], platform="Foundation_1x1")
 
-        nets = route_only.build_routing_nets(
-            [((10, 10), (17, 8))], bp, 0, "Foundation_1x1"
-        )
+        nets = route_only.build_routing_nets([((10, 10), (17, 8))], bp, 0, "Foundation_1x1")
 
         assert len(nets) == 1
         net = nets[0]
@@ -313,19 +305,17 @@ class TestHopPenalty:
         for y in range(5, 16):
             passable.add((10, y, 0))
         nets = [
-            pathfinder.Net(
-                net_id=0, kind="fanout", root=(5, 10, 0), terminals=[(15, 10, 0)]
-            ),
-            pathfinder.Net(
-                net_id=1, kind="fanout", root=(10, 5, 0), terminals=[(10, 15, 0)]
-            ),
+            pathfinder.Net(net_id=0, kind="fanout", root=(5, 10, 0), terminals=[(15, 10, 0)]),
+            pathfinder.Net(net_id=1, kind="fanout", root=(10, 5, 0), terminals=[(10, 15, 0)]),
         ]
         return passable, nets
 
     def test_low_hop_penalty_resolves_crossing(self):
         passable, nets = self._crossing_nets()
         graph = pathfinder.RoutingGraph(
-            passable=passable, hop_range=5, hop_penalty=0.5,
+            passable=passable,
+            hop_range=5,
+            hop_penalty=0.5,
         )
         assert pathfinder.pathfinder_route(nets, graph)
         total_hops = sum(len(n.hop_edges) for n in nets)
@@ -334,10 +324,14 @@ class TestHopPenalty:
     def test_no_hops_fails_crossing(self):
         passable, nets = self._crossing_nets()
         graph = pathfinder.RoutingGraph(
-            passable=passable, hop_range=0, hop_penalty=0.5,
+            passable=passable,
+            hop_range=0,
+            hop_penalty=0.5,
         )
         assert not pathfinder.pathfinder_route(
-            nets, graph, raise_on_failure=False,
+            nets,
+            graph,
+            raise_on_failure=False,
         )
 
 
@@ -350,13 +344,9 @@ class TestTwoPhaseRouting:
                 passable.add((x, y, 0))
 
         # Local: same-side roots and terminals
-        local = pathfinder.Net(
-            net_id=0, kind="fanout", root=(4, 10, 0), terminals=[(9, 10, 0)]
-        )
+        local = pathfinder.Net(net_id=0, kind="fanout", root=(4, 10, 0), terminals=[(9, 10, 0)])
         # Crossing: opposite-side root and terminal (cross center_x=10)
-        crossing = pathfinder.Net(
-            net_id=1, kind="fanout", root=(4, 8, 0), terminals=[(16, 8, 0)]
-        )
+        crossing = pathfinder.Net(net_id=1, kind="fanout", root=(4, 8, 0), terminals=[(16, 8, 0)])
         graph = pathfinder.RoutingGraph(passable=passable, hop_range=5, hop_penalty=0.5)
         pathfinder.pathfinder_route([local], graph)
         pathfinder.pathfinder_route([crossing], graph)
@@ -371,9 +361,7 @@ class TestRouteLayerNets:
         cutter = Entity(type="CutterDefaultInternalVariant", x=10, y=10, rotation=0, layer=0)
         bp = route.entities_to_blueprint([cutter], platform="Foundation_1x1")
 
-        nets = route_only.build_routing_nets(
-            [((10, 10), (17, 8))], bp, 0, "Foundation_1x1"
-        )
+        nets = route_only.build_routing_nets([((10, 10), (17, 8))], bp, 0, "Foundation_1x1")
         endpoints = {(c[0], c[1]) for n in nets for c in (n.root, n.terminals[0])}
         passable = route_only.build_passable_from_occupancy(
             bp, 0, "Foundation_1x1", endpoints=endpoints
@@ -392,14 +380,11 @@ class TestRouteLayerNets:
         assert all((e.x, e.y) != (10, 10) for e in entities)  # dangle cell untouched
         assert all((e.x, e.y) != (17, 8) for e in entities)  # port cell untouched
 
+    @pytest.mark.slow
     @pytest.mark.skipif(not HALF_SPLITTER.exists(), reason="Half Splitter not found")
-    @pytest.mark.xfail(
-        reason="Corrected classification creates crossing routes the pathfinder can't resolve yet",
-        raises=pathfinder.RoutingError,
-    )
     def test_half_splitter_layer0_all_dangles_route(self):
         bp = Blueprint.from_file(HALF_SPLITTER)
-        nets = route_only.route_layer_nets(bp, 0)
+        nets = route_only.route_layer_nets(bp, 0, max_seeds=10)
 
         assert len(nets) == 24
         entities = pathfinder.emit_entities(nets)
@@ -411,9 +396,7 @@ class TestPortSenderEntities:
         cutter = Entity(type="CutterDefaultInternalVariant", x=10, y=10, rotation=0, layer=0)
         bp = route.entities_to_blueprint([cutter], platform="Foundation_1x1")
 
-        nets = route_only.build_routing_nets(
-            [((10, 10), (17, 8))], bp, 0, "Foundation_1x1"
-        )
+        nets = route_only.build_routing_nets([((10, 10), (17, 8))], bp, 0, "Foundation_1x1")
         senders = route_only._port_sender_entities(nets, "Foundation_1x1", 0)
 
         assert len(senders) == 1
@@ -447,52 +430,39 @@ class TestMergeEntities:
 
 
 class TestRouteAndMerge:
+    @pytest.mark.slow
     @pytest.mark.skipif(not HALF_SPLITTER.exists(), reason="Half Splitter not found")
-    @pytest.mark.xfail(
-        reason="Corrected classification creates crossing routes the pathfinder can't resolve yet",
-        raises=pathfinder.RoutingError,
-    )
     def test_half_splitter_layer0_clears_unmatched_legs(self):
         bp = Blueprint.from_file(HALF_SPLITTER)
         assert lift.unmatched_legs(bp, 0) == 24
 
-        merged = route_only.route_and_merge(bp, 0)
+        merged = route_only.route_and_merge(bp, 0, max_seeds=10)
 
         assert lift.unmatched_legs(merged, 0) == 0
 
+    @pytest.mark.slow
     @pytest.mark.skipif(not HALF_SPLITTER.exists(), reason="Half Splitter not found")
-    @pytest.mark.xfail(
-        reason="Corrected classification creates crossing routes the pathfinder can't resolve yet",
-        raises=pathfinder.RoutingError,
-    )
     def test_half_splitter_layer0_no_entity_overlap(self):
         bp = Blueprint.from_file(HALF_SPLITTER)
-        merged = route_only.route_and_merge(bp, 0)
+        merged = route_only.route_and_merge(bp, 0, max_seeds=10)
 
         positions = [(e.x, e.y, e.layer) for e in all_entities(merged)]
         assert len(positions) == len(set(positions))
 
+    @pytest.mark.slow
     @pytest.mark.skipif(not HALF_SPLITTER.exists(), reason="Half Splitter not found")
-    @pytest.mark.xfail(
-        reason="Corrected classification creates crossing routes the pathfinder can't resolve yet",
-        raises=pathfinder.RoutingError,
-    )
     def test_half_splitter_layer0_new_edges_in_netlist(self):
         bp = Blueprint.from_file(HALF_SPLITTER)
-        merged = route_only.route_and_merge(bp, 0)
+        merged = route_only.route_and_merge(bp, 0, max_seeds=10)
 
         netlist = lift.trace_layer(merged, 0, contract_hops=True)
-        sink_edges = [
-            e for e in netlist.edges if netlist.nodes[e[1]].kind == "platform_out"
-        ]
+        sink_edges = [e for e in netlist.edges if netlist.nodes[e[1]].kind == "platform_out"]
         assert len(sink_edges) >= 24
 
 
 class TestCmdRoute:
+    @pytest.mark.slow
     @pytest.mark.skipif(not HALF_SPLITTER.exists(), reason="Half Splitter not found")
-    @pytest.mark.xfail(
-        reason="Corrected classification creates crossing routes the pathfinder can't resolve yet",
-    )
     def test_layer0_clears_unmatched_legs(self, tmp_path):
         out = tmp_path / "routed.spz2bp"
         args = argparse.Namespace(
@@ -502,31 +472,31 @@ class TestCmdRoute:
             layer=0,
             hop_range=None,
             viz=False,
+            clone=None,
         )
         cli.cmd_route(args)
 
         result = Blueprint.from_file(out)
         assert lift.unmatched_legs(result, 0) == 0
 
+    @pytest.mark.slow
     @pytest.mark.skipif(not HALF_SPLITTER.exists(), reason="Half Splitter not found")
-    @pytest.mark.xfail(
-        reason="Corrected classification creates crossing routes the pathfinder can't resolve yet",
-    )
-    def test_routing_failure_on_one_layer_does_not_abort_others(self, tmp_path):
+    def test_clone_routes_all_layers(self, tmp_path):
         out = tmp_path / "routed.spz2bp"
         args = argparse.Namespace(
             file=HALF_SPLITTER,
             output=out,
             platform=None,
-            layer=None,
+            layer=0,
             hop_range=None,
             viz=False,
+            clone=[1, 2],
         )
         cli.cmd_route(args)
 
         result = Blueprint.from_file(out)
         assert lift.unmatched_legs(result, 0) == 0
-        assert lift.unmatched_legs(result, 1) == 24
+        assert lift.unmatched_legs(result, 1) == 0
         assert lift.unmatched_legs(result, 2) == 0
 
     def test_empty_layer_is_a_noop(self, tmp_path):
@@ -538,7 +508,13 @@ class TestCmdRoute:
         out = tmp_path / "out.spz2bp"
 
         args = argparse.Namespace(
-            file=src, output=out, platform=None, layer=1, hop_range=None, viz=False
+            file=src,
+            output=out,
+            platform=None,
+            layer=1,
+            hop_range=None,
+            viz=False,
+            clone=None,
         )
         cli.cmd_route(args)
 

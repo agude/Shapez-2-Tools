@@ -280,6 +280,7 @@ def cmd_route(args: argparse.Namespace) -> None:
     hop_range = args.hop_range or lift.MAX_HOP_RANGE
     platform = args.platform or bp.entries[0].get("T", "Foundation_1x1")
 
+    clone_targets = getattr(args, "clone", None) or []
     for layer in layers:
         dangles = route_only.find_and_classify_dangles(bp, layer)
         if not dangles:
@@ -287,27 +288,34 @@ def cmd_route(args: argparse.Namespace) -> None:
             continue
         counts = Counter(d.half for d in dangles)
         print(
-            f"layer {layer}: {len(dangles)} dangles "
-            f"({counts['west']} west, {counts['east']} east)"
+            f"layer {layer}: {len(dangles)} dangles ({counts['west']} west, {counts['east']} east)"
         )
 
         ports = route_only.find_free_port_positions(bp, layer)
         west_ports, east_ports = route_only.partition_ports(ports, platform)
         west_dangles = [(d.x, d.y) for d in dangles if d.half == "west"]
         east_dangles = [(d.x, d.y) for d in dangles if d.half == "east"]
-        n_matched = len(
-            route_only.match_dangles_to_ports(west_dangles, west_ports)
-        ) + len(route_only.match_dangles_to_ports(east_dangles, east_ports))
+        n_matched = len(route_only.match_dangles_to_ports(west_dangles, west_ports)) + len(
+            route_only.match_dangles_to_ports(east_dangles, east_ports)
+        )
         print(f"layer {layer}: {n_matched}/{len(dangles)} dangles matched to ports")
 
+        clone_for_layer = [t for t in clone_targets if t != layer]
         try:
-            bp = route_only.route_and_merge(bp, layer, hop_range=hop_range, platform=platform)
+            bp = route_only.route_and_merge(
+                bp,
+                layer,
+                hop_range=hop_range,
+                platform=platform,
+                clone_to_layers=clone_for_layer,
+            )
         except pathfinder.RoutingError as exc:
             print(f"layer {layer}: routing failed ({exc}), leaving layer unchanged")
             continue
 
+        cloned = f", cloned to {clone_for_layer}" if clone_for_layer else ""
         remaining = lift.unmatched_legs(bp, layer)
-        print(f"layer {layer}: routed, {remaining} unmatched legs remaining")
+        print(f"layer {layer}: routed, {remaining} unmatched legs remaining{cloned}")
 
     bp.to_file(args.output)
     print(f"Wrote {args.output}")
@@ -427,6 +435,13 @@ def main() -> None:
     route_cmd.add_argument("--layer", type=int, help="Floor 0/1/2 (default: all)")
     route_cmd.add_argument("--hop-range", type=int, help="Override hop range")
     route_cmd.add_argument("--viz", action="store_true", help="Generate HTML visualization")
+    route_cmd.add_argument(
+        "--clone",
+        type=int,
+        nargs="+",
+        metavar="LAYER",
+        help="Clone the routing solution to these layers (e.g. --clone 1 2)",
+    )
     route_cmd.set_defaults(func=cmd_route)
 
     args = parser.parse_args()

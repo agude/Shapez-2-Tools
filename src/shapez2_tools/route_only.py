@@ -8,11 +8,14 @@ unconnected ends — existing machines and belts are immovable obstacles.  See
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 
 from shapez2_tools import lift, pathfinder, route
 from shapez2_tools.blueprint import Blueprint
 from shapez2_tools.generator import Entity, all_entities
+
+_MAX_SEEDS = 50
 
 
 @dataclass(frozen=True)
@@ -160,9 +163,7 @@ def _optimal_match(
         from scipy.optimize import linear_sum_assignment
     except ImportError:
         return match_dangles_to_ports(dangles, ports)
-    cost = np.array(
-        [[abs(dx - px) + abs(dy - py) for px, py in ports] for dx, dy in dangles]
-    )
+    cost = np.array([[abs(dx - px) + abs(dy - py) for px, py in ports] for dx, dy in dangles])
     row_ind, col_ind = linear_sum_assignment(cost)
     return [(dangles[int(r)], ports[int(c)]) for r, c in zip(row_ind, col_ind)]
 
@@ -321,6 +322,7 @@ def route_layer_nets(
     layer: int,
     hop_range: int = lift.MAX_HOP_RANGE,
     platform: str | None = None,
+    max_seeds: int = _MAX_SEEDS,
 ) -> list[pathfinder.Net]:
     """Run Chunks 1-5 for one layer: find, classify, match, build, and route.
 
@@ -335,43 +337,55 @@ def route_layer_nets(
     west_ports, east_ports = partition_ports(ports, platform)
     west_dangles = [(d.x, d.y) for d in dangles if d.half == "west"]
     east_dangles = [(d.x, d.y) for d in dangles if d.half == "east"]
-    pairs = _optimal_match(west_dangles, west_ports) + _optimal_match(
-        east_dangles, east_ports
-    )
+    pairs = _optimal_match(west_dangles, west_ports) + _optimal_match(east_dangles, east_ports)
 
-    nets = build_routing_nets(pairs, bp, layer, platform)
-    endpoints = {(c[0], c[1]) for n in nets for c in (n.root, n.terminals[0])}
+    base_nets = build_routing_nets(pairs, bp, layer, platform)
+    endpoints = {(c[0], c[1]) for n in base_nets for c in (n.root, n.terminals[0])}
     passable = build_passable_from_occupancy(bp, layer, platform, endpoints=endpoints)
     senders, receivers = _existing_hop_endpoints(bp, layer)
-    graph = pathfinder.RoutingGraph(
-        passable=passable,
-        hop_range=hop_range,
-        existing_senders=senders,
-        existing_receivers=receivers,
-        hop_penalty=0.5,
+
+    best_nets = None
+    best_overuse = float("inf")
+    for seed in range(max_seeds):
+        nets = copy.deepcopy(base_nets)
+        graph = pathfinder.RoutingGraph(
+            passable=passable,
+            hop_range=hop_range,
+            existing_senders=senders,
+            existing_receivers=receivers,
+            hop_penalty=-1.5,
+            sym_seed=seed,
+        )
+        _ITERS = 2000
+        ok = pathfinder.pathfinder_route(
+            nets,
+            graph,
+            raise_on_failure=False,
+            max_iters=_ITERS,
+            pres_fac_init=0.01,
+            pres_fac_mult=1.05,
+            hist_gain=0.1,
+            stall_window=_ITERS,
+            keep_best=True,
+        )
+        if ok:
+            _attach_boundary_edges(nets)
+            return nets
+        own_ids = {n.net_id for n in nets}
+        overused = [c for c, s in graph.occ.items() if len(s) > 1 and (s & own_ids)]
+        if len(overused) < best_overuse:
+            best_overuse = len(overused)
+            best_nets = nets
+
+    if best_nets is not None:
+        _attach_boundary_edges(best_nets)
+    raise pathfinder.RoutingError(
+        f"route_layer_nets: best {best_overuse} overused cells after {max_seeds} attempts",
+        overused=[],
     )
 
-    min_x, max_x, _min_y, _max_y = pathfinder._platform_bounds(platform)
-    center_x = (min_x + max_x) / 2
-    local_nets = [
-        n for n in nets if (n.root[0] < center_x) == (n.terminals[0][0] < center_x)
-    ]
-    crossing_nets = [
-        n for n in nets if (n.root[0] < center_x) != (n.terminals[0][0] < center_x)
-    ]
 
-    if local_nets:
-        pathfinder.pathfinder_route(local_nets, graph)
-    if crossing_nets:
-        pathfinder.pathfinder_route(crossing_nets, graph)
-
-    _attach_boundary_edges(nets)
-    return nets
-
-
-def _port_sender_entities(
-    nets: list[pathfinder.Net], platform: str, layer: int
-) -> list[Entity]:
+def _port_sender_entities(nets: list[pathfinder.Net], platform: str, layer: int) -> list[Entity]:
     """A ``BeltPortSenderInternalVariant`` for each net's matched port.
 
     The port cell itself is never a routing cell (Chunk 5 routes up to the
@@ -387,7 +401,10 @@ def _port_sender_entities(
         entities.append(
             Entity(
                 type="BeltPortSenderInternalVariant",
-                x=port[0], y=port[1], rotation=rotation, layer=layer,
+                x=port[0],
+                y=port[1],
+                rotation=rotation,
+                layer=layer,
             )
         )
     return entities
@@ -411,23 +428,34 @@ def merge_entities(bp: Blueprint, new_entities: list[Entity]) -> Blueprint:
     return route._rebuild_blueprint(bp, existing + new_entities)
 
 
+def _clone_entities_to_layer(entities: list[Entity], target_layer: int) -> list[Entity]:
+    return [
+        Entity(type=e.type, x=e.x, y=e.y, rotation=e.rotation, layer=target_layer) for e in entities
+    ]
+
+
 def route_and_merge(
     bp: Blueprint,
     layer: int,
     hop_range: int = lift.MAX_HOP_RANGE,
     platform: str | None = None,
+    clone_to_layers: list[int] | None = None,
+    max_seeds: int = _MAX_SEEDS,
 ) -> Blueprint:
     """Route the missing connections on *layer* and merge them into *bp*.
 
     Chains Chunks 1-6: find/classify dangles, find/partition free ports,
     match, build nets, route, emit routing belts plus the new port sender
     entities, and merge into the original blueprint's entity list.
-    ``platform`` overrides the type read from *bp*.
+
+    When *clone_to_layers* is given, the routing entities from *layer* are
+    duplicated onto those layers as well (useful when all layers share the
+    same machine layout).  ``platform`` overrides the type read from *bp*.
     """
     platform = platform or bp.entries[0]["T"]
-    nets = route_layer_nets(bp, layer, hop_range=hop_range, platform=platform)
-    new_entities = pathfinder.emit_entities(nets) + _port_sender_entities(
-        nets, platform, layer
-    )
+    nets = route_layer_nets(bp, layer, hop_range=hop_range, platform=platform, max_seeds=max_seeds)
+    new_entities = pathfinder.emit_entities(nets) + _port_sender_entities(nets, platform, layer)
+    source = list(new_entities)
+    for target in clone_to_layers or []:
+        new_entities += _clone_entities_to_layer(source, target)
     return merge_entities(bp, new_entities)
-
