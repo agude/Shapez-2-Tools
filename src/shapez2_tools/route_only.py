@@ -323,6 +323,7 @@ def route_layer_nets(
     hop_range: int = lift.MAX_HOP_RANGE,
     platform: str | None = None,
     max_seeds: int = _MAX_SEEDS,
+    pairs: list[tuple[tuple[int, int], tuple[int, int]]] | None = None,
 ) -> list[pathfinder.Net]:
     """Run Chunks 1-5 for one layer: find, classify, match, build, and route.
 
@@ -330,14 +331,20 @@ def route_layer_nets(
     ``pathfinder.emit_entities`` — merging the resulting belts plus a new
     ``BeltPortSenderInternalVariant`` at each matched port back into the
     blueprint is Chunk 6. ``platform`` overrides the type read from *bp*.
+
+    When *pairs* is given, skip dangle/port discovery and use the provided
+    ``(dangle_xy, port_xy)`` pairs directly.
     """
     platform = platform or bp.entries[0]["T"]
-    dangles = find_and_classify_dangles(bp, layer)
-    ports = find_free_port_positions(bp, layer)
-    west_ports, east_ports = partition_ports(ports, platform)
-    west_dangles = [(d.x, d.y) for d in dangles if d.half == "west"]
-    east_dangles = [(d.x, d.y) for d in dangles if d.half == "east"]
-    pairs = _optimal_match(west_dangles, west_ports) + _optimal_match(east_dangles, east_ports)
+    if pairs is None:
+        dangles = find_and_classify_dangles(bp, layer)
+        ports = find_free_port_positions(bp, layer)
+        west_ports, east_ports = partition_ports(ports, platform)
+        west_dangles = [(d.x, d.y) for d in dangles if d.half == "west"]
+        east_dangles = [(d.x, d.y) for d in dangles if d.half == "east"]
+        pairs = _optimal_match(west_dangles, west_ports) + _optimal_match(
+            east_dangles, east_ports
+        )
 
     base_nets = build_routing_nets(pairs, bp, layer, platform)
     endpoints = {(c[0], c[1]) for n in base_nets for c in (n.root, n.terminals[0])}
@@ -441,6 +448,7 @@ def route_and_merge(
     platform: str | None = None,
     clone_to_layers: list[int] | None = None,
     max_seeds: int = _MAX_SEEDS,
+    pairs: list[tuple[tuple[int, int], tuple[int, int]]] | None = None,
 ) -> Blueprint:
     """Route the missing connections on *layer* and merge them into *bp*.
 
@@ -451,9 +459,14 @@ def route_and_merge(
     When *clone_to_layers* is given, the routing entities from *layer* are
     duplicated onto those layers as well (useful when all layers share the
     same machine layout).  ``platform`` overrides the type read from *bp*.
+
+    When *pairs* is given, use those ``(dangle_xy, port_xy)`` pairs instead
+    of auto-discovering and matching dangles to ports.
     """
     platform = platform or bp.entries[0]["T"]
-    nets = route_layer_nets(bp, layer, hop_range=hop_range, platform=platform, max_seeds=max_seeds)
+    nets = route_layer_nets(
+        bp, layer, hop_range=hop_range, platform=platform, max_seeds=max_seeds, pairs=pairs
+    )
     new_entities = pathfinder.emit_entities(nets) + _port_sender_entities(nets, platform, layer)
     source = list(new_entities)
     for target in clone_to_layers or []:
