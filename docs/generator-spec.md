@@ -1,18 +1,20 @@
 # Blueprint Synthesis — Plan
 
-**Status:** Draft, updated 2026-06-16. **Gate 1 passes; gate 2 routing
+**Status:** Draft, updated 2026-06-19. **Gate 1 passes; gate 2 routing
 converges at 1-lane, 4-lane × 4-cutter (both floors 0 unmatched legs),
 8-lane × 4-cutter (~12s, L1=0 unmatched), and **16-lane × 4-cutter
-(~157s, 64 machines, columnar placement via WP-O)**. WP-O landed
-2026-06-16: `_detect_fan_topology` identifies pure fan-out topologies
-(all stage 0, unique source ownership, multi-cell machines, >32 machines);
-CP-SAT assigns per-lane x-columns (width ≤ 2, gap ≥ 1 between columns,
-ordered by source port x) with fixed R=1 rotation — no bands, no density
-constraints, no rotation element constraints. The column model produces 16
-vertical columns of 4 stacked cutters with 1-cell routing gaps, keeping the
-widest intra-lane belt run at 4 (exactly at hop limit). Routing converges
-with lift-enabled routing (~157s). **Next: WP-P (relay corridor routing)
-for the Full Belt Stacker class.**
+(64 machines, columnar placement via WP-O)**. Rust pathfinder backend
+landed 2026-06-19: the PathFinder A* + negotiated-congestion loop is
+ported to Rust (PyO3 + rayon), with parallel multi-seed sweeps. Both
+`strip_and_reroute` (synth path, including `_route_by_group`) and
+`route_layer_nets` (route-only path) dispatch to Rust when the extension
+is installed; pure-Python fallback preserved. Measured on the Half
+Splitter route-only benchmark (24 nets, 1476 cells, 68 existing hops):
+Python 10-seed sequential = 369s → Rust 50-seed parallel = 47s (8×
+faster despite 5× more seeds). Synthetic benchmark (12 crossing nets,
+40×40 grid): single solve 15.7×, 50-seed sweep 88×. Full test suite
+(349 tests) passes on both backends. **Next: WP-P (relay corridor
+routing) for the Full Belt Stacker class.**
 Gate 1: `test_synth_diagonal_full_belt_2x4` (8-pair diagonal on Foundation_2x4,
 32/32 edges, validates + interprets with hops). Gate 2:
 `test_half_splitter_2x4_routes` (16 lanes × 4 cutters/lane,
@@ -370,7 +372,7 @@ regression floor. The hard target is intra-platform **place-and-route**.
 
 ## 0. Status & handoff (2026-06-10)
 
-**Built and green** (268 tests pass, 0 xfail, `just test`, ruff clean):
+**Built and green** (349 tests pass, 0 xfail, `just test`, ruff clean):
 - `blueprint.py` — faithful `.spz2bp` codec.
 - `generator.py` — tile-replication generator: builds the rotator family
   (180/cw/ccw × 1×1/1×4) from one lifted tile. `Entity`, lift/stamp/build,
@@ -438,12 +440,18 @@ regression floor. The hard target is intra-platform **place-and-route**.
   `route_edge(s)`, `reroute_astar`), simple `route_fanout`/`route_fanin`,
   entity plumbing (`_all_entities`, `_rebuild_blueprint`,
   `entities_to_blueprint`), and the WP-C history in §7.2.
-- `pathfinder.py` — **WP-I done.** PathFinder negotiated-congestion router
+- `pathfinder.py` + `_rust_bridge.py` + `crates/router/` — **WP-I done;
+  Rust backend landed 2026-06-19.** PathFinder negotiated-congestion router
   (McMurchie & Ebeling 1995). Routes multi-terminal nets as Steiner trees
   (farthest-first growth, per-cell leg-legality, junctions emerge from tree
   branching) under iterative congestion pricing with rip-up-and-reroute.
-  Emit table is the programmatic inverse of `lift.routing_inout` (one shared
-  calibration table, both directions). **Gate flipped:** `cutter_12_to_24`
+  The Rust extension (`shapez2_router`, PyO3 + rayon) ports the A* inner
+  loop and negotiation outer loop; `_rust_bridge.py` marshals Python
+  `Net`/`RoutingGraph` to/from Rust, with incremental occ sync for
+  group-by-group routing. Multi-seed sweeps run in parallel across cores.
+  Falls back to the pure-Python implementation when the extension is not
+  installed. Emit table is the programmatic inverse of `lift.routing_inout`
+  (one shared calibration table, both directions). **Gate flipped:** `cutter_12_to_24`
   (66/66 edges) and `swap_diagonal` (162/162 edges) both round-trip through
   lift as isomorphic; single-cell corpus parity holds (all 7 fixtures).
   **WP-K hop routing:** `RoutingGraph(hop_range=N)` enables launcher/catcher
@@ -575,7 +583,7 @@ regression floor. The hard target is intra-platform **place-and-route**.
   `Foundation_2x4` with `hop_range=8`** (north-star gate 2, 0 unmatched legs,
   all 32 sinks land in their `Region` with the correct half,
   `test_synth_half_splitter_2x4`, ~12-17s).
-  **268 total tests, 0 xfail.**
+  **349 total tests, 0 xfail** (as of Rust backend landing, 2026-06-19).
 - CLI: `gen`, `diff`, `show`, `lift`, `viz`, `place`, `synth`. `synth` synthesizes
   a blueprint from a spec (e.g. `synth rotate_180` or `synth rotate_cw,rotate_cw`).
   `viz` renders a blueprint as HTML/SVG (belts as directional lines,
@@ -818,6 +826,7 @@ abstract netlist
  → placement w/ channel capacity  WP-M  rows + belt channels, CP-SAT, routability-aware
  → detailed routing               WP-I  PathFinder negotiated congestion …
      … on the unified 3-D graph   WP-J  floors + lifts      WP-K  launcher hops
+     … Rust backend (PyO3+rayon)  2026-06-19  parallel multi-seed, ~8× on real workloads
  → emit                           existing  junction typing via the calibration table
  → verify                         existing  lift→isomorphic (I4) · interpret (I3/I5) · validate (I6)
 ```
@@ -2318,9 +2327,11 @@ fan topologies (all stage 0, unique source ownership, multi-cell machines,
 >32 total machines); the column model in CP-SAT assigns per-lane x-columns
 (width ≤ 2, gap ≥ 1, ordered by source x) with fixed R=1 rotation. 16-lane
 × 4-cutter (64 machines) places in 16 columns of 4 stacked cutters and routes
-with `lift_enabled=True` in ~157s. `test_half_splitter_2x4_routes` is the
-gate test (full synthesis → routing → lift trace). 5 new placement unit tests
-(`TestColumnPlacement`). 297/297 pass, lint clean.
+with `lift_enabled=True`. Originally ~157s in Python; with the Rust backend
+(2026-06-19) routing time drops significantly via parallel multi-seed sweeps
+and faster A* inner loop. `test_half_splitter_2x4_routes` is the gate test
+(full synthesis → routing → lift trace). 5 new placement unit tests
+(`TestColumnPlacement`). 297/297 pass (349 total at Rust landing), lint clean.
 
 #### WP-P — relay corridor routing *(medium-term; Full Belt Stacker class)*
 
@@ -2383,10 +2394,11 @@ every cell and cross via hops/lifts.
 - F / G / H run in parallel whenever a stacker / painter / confidence need
   arises; none block the diagonal-extractor north star.
 - New deps (§6): A/H add `networkx`; D adds `OR-Tools`. Nothing else.
-- **Scaling arc (updated 2026-06-15): ~~I~~ ✓ → {~~J~~ ✓, ~~K~~ ✓, ~~L~~ ✓} →
+- **Scaling arc (updated 2026-06-19): ~~I~~ ✓ → {~~J~~ ✓, ~~K~~ ✓, ~~L~~ ✓} →
   ~~M~~ ✓ → ~~N~~ ✓ (tasks 1–8 done; gate 2 at 8-lane end-to-end, group
-  routing landed) → **O** (columnar placement, unblocks 16-lane) → **P**
-  (relay corridor routing, Full Belt Stacker class) → north star** (the Half
+  routing landed) → ~~O~~ ✓ (columnar placement) → ~~Rust backend~~ ✓
+  (PyO3+rayon, ~8× speedup, parallel multi-seed sweeps) → **P** (relay
+  corridor routing, Full Belt Stacker class) → north star** (the Half
   Splitter + the 48→96 full-belt diagonal extractor).
   Gate 1 passes; gate 2 routing converges at 1-lane, 4-lane × 1-cutter
   (0 unmatched, correct halves), and 4-lane × 4-cutter (routing converges,
@@ -2481,7 +2493,9 @@ every cell and cross via hops/lifts.
      16-lane Half Splitter by mirroring the human build's vertical lane
      columns; relay corridor routing (option A) enables the Full Belt Stacker
      class. See §7.2 WP-O and WP-P for tasks. **WP-O landed 2026-06-16:**
-     16-lane routes in ~157s with 64 machines in 16 columns. 297/297 pass.
+     16-lane routes with 64 machines in 16 columns (originally ~157s in
+     Python; now faster via Rust backend, 2026-06-19). 297/297 pass (349
+     total at Rust landing).
   WP-L's region-internal flow ordering remains open and non-blocking.
 
 ### 7.4 Test infrastructure to build first
