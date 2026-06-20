@@ -11,13 +11,16 @@ from shapez2_tools.synth import (
     MACHINE_RATES,
     SINK_TYPE,
     SRC_TYPE,
+    STACKER_TYPE,
     CutterSpec,
     DiagonalSpec,
     Spec,
+    StackerSpec,
     _monotone_sort,
     netlist_from_cutter_spec,
     netlist_from_diagonal_spec,
     netlist_from_spec,
+    netlist_from_stacker_spec,
     per_lane,
     synthesize,
     synthesize_cutter,
@@ -1053,3 +1056,95 @@ class TestRowPlacement:
         out_shapes = {str(s) for s in outputs.values()}
         assert "Ru--Ru--" in out_shapes
         assert "--Ru--Ru" in out_shapes
+
+
+class TestStackerNetlist:
+    """Unit tests for the stacker-fan abstract netlist builder."""
+
+    def test_four_lane_topology(self):
+        """4 lanes x 4 stackers: 8 sources, 16 machines, 4 sinks, 48 edges."""
+        spec = StackerSpec(lanes=4, platform="Foundation_1x1", stackers_per_lane=4)
+        abstract = netlist_from_stacker_spec(spec)
+
+        by_kind: dict[str, list] = {}
+        for n in abstract["nodes"]:
+            by_kind.setdefault(n["kind"], []).append(n)
+
+        assert len(by_kind["platform_in"]) == 8
+        assert len(by_kind["platform_out"]) == 4
+        assert len(by_kind["machine"]) == 16
+        assert len(abstract["edges"]) == 48
+        assert all(n["type"] == STACKER_TYPE for n in by_kind["machine"])
+
+    def test_each_machine_has_two_inputs_one_output(self):
+        spec = StackerSpec(lanes=2, platform="Foundation_1x1", stackers_per_lane=2)
+        abstract = netlist_from_stacker_spec(spec)
+
+        in_count: dict[str, int] = {}
+        out_count: dict[str, int] = {}
+        for s, d in abstract["edges"]:
+            out_count[s] = out_count.get(s, 0) + 1
+            in_count[d] = in_count.get(d, 0) + 1
+
+        machines = [n for n in abstract["nodes"] if n["kind"] == "machine"]
+        for m in machines:
+            assert in_count[m["id"]] == 2
+            assert out_count[m["id"]] == 1
+
+    def test_primary_and_secondary_sources_per_lane(self):
+        spec = StackerSpec(lanes=3, platform="Foundation_1x1", stackers_per_lane=1)
+        abstract = netlist_from_stacker_spec(spec)
+
+        sources = [n for n in abstract["nodes"] if n["kind"] == "platform_in"]
+        pri = [s for s in sources if s["id"].startswith("src_pri")]
+        sec = [s for s in sources if s["id"].startswith("src_sec")]
+        assert len(pri) == 3
+        assert len(sec) == 3
+
+    def test_default_stackers_per_lane(self):
+        spec = StackerSpec(lanes=2, platform="Foundation_1x1")
+        assert spec.stackers_per_lane == per_lane(STACKER_TYPE)
+
+    def test_too_many_lanes_raises(self):
+        """Foundation_1x1 has 4 sink ports on face 3."""
+        spec = StackerSpec(lanes=5, platform="Foundation_1x1")
+        with pytest.raises(ValueError, match="sink ports"):
+            netlist_from_stacker_spec(spec)
+
+    def test_matches_stacker2_l0_structure(self):
+        """Generated topology matches Stacker 2 L0 node counts.
+
+        L0 is the densest floor: 8 sources, 32 machines, 4 sinks.
+        That's 4 lanes × 8 stackers per lane, with 2 sources per lane
+        (primary + secondary).
+        """
+        import os
+        from pathlib import Path
+
+        bp_path = Path(os.path.expanduser(
+            "~/Projects/shapez_2_blueprints/Stackers/Stacker 2.spz2bp"
+        ))
+        if not bp_path.exists():
+            pytest.skip("Stacker 2 blueprint not available")
+
+        bp = Blueprint.from_file(bp_path)
+        nl = lift.trace(bp, contract_hops=True)
+
+        l0_machines = sum(1 for n in nl.nodes.values() if n.kind == "machine" and n.layer == 0)
+        l0_sources = sum(1 for n in nl.nodes.values() if n.kind == "platform_in" and n.layer == 0)
+        l0_sinks = sum(1 for n in nl.nodes.values() if n.kind == "platform_out" and n.layer == 0)
+
+        spec = StackerSpec(
+            lanes=l0_sinks,
+            platform="Foundation_1x1",
+            stackers_per_lane=l0_machines // l0_sinks,
+        )
+        abstract = netlist_from_stacker_spec(spec)
+
+        by_kind: dict[str, list] = {}
+        for n in abstract["nodes"]:
+            by_kind.setdefault(n["kind"], []).append(n)
+
+        assert len(by_kind["platform_in"]) == l0_sources
+        assert len(by_kind["machine"]) == l0_machines
+        assert len(by_kind["platform_out"]) == l0_sinks

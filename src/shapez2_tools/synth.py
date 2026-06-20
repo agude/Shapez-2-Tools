@@ -35,7 +35,7 @@ from pathlib import Path
 
 from shapez2_tools.blueprint import Blueprint
 from shapez2_tools.generator import FLOORS, Entity, functional_entities, stamp
-from shapez2_tools.place import SOURCE_FACE, _port_groups, place, side_regions
+from shapez2_tools.place import SINK_FACE, SOURCE_FACE, _port_groups, place, side_regions
 from shapez2_tools.route import entities_to_blueprint, reroute_with_junctions
 
 _DATA = Path(__file__).resolve().parent.parent.parent / "data"
@@ -52,6 +52,7 @@ SWAPPER_TYPE = "HalvesSwapperDefaultInternalVariant"
 # north sinks), putting the west-half output on the platform's west side
 # where it can reach a west-face Region sink (§7.2 WP-M2 problem 3).
 CUTTER_FAN_TYPE = "CutterDefaultInternalVariantMirrored"
+STACKER_TYPE = "StackerDefaultInternalVariant"
 
 SRC_TYPE = "BeltPortReceiverInternalVariant"
 SINK_TYPE = "BeltPortSenderInternalVariant"
@@ -70,6 +71,7 @@ MACHINE_RATES: dict[str, float] = {
     OP_TYPES["rotate_ccw"]: 1 / 2,
     OP_TYPES["half_destroy"]: 1 / 3,
     CUTTER_FAN_TYPE: 1 / 4,
+    STACKER_TYPE: 1 / 4,
 }
 
 
@@ -346,6 +348,101 @@ def synthesize_cutter(
         hop_range=hop_range,
         lift_enabled=lift_enabled,
     )
+
+
+@dataclass(frozen=True)
+class StackerSpec:
+    """Stacker fan: two sources per lane (primary + secondary), one sink.
+
+    Each lane has ``stackers_per_lane`` parallel stackers.  Each stacker
+    takes a primary input (same-floor belt) and a secondary input (belt
+    on L+1, cross-floor claim cell).  The output merges into a single
+    sink per lane.
+
+    Sources use the south face first; when ``2 × lanes`` exceeds
+    south-face capacity, additional sources spill to west and east faces
+    (CLAUDE.md: "the full-lane stacker takes its 8 full-belt inputs on
+    south+west+east and outputs 4 on north").
+    """
+
+    lanes: int
+    platform: str
+    stackers_per_lane: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.stackers_per_lane is None:
+            object.__setattr__(self, "stackers_per_lane", per_lane(STACKER_TYPE))
+
+    def validate(self) -> None:
+        with open(_DATA / "platforms.json") as f:
+            platforms = json.load(f)
+        plat = platforms[self.platform]
+        if "ports" in plat:
+            sink_ports = sum(1 for _, _, r in plat["ports"] if r == SINK_FACE)
+        else:
+            sink_ports = plat["ports_per_layer"]
+        if self.lanes > sink_ports:
+            raise ValueError(
+                f"{self.lanes} lanes need {self.lanes} sink ports on face "
+                f"{SINK_FACE}, but {self.platform} has {sink_ports}"
+            )
+        sources_needed = 2 * self.lanes
+        if "ports" in plat:
+            total_src = sum(1 for _, _, r in plat["ports"] if r != SINK_FACE)
+        else:
+            total_src = plat["ports_per_layer"] * 3
+        if sources_needed > total_src:
+            raise ValueError(
+                f"{self.lanes} lanes need {sources_needed} source ports, "
+                f"but {self.platform} has {total_src} non-sink ports"
+            )
+
+
+def netlist_from_stacker_spec(spec: StackerSpec) -> dict:
+    """Build an abstract netlist for the stacker fan (§7.2 WP-P).
+
+    Topology per lane i, with j ranging over ``stackers_per_lane``:
+      src_pri_i ─→ stack_i_j ─→ sink_i
+      src_sec_i ─→ stack_i_j
+
+    Each stacker independently receives both the primary and secondary
+    inputs.  The primary-to-stacker edges are same-floor; the
+    secondary-to-stacker edges are cross-floor (the router must lift the
+    secondary belt to L+1 to reach the stacker's claim cell).
+    """
+    spec.validate()
+    with open(_DATA / "platforms.json") as f:
+        platforms = json.load(f)
+    plat = platforms[spec.platform]
+    n_src_groups = len(_port_groups(plat, SOURCE_FACE))
+
+    nodes: list[dict] = []
+    edges: list[tuple[str, str]] = []
+
+    for i in range(spec.lanes):
+        src_pri = f"src_pri{i}"
+        src_sec = f"src_sec{i}"
+        sink = f"sink{i}"
+
+        pri_node: dict = {"id": src_pri, "type": SRC_TYPE, "kind": "platform_in"}
+        sec_node: dict = {"id": src_sec, "type": SRC_TYPE, "kind": "platform_in"}
+        if n_src_groups > 1:
+            pri_node["pin"] = "group"
+            pri_node["target"] = (SOURCE_FACE, i % n_src_groups)
+            sec_node["pin"] = "group"
+            sec_node["target"] = (SOURCE_FACE, (i + 1) % n_src_groups)
+        nodes.append(pri_node)
+        nodes.append(sec_node)
+        nodes.append({"id": sink, "type": SINK_TYPE, "kind": "platform_out"})
+
+        for j in range(spec.stackers_per_lane):
+            stk = f"stack{i}_{j}"
+            nodes.append({"id": stk, "type": STACKER_TYPE, "kind": "machine"})
+            edges.append((src_pri, stk))
+            edges.append((src_sec, stk))
+            edges.append((stk, sink))
+
+    return {"nodes": nodes, "edges": edges}
 
 
 def _sort_key(n: dict) -> tuple:

@@ -18,7 +18,10 @@ experiment): `trace(contract_hops=True)`, N-floor `_build_passable`,
 3-D `build_nets`/`strip_and_reroute`, root hop/lift protection in
 `_grow_tree`. Stacker 2 (84 nodes, 39 nets, 3 floors) passes
 structural test; congestion (87 overused cells) is expected at this
-density. **Next: WP-P task 3 (StackerSpec topology generator).**
+density. WP-P task 3 landed (StackerSpec topology generator): `StackerSpec`
+dataclass + `netlist_from_stacker_spec()` in `synth.py`, 6 tests pass
+including cross-validation against the lifted Stacker 2 L0 floor.
+**Next: WP-P task 4 (stacker placement).**
 Gate 1: `test_synth_diagonal_full_belt_2x4` (8-pair diagonal on Foundation_2x4,
 32/32 edges, validates + interprets with hops). Gate 2:
 `test_half_splitter_2x4_routes` (16 lanes × 4 cutters/lane,
@@ -2375,8 +2378,11 @@ cross-floor net routing via lifts. The Stacker 2 re-route experiment
 terminals are reachable — but hits congestion (87 overused cells at 60
 iterations). Key fix: `_grow_tree` root protection prevents hops/lifts
 from root cells with remaining terminals, avoiding Steiner tree lockout.
-Next: StackerSpec topology generator (task 3) and stacker placement
-(task 4).
+Task 3 (StackerSpec) landed: `StackerSpec` dataclass + `netlist_from_stacker_spec()`
+in `synth.py`. Per lane: 2 sources (primary + secondary), N stackers (default
+`per_lane(STACKER_TYPE)` = 4), 1 sink. Cross-validated against lifted Stacker 2
+L0 floor (8 sources, 32 machines, 4 sinks). 6 tests pass.
+Next: stacker placement (task 4).
 
 **Scope:**
 - **Router extension:** relay chain planning (where corridors go, how many
