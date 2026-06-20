@@ -439,13 +439,14 @@ def netlist_from_stacker_spec(spec: StackerSpec) -> dict:
 
         pri_node: dict = {"id": src_pri, "type": SRC_TYPE, "kind": "platform_in"}
         sec_node: dict = {"id": src_sec, "type": SRC_TYPE, "kind": "platform_in"}
-        if n_src_groups > 1 and not spill:
+        if n_src_groups > 1:
             pri_node["pin"] = "group"
             pri_node["target"] = (SOURCE_FACE, i % n_src_groups)
+        if spill:
+            sec_node["face"] = WEST_FACE if i % 2 == 0 else EAST_FACE
+        elif n_src_groups > 1:
             sec_node["pin"] = "group"
             sec_node["target"] = (SOURCE_FACE, (i + 1) % n_src_groups)
-        elif spill:
-            sec_node["face"] = WEST_FACE if i % 2 == 0 else EAST_FACE
         nodes.append(pri_node)
         nodes.append(sec_node)
         nodes.append({"id": sink, "type": SINK_TYPE, "kind": "platform_out"})

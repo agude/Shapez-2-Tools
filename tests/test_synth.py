@@ -1106,6 +1106,22 @@ class TestStackerNetlist:
         spec = StackerSpec(lanes=2, platform="Foundation_1x1")
         assert spec.stackers_per_lane == per_lane(STACKER_TYPE)
 
+    def test_four_lane_secondary_sources_spill_to_side_faces(self):
+        """When 2×lanes > south_capacity, secondary sources spill to west/east."""
+        spec = StackerSpec(lanes=4, platform="Foundation_1x1", stackers_per_lane=1)
+        abstract = netlist_from_stacker_spec(spec)
+
+        sec = [n for n in abstract["nodes"] if n["id"].startswith("src_sec")]
+        assert len(sec) == 4
+        faces = {n["id"]: n.get("face") for n in sec}
+        west_count = sum(1 for f in faces.values() if f == 2)
+        east_count = sum(1 for f in faces.values() if f == 0)
+        assert west_count == 2
+        assert east_count == 2
+
+        pri = [n for n in abstract["nodes"] if n["id"].startswith("src_pri")]
+        assert all("face" not in n for n in pri)
+
     def test_too_many_lanes_raises(self):
         """Foundation_1x1 has 4 sink ports on face 3."""
         spec = StackerSpec(lanes=5, platform="Foundation_1x1")
