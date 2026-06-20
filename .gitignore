@@ -9,3 +9,5 @@ build/
 .ruff_cache/
 *.html
 *.png
+target/
+Cargo.lock

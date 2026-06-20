@@ -35,6 +35,14 @@ decode file:
 info file:
     uv run shapez2 info "{{ file }}"
 
+# Build Rust extension (release)
+build-rust:
+    maturin develop --manifest-path crates/router/Cargo.toml --release
+
+# Build Rust extension (debug, faster compile)
+build-rust-debug:
+    maturin develop --manifest-path crates/router/Cargo.toml
+
 # Install git pre-commit hook
 hooks-install:
     @echo "Installing pre-commit hook..."

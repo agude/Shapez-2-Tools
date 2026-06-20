@@ -351,6 +351,41 @@ def route_layer_nets(
     passable = build_passable_from_occupancy(bp, layer, platform, endpoints=endpoints)
     senders, receivers = _existing_hop_endpoints(bp, layer)
 
+    _ITERS = 2000
+    _route_kwargs = dict(
+        max_iters=_ITERS,
+        pres_fac_init=0.01,
+        pres_fac_mult=1.05,
+        hist_gain=0.1,
+        stall_window=_ITERS,
+        keep_best=True,
+    )
+
+    from shapez2_tools._rust_bridge import RUST_AVAILABLE
+
+    if RUST_AVAILABLE:
+        from shapez2_tools._rust_bridge import rust_route_multi_seed
+
+        rust_seeds = max(max_seeds, _MAX_SEEDS)
+        graph_tmpl = pathfinder.RoutingGraph(
+            passable=passable,
+            hop_range=hop_range,
+            existing_senders=senders,
+            existing_receivers=receivers,
+            hop_penalty=-1.5,
+        )
+        ok, nets = rust_route_multi_seed(
+            base_nets, graph_tmpl, rust_seeds, **_route_kwargs
+        )
+        if ok:
+            _attach_boundary_edges(nets)
+            return nets
+        _attach_boundary_edges(nets)
+        raise pathfinder.RoutingError(
+            f"route_layer_nets: routing failed after {max_seeds} seeds (Rust)",
+            overused=[],
+        )
+
     best_nets = None
     best_overuse = float("inf")
     for seed in range(max_seeds):
@@ -363,17 +398,11 @@ def route_layer_nets(
             hop_penalty=-1.5,
             sym_seed=seed,
         )
-        _ITERS = 2000
         ok = pathfinder.pathfinder_route(
             nets,
             graph,
             raise_on_failure=False,
-            max_iters=_ITERS,
-            pres_fac_init=0.01,
-            pres_fac_mult=1.05,
-            hist_gain=0.1,
-            stall_window=_ITERS,
-            keep_best=True,
+            **_route_kwargs,
         )
         if ok:
             _attach_boundary_edges(nets)

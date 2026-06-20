@@ -1175,7 +1175,14 @@ def strip_and_reroute(
     if len(grouped) > 24:
         _route_by_group(routable, graph)
     else:
-        pathfinder_route(routable, graph)
+        from shapez2_tools._rust_bridge import RUST_AVAILABLE
+
+        if RUST_AVAILABLE:
+            from shapez2_tools._rust_bridge import rust_pathfinder_route
+
+            rust_pathfinder_route(routable, graph)
+        else:
+            pathfinder_route(routable, graph)
 
     # Add boundary edges connecting port cells to the tree's root/terminal
     # routing cells so the emit table can resolve correct belt types.

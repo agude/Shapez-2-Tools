@@ -1,0 +1,13 @@
+[package]
+name = "shapez2-router"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "shapez2_router"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.25", features = ["extension-module"] }
+rustc-hash = "2"
+rayon = "1"
