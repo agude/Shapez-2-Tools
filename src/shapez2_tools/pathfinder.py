@@ -1171,12 +1171,17 @@ def strip_and_reroute(
 
     graph = RoutingGraph(passable=passable, hop_range=hop_range, lift_enabled=lift_enabled)
 
+    from shapez2_tools._rust_bridge import RUST_AVAILABLE
+
     grouped = [n for n in routable if n.group is not None]
     if len(grouped) > 24:
-        _route_by_group(routable, graph)
-    else:
-        from shapez2_tools._rust_bridge import RUST_AVAILABLE
+        if RUST_AVAILABLE:
+            from shapez2_tools._rust_bridge import rust_route_by_group
 
+            rust_route_by_group(routable, graph)
+        else:
+            _route_by_group(routable, graph)
+    else:
         if RUST_AVAILABLE:
             from shapez2_tools._rust_bridge import rust_pathfinder_route
 

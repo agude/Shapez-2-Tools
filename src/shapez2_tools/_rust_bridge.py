@@ -30,7 +30,7 @@ except ImportError:
 
 
 def _net_to_dict(net: Net) -> dict:
-    return {
+    d = {
         "net_id": net.net_id,
         "kind": net.kind,
         "root": net.root,
@@ -38,7 +38,17 @@ def _net_to_dict(net: Net) -> dict:
         "root_offset": net.root_offset,
         "root_approach": net.root_approach,
         "terminal_exit": dict(net.terminal_exit),
+        "tree_cells": list(net.tree_cells),
+        "tree_edges": list(net.tree_edges),
+        "hop_edges": list(net.hop_edges),
+        "lift_edges": list(net.lift_edges),
     }
+    return d
+
+
+def _occ_to_dict(graph: RoutingGraph) -> dict[Cell, list[int]]:
+    """Serialize graph.occ for Rust: cell → list of net_ids."""
+    return {c: list(ids) for c, ids in graph.occ.items() if ids}
 
 
 def _params_dict(
@@ -59,6 +69,7 @@ def _params_dict(
         "existing_receivers": dict(graph.existing_receivers),
         "reserved": dict(graph.reserved),
         "hop_penalty": graph.hop_penalty,
+        "initial_occ": _occ_to_dict(graph),
         "max_iters": max_iters,
         "pres_fac_init": pres_fac_init,
         "pres_fac_mult": pres_fac_mult,
@@ -80,8 +91,15 @@ def _apply_results(nets: list[Net], results: list[dict]) -> None:
 
 
 def _sync_occ(nets: list[Net], graph: RoutingGraph) -> None:
-    """Sync net occupancy back into the Python graph."""
-    graph.occ.clear()
+    """Incrementally update graph.occ for the routed nets.
+
+    Removes old occupancy for the given nets' IDs, then adds their new
+    tree_cells.  Occupancy from other nets (e.g. previously-routed groups)
+    is preserved.
+    """
+    net_ids = {n.net_id for n in nets}
+    for s in graph.occ.values():
+        s -= net_ids
     for net in nets:
         for c in net.tree_cells:
             graph.occ[c].add(net.net_id)
@@ -132,6 +150,47 @@ def rust_pathfinder_route(
         )
 
     return ok
+
+
+def rust_route_by_group(
+    nets: list[Net],
+    graph: RoutingGraph,
+    *,
+    raise_on_failure: bool = True,
+) -> bool:
+    """Drop-in replacement for ``pathfinder._route_by_group`` using Rust.
+
+    Routes each lane group sequentially (occupancy carries over between
+    groups via ``initial_occ``), then runs a joint pass on all nets if
+    any overlaps remain.
+    """
+    groups: dict[int, list[Net]] = {}
+    ungrouped: list[Net] = []
+    for net in nets:
+        if net.group is not None:
+            groups.setdefault(net.group, []).append(net)
+        else:
+            ungrouped.append(net)
+
+    _ITERS = 2000
+    for g_idx in sorted(groups):
+        graph.hist.clear()
+        rust_pathfinder_route(
+            groups[g_idx], graph, raise_on_failure=False, max_iters=_ITERS
+        )
+
+    if ungrouped:
+        graph.hist.clear()
+        rust_pathfinder_route(ungrouped, graph, raise_on_failure=False, max_iters=_ITERS)
+
+    overused = [c for c, s in graph.occ.items() if len(s) > 1]
+    if not overused:
+        return True
+
+    graph.hist.clear()
+    return rust_pathfinder_route(
+        nets, graph, raise_on_failure=raise_on_failure, max_iters=_ITERS
+    )
 
 
 def rust_route_multi_seed(

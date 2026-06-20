@@ -28,6 +28,11 @@ pub struct NetInput {
     pub root_approach: Option<Dir>,
     /// terminal → (dx, dy)
     pub terminal_exit: HashMap<Cell, Dir>,
+    /// Pre-existing routing state (non-empty when re-routing after a group pass).
+    pub tree_cells: Vec<Cell>,
+    pub tree_edges: Vec<(Cell, Cell)>,
+    pub hop_edges: Vec<(Cell, Cell)>,
+    pub lift_edges: Vec<(Cell, Cell)>,
 }
 
 /// Graph + algorithm parameters — shared across seeds.
@@ -44,6 +49,8 @@ pub struct RoutingParams {
     /// cell → net_id reservations
     pub reserved: HashMap<Cell, i32>,
     pub hop_penalty: f64,
+    /// Pre-existing occupancy from previously-routed groups: cell → [net_ids].
+    pub initial_occ: HashMap<Cell, Vec<i32>>,
     // Negotiation parameters
     pub max_iters: i32,
     pub pres_fac_init: f64,
@@ -115,10 +122,10 @@ impl Net {
             root_offset: input.root_offset,
             root_approach: input.root_approach,
             terminal_exit: input.terminal_exit.iter().map(|(&k, &v)| (k, v)).collect(),
-            tree_cells: FxHashSet::default(),
-            tree_edges: Vec::new(),
-            hop_edges: FxHashSet::default(),
-            lift_edges: FxHashSet::default(),
+            tree_cells: input.tree_cells.iter().copied().collect(),
+            tree_edges: input.tree_edges.clone(),
+            hop_edges: input.hop_edges.iter().copied().collect(),
+            lift_edges: input.lift_edges.iter().copied().collect(),
         }
     }
 
@@ -158,13 +165,20 @@ impl RoutingGraph {
         for &c in &params.passable {
             base.insert(c, BASE);
         }
+        let mut occ: FxHashMap<Cell, FxHashSet<i32>> = FxHashMap::default();
+        for (cell, ids) in &params.initial_occ {
+            let set = occ.entry(*cell).or_default();
+            for &id in ids {
+                set.insert(id);
+            }
+        }
         RoutingGraph {
             passable: params.passable.clone(),
             hop_range: params.hop_range,
             lift_enabled: params.lift_enabled,
             base,
             hist,
-            occ: FxHashMap::default(),
+            occ,
             existing_senders: params.existing_senders.iter().map(|(&k, &v)| (k, v)).collect(),
             existing_receivers: params.existing_receivers.iter().map(|(&k, &v)| (k, v)).collect(),
             reserved: params.reserved.iter().map(|(&k, &v)| (k, v)).collect(),
