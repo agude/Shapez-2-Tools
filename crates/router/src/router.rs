@@ -83,6 +83,7 @@ fn grow_tree(
     let mut cell_out: FxHashMap<Cell, i32> = FxHashMap::default();
     let mut hop_cells: FxHashSet<Cell> = FxHashSet::default();
     let mut lift_cells: FxHashSet<Cell> = FxHashSet::default();
+    let mut sf_out_cells: FxHashSet<Cell> = FxHashSet::default();
     let mut cell_approach: FxHashMap<Cell, Dir> = FxHashMap::default();
     let mut item_recv_cells: FxHashSet<Cell> = FxHashSet::default();
 
@@ -336,8 +337,9 @@ fn grow_tree(
                     }
                 }
 
-                // Lift neighbors
-                if allow_hops && graph.lift_enabled {
+                // Lift neighbors — skip cells that already have same-floor
+                // output edges (a cell can't be both a lift and a belt).
+                if allow_hops && graph.lift_enabled && !sf_out_cells.contains(&cell) {
                     let (cx, cy, cl) = cell;
                     for dl in [-1i32, 1] {
                         let nb = (cx, cy, cl + dl);
@@ -437,6 +439,9 @@ fn grow_tree(
             }
             *cell_out.entry(prev_cell).or_insert(0) += 1;
             *cell_in.entry(pc).or_insert(0) += 1;
+            if pc.2 == prev_cell.2 {
+                sf_out_cells.insert(prev_cell);
+            }
             tree_cells.insert(pc);
             prev_cell = pc;
         }

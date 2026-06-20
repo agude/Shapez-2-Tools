@@ -26,12 +26,19 @@ sink-based fan detection in `_detect_fan_topology`, cross-floor L+1
 input port assignment in `_build_netlist`, in-column y-spacing ≥ 3,
 `StackerStraightInternalVariant` for south→north flow (input from
 south, output to north at R=1), secondary source face spill to
-west/east. `synthesize_stacker` end-to-end: 2L×1S and 2L×2S route
-with correct 3-D topology (all machines get 2 inputs via
-`trace(contract_hops=True)`). Larger sizes (4L×4S) hit L1 routing
-congestion — the secondary fan-out tree on L1 can't always reach all
-4 stacker claim cells per column. **Next: L1 fan-out routing fix,
-then WP-P task 6 (Full Belt Stacker acceptance).**
+west/east. WP-P task 5 landed (lift-branch conflict fix): the router
+placed lift edges at cells that also had same-floor output edges,
+creating entity overlaps (a cell can't be both a lift and a belt).
+Fixed in both Python `_grow_tree` and Rust `grow_tree` by tracking
+`sf_out_cells` — cells with same-floor output edges are blocked from
+lift expansion. `synthesize_stacker` end-to-end: 2L×1S, 2L×2S, and
+2L×4S all route with correct 3-D topology (all machines get 2 inputs
+via `trace(contract_hops=True)`). 4L specs hit congestion on
+Foundation_1x1 — expected, needs Foundation_2x2+.
+Rust performance scan: no further porting justified; trace() is
+~10ms, build_nets/strip_belts under 3ms, all <1% of total synthesis
+time vs the Rust pathfinder (100ms–2s). **Next: WP-P task 6
+(Full Belt Stacker acceptance on Foundation_2x4).**
 Gate 1: `test_synth_diagonal_full_belt_2x4` (8-pair diagonal on Foundation_2x4,
 32/32 edges, validates + interprets with hops). Gate 2:
 `test_half_splitter_2x4_routes` (16 lanes × 4 cutters/lane,
@@ -2415,8 +2422,28 @@ Results: 2L×1S (2 machines) and 2L×2S (4 machines) synthesize with correct
 3-D topology — all machines get 2 inputs (primary L0 + secondary L+1) per
 `trace(contract_hops=True)`. 2 end-to-end tests pass. Larger sizes (2L×4S,
 4L×4S) hit L1 routing congestion: the secondary fan-out tree on L1 can't
-always reach all stacker claim cells. Next: L1 fan-out fix, then Full Belt
-Stacker acceptance (task 6).
+always reach all stacker claim cells.
+
+Task 5 (lift-branch conflict fix) landed 2026-06-20. Root cause: the
+PathFinder's `_grow_tree` placed lift edges at cells that already had
+same-floor output edges. A cell can't be both a lift entity (1×2 floors)
+and a belt/splitter entity — entity overlap. The router produced routing
+trees that reached all terminals, but `_cell_to_entity` emitted a lift
+entity (taking the horizontal input and routing it up), losing the
+same-floor output edge (which continued the L0 spine). Fix: track
+`sf_out_cells` (cells with same-floor output edges) and block lift
+expansion from those cells. Applied to both Python `_grow_tree` and Rust
+`grow_tree`. The router now routes each branch to a DEDICATED lift cell
+off the spine (e.g. (9,y)→(8,y)→lift) rather than lifting from the spine
+itself. Results: 2L×1S, 2L×2S, 2L×4S all pass (8 machines on 2L×4S, all
+get 2 inputs). 4L specs hit congestion on Foundation_1x1 — expected, needs
+Foundation_2x2+. 3 end-to-end tests pass (67 total in test_synth.py).
+
+Rust performance scan (2026-06-20): `trace()` = 10.7ms, `build_nets` =
+0.65ms, `strip_belts` = 2.5ms, `_build_passable` = 0.83ms on Stacker 2
+(48 machines). All under 1% of total synthesis time vs Rust pathfinder
+(100ms–2s). No further porting justified. Next: WP-P task 6 (Full Belt
+Stacker acceptance on Foundation_2x4).
 
 **Scope:**
 - **Router extension:** relay chain planning (where corridors go, how many

@@ -144,6 +144,8 @@ def _grow_tree(
     cell_out: dict[Cell, int] = defaultdict(int)
     hop_cells: set[Cell] = set()
     lift_cells: set[Cell] = set()
+    lift_srcs: set[Cell] = set()
+    sf_out_cells: set[Cell] = set()
     cell_approach: dict[Cell, tuple[int, int]] = {}
     # Cells that will become hop receivers in item flow.  For fanout nets
     # that's the growth-direction hop destination (pc); for fanin nets it's
@@ -355,7 +357,10 @@ def _grow_tree(
                 if allow_hops and graph.lift_enabled:
                     # Root must stay branch-capable; a lift entity is
                     # (1,1) and would lock the root out of seeding.
-                    if not (cell == root and _unconnected > 1):
+                    # A cell can't be both a lift entry and a
+                    # belt/splitter — skip if it already has same-floor
+                    # output edges.
+                    if not (cell == root and _unconnected > 1) and cell not in sf_out_cells:
                         cx, cy, cl = cell
                         for dl in (1, -1):
                             nb = (cx, cy, cl + dl)
@@ -417,6 +422,7 @@ def _grow_tree(
             if pc[2] != prev_cell[2]:
                 lift_cells.add(prev_cell)
                 lift_cells.add(pc)
+                lift_srcs.add(prev_cell)
             elif md > 1:
                 hop_cells.add(prev_cell)
                 hop_cells.add(pc)
@@ -432,6 +438,8 @@ def _grow_tree(
                 cell_approach[pc] = (ux, uy)
             cell_out[prev_cell] += 1
             cell_in[pc] += 1
+            if pc[2] == prev_cell[2]:
+                sf_out_cells.add(prev_cell)
             tree_cells.add(pc)
             prev_cell = pc
 

@@ -1151,41 +1151,41 @@ class TestStackerNetlist:
         assert len(by_kind["platform_out"]) == l0_sinks
 
 
+def _assert_stacker_inputs(bp, expected_machines):
+    """Trace a stacker blueprint and assert every machine gets 2 inputs."""
+    from collections import defaultdict
+
+    nl = lift.trace(bp, contract_hops=True)
+    machines = [n for n in nl.nodes.values() if n.kind == "machine"]
+    assert len(machines) == expected_machines
+
+    in_count: dict[tuple, int] = defaultdict(int)
+    for s, d in nl.edges:
+        sn, dn = nl.nodes.get(s), nl.nodes.get(d)
+        if sn and dn and dn.kind == "machine":
+            in_count[d] += 1
+    assert all(c == 2 for c in in_count.values()), (
+        f"not all machines got 2 inputs: {dict(in_count)}"
+    )
+
+
 class TestStackerSynthesize:
     """End-to-end stacker synthesis tests."""
-
-    def test_two_lane_two_stackers_routes(self):
-        """2L×2S: synthesize → route → 3D trace validates."""
-        spec = StackerSpec(lanes=2, platform="Foundation_1x1", stackers_per_lane=2)
-        bp = synthesize_stacker(spec, hop_range=4)
-
-        nl = lift.trace(bp, contract_hops=True)
-        machines = [n for n in nl.nodes.values() if n.kind == "machine"]
-        assert len(machines) == 4
-
-        from collections import defaultdict
-
-        in_count: dict[tuple, int] = defaultdict(int)
-        for s, d in nl.edges:
-            sn, dn = nl.nodes.get(s), nl.nodes.get(d)
-            if sn and dn and dn.kind == "machine":
-                in_count[d] += 1
-        assert all(c == 2 for c in in_count.values())
 
     def test_two_lane_one_stacker_routes(self):
         """2L×1S: minimal stacker synthesis."""
         spec = StackerSpec(lanes=2, platform="Foundation_1x1", stackers_per_lane=1)
         bp = synthesize_stacker(spec, hop_range=4)
+        _assert_stacker_inputs(bp, expected_machines=2)
 
-        nl = lift.trace(bp, contract_hops=True)
-        machines = [n for n in nl.nodes.values() if n.kind == "machine"]
-        assert len(machines) == 2
+    def test_two_lane_two_stackers_routes(self):
+        """2L×2S: synthesize → route → 3D trace validates."""
+        spec = StackerSpec(lanes=2, platform="Foundation_1x1", stackers_per_lane=2)
+        bp = synthesize_stacker(spec, hop_range=4)
+        _assert_stacker_inputs(bp, expected_machines=4)
 
-        from collections import defaultdict
-
-        in_count: dict[tuple, int] = defaultdict(int)
-        for s, d in nl.edges:
-            sn, dn = nl.nodes.get(s), nl.nodes.get(d)
-            if sn and dn and dn.kind == "machine":
-                in_count[d] += 1
-        assert all(c == 2 for c in in_count.values())
+    def test_two_lane_four_stackers_routes(self):
+        """2L×4S: larger fan-out requires lift-branch conflict avoidance."""
+        spec = StackerSpec(lanes=2, platform="Foundation_1x1", stackers_per_lane=4)
+        bp = synthesize_stacker(spec, hop_range=4)
+        _assert_stacker_inputs(bp, expected_machines=8)
