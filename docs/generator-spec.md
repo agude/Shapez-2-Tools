@@ -21,7 +21,17 @@ structural test; congestion (87 overused cells) is expected at this
 density. WP-P task 3 landed (StackerSpec topology generator): `StackerSpec`
 dataclass + `netlist_from_stacker_spec()` in `synth.py`, 6 tests pass
 including cross-validation against the lifted Stacker 2 L0 floor.
-**Next: WP-P task 4 (stacker placement).**
+WP-P task 4 landed (stacker placement + end-to-end synthesis):
+sink-based fan detection in `_detect_fan_topology`, cross-floor L+1
+input port assignment in `_build_netlist`, in-column y-spacing ≥ 3,
+`StackerStraightInternalVariant` for south→north flow (input from
+south, output to north at R=1), secondary source face spill to
+west/east. `synthesize_stacker` end-to-end: 2L×1S and 2L×2S route
+with correct 3-D topology (all machines get 2 inputs via
+`trace(contract_hops=True)`). Larger sizes (4L×4S) hit L1 routing
+congestion — the secondary fan-out tree on L1 can't always reach all
+4 stacker claim cells per column. **Next: L1 fan-out routing fix,
+then WP-P task 6 (Full Belt Stacker acceptance).**
 Gate 1: `test_synth_diagonal_full_belt_2x4` (8-pair diagonal on Foundation_2x4,
 32/32 edges, validates + interprets with hops). Gate 2:
 `test_half_splitter_2x4_routes` (16 lanes × 4 cutters/lane,
@@ -2382,7 +2392,31 @@ Task 3 (StackerSpec) landed: `StackerSpec` dataclass + `netlist_from_stacker_spe
 in `synth.py`. Per lane: 2 sources (primary + secondary), N stackers (default
 `per_lane(STACKER_TYPE)` = 4), 1 sink. Cross-validated against lifted Stacker 2
 L0 floor (8 sources, 32 machines, 4 sinks). 6 tests pass.
-Next: stacker placement (task 4).
+
+Task 4 (stacker placement + end-to-end) landed 2026-06-20. Changes:
+
+- **Sink-based fan detection:** `_detect_fan_topology` falls back to sink-based
+  lane decomposition when machines have multiple source owners (the stacker
+  pattern: primary + secondary). Returns sink_id → [machine_ids].
+- **Cross-floor input ports:** `_build_netlist` includes L+1 claim cells in
+  `machine_in_cells`. Port assignment by axis-sorted proximity assigns primary
+  sources to L0 input cells and secondary sources to L+1 claim cells.
+- **In-column y-spacing:** Machines in the same fan lane get `|y_i - y_j| >= 3`
+  to prevent input/output approach cell conflicts.
+- **StackerStraight:** Changed from `StackerDefault` (bent output, east at R=1)
+  to `StackerStraight` (straight output, north at R=1). South→north flow:
+  primary input from south, output to north.
+- **Secondary source face spill:** When `2 × lanes > south_capacity`,
+  secondary sources spill to west/east faces alternately.
+- **`synthesize_stacker()`:** End-to-end pipeline with `lift_enabled=True`,
+  `floors=(layer, layer+1)`.
+
+Results: 2L×1S (2 machines) and 2L×2S (4 machines) synthesize with correct
+3-D topology — all machines get 2 inputs (primary L0 + secondary L+1) per
+`trace(contract_hops=True)`. 2 end-to-end tests pass. Larger sizes (2L×4S,
+4L×4S) hit L1 routing congestion: the secondary fan-out tree on L1 can't
+always reach all stacker claim cells. Next: L1 fan-out fix, then Full Belt
+Stacker acceptance (task 6).
 
 **Scope:**
 - **Router extension:** relay chain planning (where corridors go, how many

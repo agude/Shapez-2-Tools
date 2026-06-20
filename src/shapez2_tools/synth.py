@@ -52,7 +52,7 @@ SWAPPER_TYPE = "HalvesSwapperDefaultInternalVariant"
 # north sinks), putting the west-half output on the platform's west side
 # where it can reach a west-face Region sink (§7.2 WP-M2 problem 3).
 CUTTER_FAN_TYPE = "CutterDefaultInternalVariantMirrored"
-STACKER_TYPE = "StackerDefaultInternalVariant"
+STACKER_TYPE = "StackerStraightInternalVariant"
 
 SRC_TYPE = "BeltPortReceiverInternalVariant"
 SINK_TYPE = "BeltPortSenderInternalVariant"
@@ -409,12 +409,25 @@ def netlist_from_stacker_spec(spec: StackerSpec) -> dict:
     inputs.  The primary-to-stacker edges are same-floor; the
     secondary-to-stacker edges are cross-floor (the router must lift the
     secondary belt to L+1 to reach the stacker's claim cell).
+
+    Primary sources land on the south face.  When ``2 × lanes`` exceeds
+    the south-face port count, secondary sources spill to west and east
+    faces alternately (CLAUDE.md convention).
     """
     spec.validate()
     with open(_DATA / "platforms.json") as f:
         platforms = json.load(f)
     plat = platforms[spec.platform]
     n_src_groups = len(_port_groups(plat, SOURCE_FACE))
+
+    if "ports" in plat:
+        south_capacity = sum(1 for _, _, r in plat["ports"] if r == SOURCE_FACE)
+    else:
+        south_capacity = plat["ports_per_layer"]
+    spill = 2 * spec.lanes > south_capacity
+
+    WEST_FACE = 2
+    EAST_FACE = 0
 
     nodes: list[dict] = []
     edges: list[tuple[str, str]] = []
@@ -426,11 +439,13 @@ def netlist_from_stacker_spec(spec: StackerSpec) -> dict:
 
         pri_node: dict = {"id": src_pri, "type": SRC_TYPE, "kind": "platform_in"}
         sec_node: dict = {"id": src_sec, "type": SRC_TYPE, "kind": "platform_in"}
-        if n_src_groups > 1:
+        if n_src_groups > 1 and not spill:
             pri_node["pin"] = "group"
             pri_node["target"] = (SOURCE_FACE, i % n_src_groups)
             sec_node["pin"] = "group"
             sec_node["target"] = (SOURCE_FACE, (i + 1) % n_src_groups)
+        elif spill:
+            sec_node["face"] = WEST_FACE if i % 2 == 0 else EAST_FACE
         nodes.append(pri_node)
         nodes.append(sec_node)
         nodes.append({"id": sink, "type": SINK_TYPE, "kind": "platform_out"})
@@ -443,6 +458,23 @@ def netlist_from_stacker_spec(spec: StackerSpec) -> dict:
             edges.append((stk, sink))
 
     return {"nodes": nodes, "edges": edges}
+
+
+def synthesize_stacker(
+    spec: StackerSpec,
+    layer: int = 0,
+    *,
+    hop_range: int = 0,
+) -> Blueprint:
+    """Synthesize a stacker-fan blueprint from a spec (§7.2 WP-P)."""
+    return _lower(
+        netlist_from_stacker_spec(spec),
+        spec.platform,
+        layer,
+        hop_range=hop_range,
+        lift_enabled=True,
+        floors=(layer, layer + 1),
+    )
 
 
 def _sort_key(n: dict) -> tuple:
@@ -483,6 +515,7 @@ def _lower(
     *,
     hop_range: int = 0,
     lift_enabled: bool = False,
+    floors: tuple[int, ...] | None = None,
 ) -> Blueprint:
     """Lower an abstract netlist to a blueprint: sort → place → route → blueprint.
 
@@ -515,6 +548,7 @@ def _lower(
                 hop_range=hop_range,
                 platform=platform,
                 lift_enabled=lift_enabled,
+                floors=floors,
             )
         except RoutingError as err:
             if attempt == _MAX_RETRIES:

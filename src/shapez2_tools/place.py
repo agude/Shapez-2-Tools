@@ -94,15 +94,20 @@ def _detect_fan_topology(
 ) -> dict[str, list[str]] | None:
     """Detect whether the netlist has a fan topology suitable for columnar placement.
 
-    Returns a source_id → [machine_ids] lane decomposition when every machine
-    is stage 0 (no machine-to-machine edges), each machine is owned by exactly
-    one source, and at least 2 sources have machine children.  Returns None
-    otherwise (serial topologies, shared machines, etc.).
+    Returns an anchor_id → [machine_ids] lane decomposition.  The anchor is
+    the node whose port x determines column ordering — a source for single-input
+    fans (cutters), a sink for multi-input fans (stackers).
+
+    Columnar placement is used when all machines are stage 0 (no machine-to-
+    machine edges), each machine belongs to exactly one lane, and the topology
+    is dense enough to benefit from column constraints.
     """
     if not stages or max(stages.values()) != 0:
         return None
 
     node_by_id = {n["id"]: n for n in abstract["nodes"]}
+
+    # --- Source-based detection (cutters: 1 source per machine) ---
     src_to_machines: dict[str, list[str]] = defaultdict(list)
     machine_owner_count: dict[str, int] = defaultdict(int)
 
@@ -111,25 +116,37 @@ def _detect_fan_topology(
             src_to_machines[sid].append(did)
             machine_owner_count[did] += 1
 
-    if any(c > 1 for c in machine_owner_count.values()):
-        return None
+    if all(c == 1 for c in machine_owner_count.values()):
+        lanes = {s: ms for s, ms in src_to_machines.items() if ms}
+        if len(lanes) >= 2:
+            has_multi_cell = any(
+                _is_multi_cell(node_by_id[mid]["type"])
+                for mids in lanes.values()
+                for mid in mids
+            )
+            total_machines = sum(len(ms) for ms in lanes.values())
+            if has_multi_cell and total_machines > 32:
+                return lanes
 
-    lanes = {s: ms for s, ms in src_to_machines.items() if ms}
-    if len(lanes) < 2:
-        return None
+    # --- Sink-based detection (stackers: 2+ sources per machine, 1 sink) ---
+    # Only used when source-based detection failed due to multi-ownership
+    # (each machine fed by >1 source, e.g. stacker primary + secondary).
+    has_multi_owner = any(c > 1 for c in machine_owner_count.values())
+    if has_multi_owner:
+        sink_to_machines: dict[str, list[str]] = defaultdict(list)
+        machine_sink_count: dict[str, int] = defaultdict(int)
 
-    node_by_id = {n["id"]: n for n in abstract["nodes"]}
-    has_multi_cell = any(
-        _is_multi_cell(node_by_id[mid]["type"]) for mids in lanes.values() for mid in mids
-    )
-    if not has_multi_cell:
-        return None
+        for sid, did in abstract["edges"]:
+            if node_by_id[sid]["kind"] == "machine" and node_by_id[did]["kind"] == "platform_out":
+                sink_to_machines[did].append(sid)
+                machine_sink_count[sid] += 1
 
-    total_machines = sum(len(ms) for ms in lanes.values())
-    if total_machines <= 32:
-        return None
+        if all(c == 1 for c in machine_sink_count.values()):
+            lanes = {s: ms for s, ms in sink_to_machines.items() if ms}
+            if len(lanes) >= 2:
+                return lanes
 
-    return lanes
+    return None
 
 
 def _covers_bucket(
@@ -618,6 +635,17 @@ def place(
             left = sorted_col_sids[i]
             right = sorted_col_sids[i + 1]
             model.add(col_hi_x[left] + 2 <= col_lo_x[right])
+
+        # In-column vertical spacing: machines in the same lane need y-spacing
+        # >= 3 so each machine's input/output approach cells don't conflict.
+        for sid, mids in fan_lanes.items():
+            placed_mids = [mid for mid in mids if mid in m_y]
+            for i in range(len(placed_mids)):
+                for j in range(i + 1, len(placed_mids)):
+                    ai, aj = placed_mids[i], placed_mids[j]
+                    abs_dy = model.new_int_var(0, grid_h, f"cldy_{ai}_{aj}")
+                    model.add_abs_equality(abs_dy, m_y[ai] - m_y[aj])
+                    model.add(abs_dy >= 3)
 
     else:
         # --- BAND MODEL (serial topologies) ---
@@ -1213,13 +1241,18 @@ def _build_netlist(
             rotation=r,
         )
 
-    # Build port cells for multi-cell machines.
-    machine_in_cells: dict[str, list[tuple[int, int]]] = {}
+    # Build port cells for multi-cell machines.  Include cross-floor input
+    # cells (e.g. stacker L+1 claim) so that multi-input port assignment can
+    # split primary (L0) and secondary (L+1) edges.
+    machine_in_cells: dict[str, list[tuple]] = {}
     machine_out_cells: dict[str, list[tuple[int, int]]] = {}
     for nid, (x, y, r) in machine_positions.items():
         n = node_by_id[nid]
         fp = lift._machine_footprint(n["type"], r)
-        ins = [(x + dx, y + dy) for (dx, dy, dl), (i, _o) in fp.items() if i and dl == 0]
+        ins: list[tuple] = []
+        for (dx, dy, dl), (i, _o) in fp.items():
+            if i:
+                ins.append((x + dx, y + dy) if dl == 0 else (x + dx, y + dy, dl))
         outs = [(x + dx, y + dy) for (dx, dy, dl), (_i, o) in fp.items() if o and dl == 0]
         machine_in_cells[nid] = ins
         machine_out_cells[nid] = outs
