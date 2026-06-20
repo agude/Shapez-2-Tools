@@ -13,8 +13,12 @@ Splitter route-only benchmark (24 nets, 1476 cells, 68 existing hops):
 Python 10-seed sequential = 369s → Rust 50-seed parallel = 47s (8×
 faster despite 5× more seeds). Synthetic benchmark (12 crossing nets,
 40×40 grid): single solve 15.7×, 50-seed sweep 88×. Full test suite
-(349 tests) passes on both backends. **Next: WP-P (relay corridor
-routing) for the Full Belt Stacker class.**
+(349 tests) passes on both backends. WP-P tasks 1–2 landed (3-D routing pipeline + Stacker 2 re-route
+experiment): `trace(contract_hops=True)`, N-floor `_build_passable`,
+3-D `build_nets`/`strip_and_reroute`, root hop/lift protection in
+`_grow_tree`. Stacker 2 (84 nodes, 39 nets, 3 floors) passes
+structural test; congestion (87 overused cells) is expected at this
+density. **Next: WP-P task 3 (StackerSpec topology generator).**
 Gate 1: `test_synth_diagonal_full_belt_2x4` (8-pair diagonal on Foundation_2x4,
 32/32 edges, validates + interprets with hops). Gate 2:
 `test_half_splitter_2x4_routes` (16 lanes × 4 cutters/lane,
@@ -2362,7 +2366,19 @@ global floor count overpromises.
 single floor) prove dense human builds do not use spacing gaps. They fill
 every cell and cross via hops/lifts.
 
-**Scope (not yet tasked — depends on WP-O landing first):**
+**Status (2026-06-19):** Task 1 (3-D pipeline) and task 2 (Stacker 2
+re-route experiment) landed. The routing pipeline now handles 3-D
+netlists from `trace(contract_hops=True)` with N-floor passable sets,
+per-floor machine exclusion (including stacker L+1 claim cells), and
+cross-floor net routing via lifts. The Stacker 2 re-route experiment
+(84 nodes, 39 nets, 3 floors) passes the structural test — all
+terminals are reachable — but hits congestion (87 overused cells at 60
+iterations). Key fix: `_grow_tree` root protection prevents hops/lifts
+from root cells with remaining terminals, avoiding Steiner tree lockout.
+Next: StackerSpec topology generator (task 3) and stacker placement
+(task 4).
+
+**Scope:**
 - **Router extension:** relay chain planning (where corridors go, how many
   chains each carries), interleaved sender/receiver placement within
   corridors (the `S.S.S R.R.R` pattern from `docs/research.md`), modified
