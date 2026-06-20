@@ -147,7 +147,7 @@ def _translate_nets(
         rx, ry, rl = net.root
 
         if net.kind == "fanout":
-            d = cell_out_dir.get((rx, ry))
+            d = cell_out_dir.get((rx, ry, rl))
             if d:
                 new_root = (rx + d[0], ry + d[1], rl)
                 if new_root in passable:
@@ -157,7 +157,7 @@ def _translate_nets(
             new_terms = []
             for tx, ty, tl in net.terminals:
                 orig = (tx, ty, tl)
-                d = cell_in_dir.get((tx, ty))
+                d = cell_in_dir.get((tx, ty, tl))
                 if d:
                     new_t = (tx + d[0], ty + d[1], tl)
                     if new_t in passable:
@@ -169,7 +169,7 @@ def _translate_nets(
                     new_terms.append(orig)
             net.terminals = new_terms
         else:  # fanin: root is the sink
-            d = cell_in_dir.get((rx, ry))
+            d = cell_in_dir.get((rx, ry, rl))
             if d:
                 new_root = (rx + d[0], ry + d[1], rl)
                 if new_root in passable:
@@ -179,7 +179,7 @@ def _translate_nets(
             new_terms = []
             for tx, ty, tl in net.terminals:
                 orig = (tx, ty, tl)
-                d = cell_out_dir.get((tx, ty))
+                d = cell_out_dir.get((tx, ty, tl))
                 if d:
                     new_t = (tx + d[0], ty + d[1], tl)
                     if new_t in passable:

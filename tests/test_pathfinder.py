@@ -301,7 +301,7 @@ class TestPortBandPassability:
             port_edges=[((2, 8), (17, 8))],
         )
 
-        passable = _build_passable(nl, machine_cells=set(), layer=0, platform="Foundation_1x1")
+        passable = _build_passable(nl, machine_cells=set(), floors=(0,), platform="Foundation_1x1")
 
         # Net-endpoint ports, on the ring, stay passable.
         assert (2, 8, 0) in passable
@@ -345,7 +345,7 @@ class TestPortBandPassability:
             port_edges=[((0, 0), (4, 0))],
         )
 
-        passable = _build_passable(nl, machine_cells=set(), layer=0, platform=None)
+        passable = _build_passable(nl, machine_cells=set(), floors=(0,), platform=None)
 
         # margin=5 around x in [0,4], y in [0,0]
         for x in range(-5, 10):
@@ -841,18 +841,19 @@ class TestLiftAwareStripAndReroute:
         passable = _build_passable(
             nl,
             machine_cells=set(),
-            layer=0,
+            floors=(0, 1),
             platform="Foundation_1x1",
-            extra_layers=(1,),
         )
 
         # Floor 0 keeps the ring-exclusion behaviour (TestPortBandPassability).
         assert (2, 9, 0) in passable
         assert (2, 2, 0) not in passable
-        # Floor 1 is fully open, including ring cells with no port on floor 0.
-        for x in range(min_x, max_x + 1):
-            for y in range(min_y, max_y + 1):
-                assert (x, y, 1) in passable
+        # Floor 1 applies the same ring exclusion (the boundary ring is a
+        # platform-specific zone on all floors).  Interior cells are passable.
+        assert (9, 9, 1) in passable
+        assert (2, 2, 1) not in passable  # ring, no port
+        # Port xy positions are passable on any floor (ring override).
+        assert (2, 9, 1) in passable
 
     def test_topological_crossing_converges_with_lift(self):
         """Two nets that must cross on one floor (west<->east and
@@ -1072,3 +1073,47 @@ class TestCorpusParity:
         rerouted_bp = strip_and_reroute(stripped, original, layer=0)
         rerouted = lift.trace_layer(rerouted_bp, 0)
         assert lift.isomorphic(original, rerouted)
+
+
+BLUEPRINTS = Path(__file__).resolve().parent.parent.parent / "shapez_2_blueprints"
+
+
+class TestStacker3DReroute:
+    """WP-P task 2: 3-D strip-and-reroute on stacker blueprints.
+
+    Validates the 3-D routing pipeline: ``trace(contract_hops=True)`` →
+    ``build_nets`` (3-D keys) → ``strip_and_reroute(floors=...)`` across
+    all 3 floors. Stacker cross-floor connections (L+1 secondary input)
+    exercise the full 3-D machine_cells and passable set.
+    """
+
+    @pytest.mark.skipif(
+        not (BLUEPRINTS / "Stackers" / "Stacker 2.spz2bp").exists(),
+        reason="blueprints repo not present",
+    )
+    def test_stacker2_reroute_no_structural_errors(self):
+        """3-D pipeline resolves all nets without structural errors.
+
+        Congestion may prevent full convergence (overused cells > 0) at
+        this density; the test asserts no *structural* failures
+        (unreachable terminals) and caps overuse.
+        """
+        from shapez2_tools.pathfinder import RoutingError, strip_and_reroute
+
+        bp = Blueprint.from_file(BLUEPRINTS / "Stackers" / "Stacker 2.spz2bp")
+        nl = lift.trace(bp, contract_hops=True)
+
+        try:
+            strip_and_reroute(
+                bp,
+                nl,
+                layer=0,
+                hop_range=lift.MAX_HOP_RANGE,
+                platform="Foundation_1x1",
+                floors=(0, 1, 2),
+            )
+        except RoutingError as e:
+            if "unreachable" in str(e):
+                raise
+            assert e.overused is not None
+            assert len(e.overused) < 150, f"too many overused cells: {len(e.overused)}"

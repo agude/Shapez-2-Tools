@@ -734,6 +734,7 @@ def strip_belts(bp: Blueprint, layer: int, netlist: lift.Netlist | None = None) 
                 netlist is not None
                 and k in ("platform_in", "platform_out")
                 and (e.x, e.y) not in netlist.nodes
+                and (e.x, e.y, e.layer) not in netlist.nodes
             ):
                 continue  # skip interior hop endpoint
         kept.append(e)

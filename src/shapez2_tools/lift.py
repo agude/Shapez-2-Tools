@@ -560,7 +560,7 @@ def _occupancy_3d(bp: Blueprint) -> dict[Cell3D, _Cell]:
     return occ
 
 
-def trace(bp: Blueprint) -> Netlist:
+def trace(bp: Blueprint, *, contract_hops: bool = False) -> Netlist:
     """Recover the machine/port-level netlist spanning all floors.
 
     Cross-floor connections (e.g. a stacker's L+1 secondary input) are
@@ -569,15 +569,44 @@ def trace(bp: Blueprint) -> Netlist:
     entity on floor *L*.  Belt paths are contracted exactly as in
     ``trace_layer``.
 
+    When ``contract_hops`` is True, interior hop endpoints are resolved
+    per-floor and contracted (same logic as ``trace_layer``'s
+    ``contract_hops``, applied to each layer independently).
+
     Node keys are 3-D ``(x, y, layer)`` tuples (stored in a ``Netlist``
     whose ``Cell`` alias is nominally 2-D — the runtime types are 3-tuples).
     """
+    hop_send_to_recv: dict[Cell3D, Cell3D] = {}
+    hop_positions: set[Cell3D] = set()
+
+    if contract_hops:
+        port_positions = _platform_port_positions(bp)
+        layers_present = {e.layer for e in all_entities(bp)}
+        for layer in sorted(layers_present):
+            pairs = _resolve_hops(bp, layer, port_positions)
+            for s2d, r2d in pairs:
+                s3d: Cell3D = (*s2d, layer)
+                r3d: Cell3D = (*r2d, layer)
+                hop_send_to_recv[s3d] = r3d
+                hop_positions.add(s3d)
+                hop_positions.add(r3d)
+
     occ = _occupancy_3d(bp)
+
+    if contract_hops:
+        for pos in hop_positions:
+            if pos in occ:
+                c = occ[pos]
+                occ[pos] = _Cell(c.ins, c.outs, c.anchor, is_belt=True)
+
     anchor_cells: dict[Cell3D, list[Cell3D]] = defaultdict(list)
     for cell, c in occ.items():
         anchor_cells[c.anchor].append(cell)
 
     def down(cell: Cell3D) -> list[Cell3D]:
+        if cell in hop_send_to_recv:
+            recv = hop_send_to_recv[cell]
+            return [recv] if recv in occ else []
         result: list[Cell3D] = []
         c = occ[cell]
         target_layer = cell[2] + c.out_layer_delta
@@ -608,8 +637,10 @@ def trace(bp: Blueprint) -> Netlist:
     for e in all_entities(bp):
         if e.type in DECORATION_TYPES:
             continue
+        key: Cell3D = (e.x, e.y, e.layer)
+        if key in hop_positions:
+            continue
         if kind(e.type) not in ("belt", "lift"):
-            key: Cell3D = (e.x, e.y, e.layer)
             nodes[key] = Node(e.x, e.y, e.layer, e.type, kind(e.type), e.rotation)
             node_anchors.add(key)
 

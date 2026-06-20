@@ -244,13 +244,19 @@ def _grow_tree(
                         prev[nb] = cell
                         heapq.heappush(pq, (new_cost + _h(nb), nb[1], nb[0], nb[2], new_cost, nb))
 
+                _unconnected = sum(1 for t in terminals if t not in tree_cells)
+
                 if allow_hops and graph.hop_range > 0:
                     cx, cy, cl = cell
                     # No hops from cells reached via hops (can't overlay
                     # launcher + catcher on the same cell), and no hops from
                     # lift exits (lift entity already occupies the cell).
                     _skip_hops = False
-                    if cell in prev:
+                    # Root must stay branch-capable for multi-terminal trees;
+                    # a hop sender entity would lock it to one direction.
+                    if cell == root and _unconnected > 1:
+                        _skip_hops = True
+                    elif cell in prev:
                         p = prev[cell]
                         if abs(cx - p[0]) + abs(cy - p[1]) > 1:
                             _skip_hops = True
@@ -347,28 +353,31 @@ def _grow_tree(
                                     )
 
                 if allow_hops and graph.lift_enabled:
-                    cx, cy, cl = cell
-                    for dl in (1, -1):
-                        nb = (cx, cy, cl + dl)
-                        if nb not in graph.passable:
-                            continue
-                        if nb in tree_cells and nb != terminal:
-                            continue
-                        if nb in expanded:
-                            continue
-                        occ_set = graph.occ.get(nb, set())
-                        overuse = max(0, len(occ_set - {net.net_id}) + 1 - 1)
-                        bias = (hash(nb) ^ net.net_id ^ graph.sym_seed) % 997 * SYMMETRY_BREAK
-                        enter = (LIFT_COST + graph.hist.get(nb, 0.0) + bias) * (
-                            1 + pres_fac * overuse
-                        )
-                        new_cost = cost + enter
-                        if new_cost < dist.get(nb, float("inf")):
-                            dist[nb] = new_cost
-                            prev[nb] = cell
-                            heapq.heappush(
-                                pq, (new_cost + _h(nb), nb[1], nb[0], nb[2], new_cost, nb)
+                    # Root must stay branch-capable; a lift entity is
+                    # (1,1) and would lock the root out of seeding.
+                    if not (cell == root and _unconnected > 1):
+                        cx, cy, cl = cell
+                        for dl in (1, -1):
+                            nb = (cx, cy, cl + dl)
+                            if nb not in graph.passable:
+                                continue
+                            if nb in tree_cells and nb != terminal:
+                                continue
+                            if nb in expanded:
+                                continue
+                            occ_set = graph.occ.get(nb, set())
+                            overuse = max(0, len(occ_set - {net.net_id}) + 1 - 1)
+                            bias = (hash(nb) ^ net.net_id ^ graph.sym_seed) % 997 * SYMMETRY_BREAK
+                            enter = (LIFT_COST + graph.hist.get(nb, 0.0) + bias) * (
+                                1 + pres_fac * overuse
                             )
+                            new_cost = cost + enter
+                            if new_cost < dist.get(nb, float("inf")):
+                                dist[nb] = new_cost
+                                prev[nb] = cell
+                                heapq.heappush(
+                                    pq, (new_cost + _h(nb), nb[1], nb[0], nb[2], new_cost, nb)
+                                )
 
             return found, dist, prev
 
@@ -597,15 +606,21 @@ def _assign_net_groups(
                 node_group[dst] = node_group[src]
                 changed = True
 
+    def _lookup(cell: Cell) -> int | None:
+        if cell in node_group:
+            return node_group[cell]
+        key_2d = (cell[0], cell[1])
+        return node_group.get(key_2d)
+
     for net in nets:
-        root_2d = (net.root[0], net.root[1])
-        if root_2d in node_group:
-            net.group = node_group[root_2d]
+        g = _lookup(net.root)
+        if g is not None:
+            net.group = g
             continue
         for t in net.terminals:
-            t_2d = (t[0], t[1])
-            if t_2d in node_group:
-                net.group = node_group[t_2d]
+            g = _lookup(t)
+            if g is not None:
+                net.group = g
                 break
 
 
@@ -865,31 +880,39 @@ def emit_entities(nets: list[Net]) -> list[Entity]:
 
 def _node_cell_ports(
     node: lift.Node,
-) -> dict[tuple[int, int], tuple[frozenset, frozenset]]:
-    """Per-cell (ins, outs) for a node, in absolute coordinates."""
+) -> dict[Cell, tuple[frozenset, frozenset]]:
+    """Per-cell (ins, outs) for a node, in absolute 3-D coordinates.
+
+    For machines with cross-floor footprints (e.g. stackers claiming a
+    secondary-input cell on L+1), all occupied cells are returned — not
+    just ``dl == 0``.
+    """
     if node.kind == "machine":
         fp = lift._machine_footprint(node.type, node.rotation)
         return {
-            (node.x + dx, node.y + dy): (ins, outs)
+            (node.x + dx, node.y + dy, node.layer + dl): (ins, outs)
             for (dx, dy, dl), (ins, outs) in fp.items()
-            if dl == 0
         }
     ins, outs = lift._inout(node.type, node.rotation)
-    return {(node.x, node.y): (ins, outs)}
+    return {(node.x, node.y, node.layer): (ins, outs)}
 
 
 def build_nets(
     netlist: lift.Netlist,
     layer: int = 0,
 ) -> tuple[
-    list[Net], dict[tuple[int, int], tuple[int, int]], dict[tuple[int, int], tuple[int, int]]
+    list[Net], dict[Cell, tuple[int, int]], dict[Cell, tuple[int, int]]
 ]:
     """Extract nets from a netlist's port_edges at cell granularity.
 
-    Returns (nets, cell_out_dir, cell_in_dir).
+    Handles both 2-D netlists (from ``trace_layer``, keys ``(x, y)``) and
+    3-D netlists (from ``trace``, keys ``(x, y, layer)``).  For 2-D
+    netlists the ``layer`` parameter supplies the missing floor coordinate.
+
+    Returns (nets, cell_out_dir, cell_in_dir) — all keyed by 3-D ``Cell``.
     """
-    cell_out_dir: dict[tuple[int, int], tuple[int, int]] = {}
-    cell_in_dir: dict[tuple[int, int], tuple[int, int]] = {}
+    cell_out_dir: dict[Cell, tuple[int, int]] = {}
+    cell_in_dir: dict[Cell, tuple[int, int]] = {}
     for node in netlist.nodes.values():
         for cell, (ins, outs) in _node_cell_ports(node).items():
             if outs:
@@ -899,12 +922,17 @@ def build_nets(
 
     cell_edges = sorted(netlist.port_edges if netlist.port_edges else netlist.edges)
 
+    def _to_3d(pos: tuple) -> Cell:
+        if len(pos) == 3:
+            return pos  # type: ignore[return-value]
+        return (pos[0], pos[1], layer)
+
     # Group edges into connected components by shared endpoint cells.
-    outgoing: dict[tuple[int, int], list[tuple[int, int]]] = defaultdict(list)
-    incoming: dict[tuple[int, int], list[tuple[int, int]]] = defaultdict(list)
+    outgoing: dict[Cell, list[Cell]] = defaultdict(list)
+    incoming: dict[Cell, list[Cell]] = defaultdict(list)
     for src, dst in cell_edges:
-        outgoing[src].append(dst)
-        incoming[dst].append(src)
+        outgoing[_to_3d(src)].append(_to_3d(dst))
+        incoming[_to_3d(dst)].append(_to_3d(src))
 
     # Guard: reject N→M components (a cell that is both a fan-out source and
     # a fan-in destination from unrelated edges). None exist in current specs;
@@ -921,7 +949,7 @@ def build_nets(
     # Build nets: group edges into fan-out (1→N) and fan-in (N→1) nets.
     # Process fan-out first (1→N where N≥2), then fan-in (N→1 where N≥2),
     # then remaining 1→1 edges.
-    visited_edges: set[tuple[tuple[int, int], tuple[int, int]]] = set()
+    visited_edges: set[tuple[Cell, Cell]] = set()
     nets: list[Net] = []
     net_id = 0
 
@@ -929,13 +957,9 @@ def build_nets(
     for src, dsts in outgoing.items():
         if len(dsts) < 2:
             continue
-        edges_from_src = [(src, d) for d in dsts]
-        for e in edges_from_src:
-            visited_edges.add(e)
-
-        root_3d: Cell = (src[0], src[1], layer)
-        term_3d: list[Cell] = [(d[0], d[1], layer) for d in dsts]
-        nets.append(Net(net_id=net_id, kind="fanout", root=root_3d, terminals=term_3d))
+        for d in dsts:
+            visited_edges.add((src, d))
+        nets.append(Net(net_id=net_id, kind="fanout", root=src, terminals=list(dsts)))
         net_id += 1
 
     # Fan-in: many sources to one (N≥2), only for edges not already in a fan-out
@@ -945,10 +969,7 @@ def build_nets(
             continue
         for s in remaining:
             visited_edges.add((s, dst))
-
-        root_3d = (dst[0], dst[1], layer)
-        term_3d: list[Cell] = [(s[0], s[1], layer) for s in remaining]
-        nets.append(Net(net_id=net_id, kind="fanin", root=root_3d, terminals=term_3d))
+        nets.append(Net(net_id=net_id, kind="fanin", root=dst, terminals=remaining))
         net_id += 1
 
     # Remaining 1→1 edges
@@ -957,9 +978,7 @@ def build_nets(
             if (src, dst) in visited_edges:
                 continue
             visited_edges.add((src, dst))
-            root_3d = (src[0], src[1], layer)
-            term_3d = [(dst[0], dst[1], layer)]
-            nets.append(Net(net_id=net_id, kind="fanout", root=root_3d, terminals=term_3d))
+            nets.append(Net(net_id=net_id, kind="fanout", root=src, terminals=[dst]))
             net_id += 1
 
     return nets, cell_out_dir, cell_in_dir
@@ -987,11 +1006,10 @@ def _platform_bounds(platform: str) -> tuple[int, int, int, int]:
 
 def _build_passable(
     netlist: lift.Netlist,
-    machine_cells: set[tuple[int, int]],
-    layer: int,
+    machine_cells: set[Cell],
+    floors: tuple[int, ...],
     *,
     platform: str | None = None,
-    extra_layers: tuple[int, ...] = (),
 ) -> set[Cell]:
     """Build the routing graph's passable cell set.
 
@@ -1008,16 +1026,15 @@ def _build_passable(
     positions plus a margin (synthetic test fixtures); there is no port
     ring to exclude.
 
-    ``extra_layers`` (WP-N 3e, lift-aware routing) opens additional floors
-    over the same (x, y) bounding box, fully passable — no ``machine_cells``
-    or ring exclusion. ``netlist`` is single-floor, so an extra floor has no
-    machines or ports of its own; this matches the WP-N task-1 finding that
-    floor+1 is a fully open second layer for the human's single-floor build.
+    ``machine_cells`` is a 3-D set of ``(x, y, floor)`` tuples — all cells
+    occupied by machines (including cross-floor footprints such as a
+    stacker's L+1 claim cell). Each floor in ``floors`` is opened for
+    routing; machine cells are excluded per-floor.
     """
     if platform is not None:
         min_x, max_x, min_y, max_y = _platform_bounds(platform)
-        port_cells = {
-            pos
+        port_xy = {
+            (pos[0], pos[1])
             for pos, node in netlist.nodes.items()
             if node.kind in ("platform_in", "platform_out")
         }
@@ -1027,17 +1044,23 @@ def _build_passable(
         margin = 5
         min_x, max_x = min(all_x) - margin, max(all_x) + margin
         min_y, max_y = min(all_y) - margin, max(all_y) + margin
-        port_cells = set()
+        port_xy: set[tuple[int, int]] = set()
 
     passable: set[Cell] = set()
+    on_ring_fn = (
+        (lambda x, y: x in (min_x, max_x) or y in (min_y, max_y))
+        if platform is not None
+        else (lambda x, y: False)
+    )
     for x in range(min_x, max_x + 1):
         for y in range(min_y, max_y + 1):
-            if (x, y) not in machine_cells:
-                on_ring = platform is not None and (x in (min_x, max_x) or y in (min_y, max_y))
-                if not on_ring or (x, y) in port_cells:
-                    passable.add((x, y, layer))
-            for extra in extra_layers:
-                passable.add((x, y, extra))
+            on_ring = on_ring_fn(x, y)
+            for fl in floors:
+                if (x, y, fl) in machine_cells:
+                    continue
+                if on_ring and (x, y) not in port_xy:
+                    continue
+                passable.add((x, y, fl))
     return passable
 
 
@@ -1049,42 +1072,42 @@ def strip_and_reroute(
     hop_range: int = 0,
     platform: str | None = None,
     lift_enabled: bool = False,
+    floors: tuple[int, ...] | None = None,
 ) -> Blueprint:
     """Strip belts and re-route via PathFinder.
 
-    Drop-in replacement for ``route.reroute_with_junctions``. When
-    ``lift_enabled`` is True (WP-N task 3e), floor ``layer + 1`` is opened as
-    a fully passable second layer and ``RoutingGraph`` may route nets through
-    it via lift edges — the 2-floor approach validated by the WP-N task-1
-    experiment (single floor doesn't converge at Half-Splitter scale; 2
-    floors with lifts does).
+    Drop-in replacement for ``route.reroute_with_junctions``.
+
+    ``floors`` specifies which floors to open for routing.  When omitted,
+    floors are derived from ``lift_enabled``: ``(layer,)`` when False,
+    ``(layer, layer + 1)`` when True.  For 3-floor stacker blueprints
+    pass ``floors=(0, 1, 2)`` explicitly.
     """
-    extra_layers = (layer + 1,) if lift_enabled else ()
+    if floors is None:
+        floors = (layer, layer + 1) if lift_enabled else (layer,)
 
     stripped = strip_belts(bp, layer=layer, netlist=netlist)
-    for extra in extra_layers:
-        stripped = strip_belts(stripped, layer=extra)
-    kept = [e for e in _all_entities(stripped) if e.layer in (layer, *extra_layers)]
+    for fl in floors:
+        if fl != layer:
+            stripped = strip_belts(stripped, layer=fl, netlist=netlist)
+    kept = [e for e in _all_entities(stripped) if e.layer in floors]
 
-    # Machine/port positions on the primary floor → obstacles (not passable).
-    machine_cells: set[tuple[int, int]] = set()
+    # Machine/port positions across all floors → obstacles (not passable).
+    # Includes cross-floor footprint cells (e.g. stacker L+1 claim).
+    machine_cells: set[Cell] = set()
     for e in kept:
-        if e.layer != layer:
-            continue
-        machine_cells.add((e.x, e.y))
+        machine_cells.add((e.x, e.y, e.layer))
         if lift.kind(e.type) == "machine":
             fp = lift._machine_footprint(e.type, e.rotation)
             for dx, dy, dl in fp:
-                if dl == 0:
-                    machine_cells.add((e.x + dx, e.y + dy))
+                machine_cells.add((e.x + dx, e.y + dy, e.layer + dl))
 
     # Build passable set from platform bounds (preferred) or node bounding box.
     passable = _build_passable(
         netlist,
         machine_cells,
-        layer,
+        floors,
         platform=platform,
-        extra_layers=extra_layers,
     )
 
     # Build nets
@@ -1108,7 +1131,7 @@ def strip_and_reroute(
         port_of_term[net.net_id] = []
 
         if net.kind == "fanout":
-            d = cell_out_dir.get((rx, ry))
+            d = cell_out_dir.get((rx, ry, rl))
             if d:
                 new_root = (rx + d[0], ry + d[1], rl)
                 if new_root in passable:
@@ -1118,7 +1141,7 @@ def strip_and_reroute(
             new_terms = []
             for tx, ty, tl in net.terminals:
                 orig = (tx, ty, tl)
-                d = cell_in_dir.get((tx, ty))
+                d = cell_in_dir.get((tx, ty, tl))
                 if d:
                     new_t = (tx + d[0], ty + d[1], tl)
                     if new_t in passable:
@@ -1131,7 +1154,7 @@ def strip_and_reroute(
                     new_terms.append(orig)
             net.terminals = new_terms
         else:  # fanin: root is the sink
-            d = cell_in_dir.get((rx, ry))
+            d = cell_in_dir.get((rx, ry, rl))
             if d:
                 new_root = (rx + d[0], ry + d[1], rl)
                 if new_root in passable:
@@ -1141,7 +1164,7 @@ def strip_and_reroute(
             new_terms = []
             for tx, ty, tl in net.terminals:
                 orig = (tx, ty, tl)
-                d = cell_out_dir.get((tx, ty))
+                d = cell_out_dir.get((tx, ty, tl))
                 if d:
                     new_t = (tx + d[0], ty + d[1], tl)
                     if new_t in passable:
@@ -1169,7 +1192,7 @@ def strip_and_reroute(
             raise RoutingError(f"root could not leave port cell ({net.root[0]}, {net.root[1]})")
         routable.append(net)
 
-    graph = RoutingGraph(passable=passable, hop_range=hop_range, lift_enabled=lift_enabled)
+    graph = RoutingGraph(passable=passable, hop_range=hop_range, lift_enabled=len(floors) > 1)
 
     from shapez2_tools._rust_bridge import RUST_AVAILABLE
 
