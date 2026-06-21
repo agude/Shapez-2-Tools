@@ -1237,6 +1237,34 @@ def strip_and_reroute(
                 else:
                     net.tree_edges.insert(0, (port_cell, routing_cell))
 
+    # Fix hop-on-lift collisions: a hop receiver and lift entity can't share
+    # a cell.  When a cell is both hop destination and lift source, shorten
+    # the hop by one step so the receiver lands on the adjacent cell.
+    for net in routable:
+        hop_dsts = {d for _, d in net.hop_edges}
+        lift_srcs_set = {s for s, _ in net.lift_edges}
+        collisions = hop_dsts & lift_srcs_set
+        if not collisions:
+            continue
+        new_edges: list[tuple[Cell, Cell]] = []
+        for s, d in net.tree_edges:
+            if s[2] == d[2] and abs(d[0] - s[0]) + abs(d[1] - s[1]) > 1 and d in collisions:
+                dx = d[0] - s[0]
+                dy = d[1] - s[1]
+                ux = (1 if dx > 0 else -1) if dx else 0
+                uy = (1 if dy > 0 else -1) if dy else 0
+                short_d = (d[0] - ux, d[1] - uy, d[2])
+                new_edges.append((s, short_d))
+                new_edges.append((short_d, d))
+                net.tree_cells.add(short_d)
+            else:
+                new_edges.append((s, d))
+        net.tree_edges = new_edges
+        net.hop_edges = {
+            (s, d) for s, d in new_edges
+            if s[2] == d[2] and abs(d[0] - s[0]) + abs(d[1] - s[1]) > 1
+        }
+
     # Emit: tree cells → belt entities with correct type/rotation.
     belt_entities: list[Entity] = []
     for net in routable:
