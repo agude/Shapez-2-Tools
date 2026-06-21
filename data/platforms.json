@@ -118,12 +118,18 @@
     ]
   },
   "Foundation_2x4_Flipped": {
-    "description": "Flipped 2x4 (full-belt stacker)",
+    "description": "Flipped 2x4 (full-belt stacker): sources on south, sinks on north, shifted origin",
     "units": [4, 2],
     "grid_size": [80, 40],
     "interior": [76, 36],
-    "verified": "model",
-    "_note": "No template available. Geometry assumed identical to Foundation_2x4; flip may affect port arrangement."
+    "verified": "blueprint",
+    "ports_per_layer": 16,
+    "ports": [
+      [-18,-12,0], [-18,-11,0], [-18,-10,0], [-18,-9,0], [-18,8,0], [-18,9,0], [-18,10,0], [-18,11,0],
+      [-12,-18,1], [-11,-18,1], [-10,-18,1], [-9,-18,1], [8,-18,1], [9,-18,1], [10,-18,1], [11,-18,1], [28,-18,1], [29,-18,1], [30,-18,1], [31,-18,1], [48,-18,1], [49,-18,1], [50,-18,1], [51,-18,1],
+      [57,-12,2], [57,-11,2], [57,-10,2], [57,-9,2], [57,8,2], [57,9,2], [57,10,2], [57,11,2],
+      [-12,17,3], [-11,17,3], [-10,17,3], [-9,17,3], [8,17,3], [9,17,3], [10,17,3], [11,17,3], [28,17,3], [29,17,3], [30,17,3], [31,17,3], [48,17,3], [49,17,3], [50,17,3], [51,17,3]
+    ]
   },
   "Foundation_3x3": {
     "description": "3x3 platform",

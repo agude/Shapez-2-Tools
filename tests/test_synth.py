@@ -1205,3 +1205,27 @@ class TestStackerSynthesize:
         spec = StackerSpec(lanes=2, platform="Foundation_1x1", stackers_per_lane=4)
         bp = synthesize_stacker(spec, hop_range=4)
         _assert_stacker_inputs(bp, expected_machines=8)
+
+    def test_four_lane_one_stacker_2x2_routes(self):
+        """4L×1S on Foundation_2x2: multi-group platform, no hops."""
+        spec = StackerSpec(lanes=4, platform="Foundation_2x2", stackers_per_lane=1)
+        bp = synthesize_stacker(spec, hop_range=0)
+        _assert_stacker_inputs(bp, expected_machines=4)
+
+    def test_four_lane_two_stackers_2x2_routes(self):
+        """4L×2S on Foundation_2x2: 8 machines, no hops."""
+        spec = StackerSpec(lanes=4, platform="Foundation_2x2", stackers_per_lane=2)
+        bp = synthesize_stacker(spec, hop_range=0)
+        _assert_stacker_inputs(bp, expected_machines=8)
+
+    def test_eight_lane_two_stackers_2x2_routes(self):
+        """8L×2S on Foundation_2x2: 16 machines, stress test."""
+        spec = StackerSpec(lanes=8, platform="Foundation_2x2", stackers_per_lane=2)
+        bp = synthesize_stacker(spec, hop_range=0)
+        _assert_stacker_inputs(bp, expected_machines=16)
+
+    def test_sixteen_lane_one_stacker_2x4_routes(self):
+        """16L×1S on Foundation_2x4: 16 machines across 4 port groups."""
+        spec = StackerSpec(lanes=16, platform="Foundation_2x4", stackers_per_lane=1)
+        bp = synthesize_stacker(spec, hop_range=0)
+        _assert_stacker_inputs(bp, expected_machines=16)
