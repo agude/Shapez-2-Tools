@@ -1,6 +1,6 @@
 # Blueprint Synthesis — Plan
 
-**Status:** Draft, updated 2026-06-19. **Gate 1 passes; gate 2 routing
+**Status:** Draft, updated 2026-06-20. **Gate 1 passes; gate 2 routing
 converges at 1-lane, 4-lane × 4-cutter (both floors 0 unmatched legs),
 8-lane × 4-cutter (~12s, L1=0 unmatched), and **16-lane × 4-cutter
 (64 machines, columnar placement via WP-O)**. Rust pathfinder backend
@@ -37,8 +37,20 @@ via `trace(contract_hops=True)`). 4L specs hit congestion on
 Foundation_1x1 — expected, needs Foundation_2x2+.
 Rust performance scan: no further porting justified; trace() is
 ~10ms, build_nets/strip_belts under 3ms, all <1% of total synthesis
-time vs the Rust pathfinder (100ms–2s). **Next: WP-P task 6
-(Full Belt Stacker acceptance on Foundation_2x4).**
+time vs the Rust pathfinder (100ms–2s).
+**Multi-platform stacker synthesis landed 2026-06-20.** Foundation_2x4_Flipped
+port data calibrated from the Full Belt Stacker blueprint (48 ports, face
+numbering fixed to match inward-rotation convention). Key finding:
+`hop_range=0` eliminates all trace failures — hops near lift transitions
+create BeltPortSender/Receiver patterns that `_resolve_hops` can't pair,
+breaking `lift.trace()` chain following. Working frontier (all `hop_range=0`,
+all machines verified at 2 inputs via `trace(contract_hops=True)`):
+Foundation_1x1: 2L×1S through 4L×2S (8m). Foundation_2x2: 4L×1S through
+8L×2S (16m). Foundation_2x4: 16L×1S (16m). Foundation_2x4_Flipped: 16L×2S
+(32m). Congestion limit: ~16 machines for multi-stacker-per-lane configs
+(L1 claim-cell density); single-stacker-per-lane scales higher.
+**Next: WP-P task 6 (Full Belt Stacker acceptance) — needs multi-face sink
+support (48 lanes need 48 sinks but face 3 only has 16 ports).**
 Gate 1: `test_synth_diagonal_full_belt_2x4` (8-pair diagonal on Foundation_2x4,
 32/32 edges, validates + interprets with hops). Gate 2:
 `test_half_splitter_2x4_routes` (16 lanes × 4 cutters/lane,
