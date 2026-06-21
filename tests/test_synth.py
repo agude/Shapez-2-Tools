@@ -1229,3 +1229,11 @@ class TestStackerSynthesize:
         spec = StackerSpec(lanes=16, platform="Foundation_2x4", stackers_per_lane=1)
         bp = synthesize_stacker(spec, hop_range=0)
         _assert_stacker_inputs(bp, expected_machines=16)
+
+    def test_sixteen_lane_two_stackers_2x4_flipped_routes(self):
+        """16L×2S on Foundation_2x4_Flipped: 32 machines, target platform."""
+        spec = StackerSpec(
+            lanes=16, platform="Foundation_2x4_Flipped", stackers_per_lane=2
+        )
+        bp = synthesize_stacker(spec, hop_range=0)
+        _assert_stacker_inputs(bp, expected_machines=32)
