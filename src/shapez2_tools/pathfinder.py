@@ -264,13 +264,17 @@ def _grow_tree(
                             _skip_hops = True
                         elif p[2] != cl:
                             _skip_hops = True
+                    # A hop sender entity can't also feed adjacent cells
+                    # via step.  Block hops from cells that already have
+                    # same-floor step outputs (for both fanout and fanin).
+                    if not _skip_hops and cell in sf_out_cells:
+                        _skip_hops = True
                     # For fanin nets, the hop *sender* becomes the
                     # item-flow *receiver* (edge flip).  A receiver
                     # entity has ins=∅ — it can't accept from adjacent
-                    # cells.  Block hops from cells that already have
-                    # outgoing step edges (which flip into incoming) or
-                    # that are adjacent to an existing receiver (whose
-                    # output would point at this new receiver).
+                    # cells.  Block hops from cells adjacent to existing
+                    # receivers (whose output would point at this new
+                    # receiver).
                     if not _skip_hops and net.kind == "fanin":
                         if cell_out[cell] > 0:
                             _skip_hops = True

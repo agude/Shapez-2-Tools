@@ -678,6 +678,23 @@ class TestHopIntegrity:
             assert not (srcs & dsts), f"net {n.net_id} has transit hops at {srcs & dsts}"
 
     @staticmethod
+    def _check_no_sender_with_step_out(nets: list[Net]) -> None:
+        """A hop sender entity has outs=∅; the cell can't also feed a
+        step-neighbor on the same floor (the step output would be silently
+        dropped during entity emission)."""
+        for n in nets:
+            hop_srcs = {s for s, _d in n.hop_edges}
+            step_srcs = {
+                s for s, d in n.tree_edges
+                if s[2] == d[2] and abs(d[0] - s[0]) + abs(d[1] - s[1]) == 1
+            }
+            bad = hop_srcs & step_srcs
+            assert not bad, (
+                f"net {n.net_id}: cells {bad} are both hop senders and "
+                f"same-floor step sources"
+            )
+
+    @staticmethod
     def _check_no_hop_receiver_turns(nets: list[Net]) -> None:
         for n in nets:
             for hs, hd in n.hop_edges:
@@ -713,6 +730,28 @@ class TestHopIntegrity:
         graph = RoutingGraph(passable=passable, hop_range=5)
         assert pathfinder_route([net_a, net_b], graph)
         self._check_no_hop_receiver_turns([net_a, net_b])
+
+    def test_fanout_no_hop_sender_with_step_out(self):
+        """A fanout splitter cell can't emit both a step and a hop.
+
+        Root (5,5,0) fans out to T1=(5,0,0) south and T2=(10,5,0) east.
+        A negative ``hop_penalty`` strongly incentivizes hops; without the
+        sf_out_cells guard, A* picks step south + hop east from the root,
+        and ``_cell_to_entity`` emits only the BeltPortSender (silently
+        dropping the south step output). The guard must force the hop to
+        originate from a neighbor cell instead.
+        """
+        passable = {(x, y, 0) for x in range(11) for y in range(11)}
+        net = Net(
+            net_id=0,
+            kind="fanout",
+            root=(5, 5, 0),
+            terminals=[(5, 0, 0), (10, 5, 0)],
+            root_offset=True,
+        )
+        graph = RoutingGraph(passable=passable, hop_range=5, hop_penalty=-5.0)
+        assert pathfinder_route([net], graph)
+        self._check_no_sender_with_step_out([net])
 
     def test_dense_crossing_no_invalid_hops(self):
         """Four nets crossing in a tight grid: no transit or turn violations."""
